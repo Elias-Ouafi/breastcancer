@@ -2,7 +2,7 @@
 
 ## **Project Objective**  
 The objective of this project is to build a machine learning model that predicts whether a female patient has breast cancer based on diagnostic features.  
-The dataset used for this project was provided by **MIT** through the **UCI Machine Learning Repository**.
+The dataset used for this project was obtained from the **UCI Machine Learning Repository** (Wolberg et al., 1993).
 
 ---
 
@@ -54,4 +54,7 @@ The project successfully developed a highly accurate breast cancer prediction mo
 ### Notes:
 - All visualizations are stored in the `plots/` directory
 - The model comparison plot shows the performance of all evaluated models
-- The feature importance plot highlights the most significant components in the prediction 
+- The feature importance plot highlights the most significant components in the prediction
+
+### References
+Wolberg, W., Mangasarian, O., Street, N., & Street, W. (1993). Breast Cancer Wisconsin (Diagnostic) [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C5DW2B. 
