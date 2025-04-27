@@ -4,70 +4,82 @@ This project implements a machine learning system for predicting breast cancer b
 
 ## Project Structure
 
-- `breast_cancer_analysis.py`: Main script for data processing and model training
-- `database_operations.py`: Database operations using SQLAlchemy
-- `database_setup.sql`: SQL script for database schema setup
+- `TransformData.py`: Handles data loading, cleaning, preprocessing, and PCA
+- `Analysis.py`: Implements model training, evaluation, and ensemble methods
 - `requirements.txt`: Python dependencies
+- `data/`: Directory for storing data files
+- `plots/`: Directory for storing visualization plots
 
 ## Features
 
-- Data preprocessing and cleaning
-- Principal Component Analysis (PCA) for dimensionality reduction
+### Data Transformation (`TransformData.py`)
+- Data loading and cleaning
+- Feature standardization
+- Principal Component Analysis (PCA)
+- Data saving to CSV format
+
+### Analysis (`Analysis.py`)
 - Multiple model implementations:
   - Logistic Regression
   - Random Forest
   - Support Vector Machine (SVM)
   - XGBoost
   - Neural Network
+- Ensemble method (Voting Classifier)
 - Comprehensive model evaluation metrics
-- SQL database integration for data storage and retrieval
 - Visualization of model performance
 
 ## Installation
 
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd breast-cancer-prediction
-```
-
-2. Install dependencies:
+1. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Set up the database:
-```bash
-psql -f database_setup.sql
-```
-
 ## Usage
 
-1. Run the main analysis script:
+1. First, run the data transformation script:
 ```bash
-python breast_cancer_analysis.py
+python TransformData.py
 ```
+This will:
+- Load and clean the data
+- Apply PCA
+- Save transformed data to CSV files
 
-2. The script will:
-   - Load and preprocess the data
-   - Train multiple models
-   - Generate performance metrics
-   - Save results to CSV and database
-   - Create visualization plots
-
-## Database Configuration
-
-Update the database connection URL in `database_operations.py`:
-```python
-DATABASE_URL = "postgresql://username:password@localhost/breast_cancer_db"
+2. Then, run the analysis script:
+```bash
+python Analysis.py
 ```
+This will:
+- Train and evaluate individual models
+- Train and evaluate an ensemble model
+- Generate performance metrics and visualizations
+- Save all results to CSV files
 
-## Results
+## Output Files
 
-The analysis generates:
-- `model_results.csv`: Detailed performance metrics for all models
-- `model_comparison.png`: Visualization of model performance
-- Database tables with patient data and model results
+### Data Files (`data/` directory)
+- `raw_breast_cancer_data.csv`: Original dataset
+- `transformed_data.csv`: Preprocessed data after PCA
+- `pca_info.csv`: PCA analysis results
+- `individual_model_results.csv`: Performance metrics for individual models
+- `ensemble_results.csv`: Performance metrics for ensemble model
+- `predictions_*.csv`: Prediction results for each model
+
+### Visualization Files (`plots/` directory)
+- `model_comparison.png`: Performance comparison of all models
+
+## Results Analysis
+
+The analysis generates comprehensive metrics for each model:
+- Accuracy
+- Precision
+- Recall
+- F1-score
+- ROC-AUC
+
+The ensemble model combines the predictions of all individual models to potentially improve overall performance.
 
 ## Contributing
 
