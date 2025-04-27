@@ -109,14 +109,32 @@ def plot_results(individual_results, ensemble_results):
     for i, metric in enumerate(metrics, 1):
         plt.subplot(2, 3, i)
         values = [all_results[model][metric] for model in models]
-        sns.barplot(x=models, y=values)
+        
+        # Find the best performing model for this metric
+        best_model_idx = np.argmax(values)
+        
+        # Create colors array (green for best, red for others)
+        colors = ['red'] * len(models)
+        colors[best_model_idx] = 'green'
+        
+        # Create the bar plot
+        bars = plt.bar(models, values, color=colors)
+        
+        # Add value labels on top of each bar
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height,
+                    f'{height:.4f}',
+                    ha='center', va='bottom')
+        
         plt.title(f'{metric.capitalize()} Comparison')
         plt.xticks(rotation=45)
-        plt.ylim(0.8, 1.0)
+        plt.ylim(0.900, 1.0)  # Set y-axis range from 0.900 to 1.0
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
     
     plt.tight_layout()
     os.makedirs('plots', exist_ok=True)
-    plt.savefig('plots/model_comparison.png')
+    plt.savefig('plots/model_comparison.png', dpi=300, bbox_inches='tight')
     plt.close()
 
 def save_results(individual_results, ensemble_results, individual_predictions, ensemble_predictions):
@@ -184,12 +202,80 @@ def analyze_data(data):
     X = data.drop('Diagnosis', axis=1)
     y = data['Diagnosis']
     
-    # Train and evaluate models
-    results = train_and_evaluate_models(X, y)
+    # Convert string labels to numerical values (B=0, M=1)
+    y = y.map({'B': 0, 'M': 1})
+    
+    # Split the data
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # Initialize models
+    models = {
+        'Logistic Regression': LogisticRegression(random_state=42),
+        'Random Forest': RandomForestClassifier(random_state=42),
+        'SVM': SVC(random_state=42, probability=True),
+        'XGBoost': XGBClassifier(random_state=42),
+        'Neural Network': MLPClassifier(
+            hidden_layer_sizes=(64, 32),
+            activation='relu',
+            solver='adam',
+            max_iter=1000,
+            random_state=42
+        )
+    }
+    
+    # Train and evaluate each model
+    individual_results = {}
+    for name, model in models.items():
+        print(f"\nTraining {name}...")
+        # Train model
+        model.fit(X_train, y_train)
+        
+        # Make predictions
+        y_pred = model.predict(X_test)
+        y_prob = model.predict_proba(X_test)[:, 1]  # Get probability scores for ROC AUC
+        
+        # Calculate metrics
+        individual_results[name] = {
+            'accuracy': accuracy_score(y_test, y_pred),
+            'precision': precision_score(y_test, y_pred),
+            'recall': recall_score(y_test, y_pred),
+            'f1': f1_score(y_test, y_pred),
+            'roc_auc': roc_auc_score(y_test, y_prob)
+        }
+        
+        print(f"Results for {name}:")
+        for metric, value in individual_results[name].items():
+            print(f"{metric}: {value:.4f}")
+    
+    # Create ensemble model
+    print("\nTraining Ensemble Model...")
+    ensemble_model = VotingClassifier(
+        estimators=[(name, model) for name, model in models.items()],
+        voting='soft'
+    )
+    ensemble_model.fit(X_train, y_train)
+    y_pred_ensemble = ensemble_model.predict(X_test)
+    y_prob_ensemble = ensemble_model.predict_proba(X_test)[:, 1]
+    
+    # Calculate ensemble metrics
+    ensemble_results = {
+        'accuracy': accuracy_score(y_test, y_pred_ensemble),
+        'precision': precision_score(y_test, y_pred_ensemble),
+        'recall': recall_score(y_test, y_pred_ensemble),
+        'f1': f1_score(y_test, y_pred_ensemble),
+        'roc_auc': roc_auc_score(y_test, y_prob_ensemble)
+    }
+    
+    print("\nResults for Ensemble Model:")
+    for metric, value in ensemble_results.items():
+        print(f"{metric}: {value:.4f}")
+    
+    # Plot results
+    plot_results(individual_results, ensemble_results)
     
     # Plot feature importance for Random Forest
     rf_model = RandomForestClassifier(random_state=42)
     rf_model.fit(X, y)
     plot_feature_importance(rf_model, X.columns, 'results/feature_importance.png')
     
-    return results 
+    return {**individual_results, 'Ensemble': ensemble_results} 

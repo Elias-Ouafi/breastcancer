@@ -13,15 +13,15 @@ def main():
     print("Starting breast cancer analysis project...")
     
     # Step 1: Extract data
-    print("\nStep 1: Extracting data...")
+    print("\nStep 1: Extract the data")
     raw_data = extract_data()
     
     # Step 2: Transform data
-    print("\nStep 2: Transforming data...")
+    print("\nStep 2: Transform the data")
     transformed_data, pca = transform_data(raw_data)
     
     # Step 3: Analyze data
-    print("\nStep 3: Analyzing data...")
+    print("\nStep 3: Analyze the data")
     results = analyze_data(transformed_data)
     
     # Print final results
