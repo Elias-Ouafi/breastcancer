@@ -181,8 +181,8 @@ def plot_feature_importance(model, feature_names, output_path):
 def analyze_data(data):
     """Analyze the data and train models."""
     # Separate features and target
-    X = data.drop('diagnosis', axis=1)
-    y = data['diagnosis']
+    X = data.drop('Diagnosis', axis=1)
+    y = data['Diagnosis']
     
     # Train and evaluate models
     results = train_and_evaluate_models(X, y)

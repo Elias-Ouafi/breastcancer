@@ -46,7 +46,7 @@ def save_transformed_data(X_pca, y, pca):
     """Save the transformed data and PCA information."""
     # Save transformed data
     transformed_data = pd.DataFrame(X_pca)
-    transformed_data['diagnosis'] = y
+    transformed_data['Diagnosis'] = y
     transformed_data.to_csv('data/transformed_data.csv', index=False)
     
     # Save PCA information
@@ -62,8 +62,8 @@ def save_transformed_data(X_pca, y, pca):
 def transform_data(data):
     """Transform the data through cleaning and PCA."""
     # Separate features and target
-    X = data.drop('diagnosis', axis=1)
-    y = data['diagnosis']
+    X = data.drop('Diagnosis', axis=1)
+    y = data['Diagnosis']
     
     # Clean and preprocess data
     X_scaled, y = clean_data(X, y)
