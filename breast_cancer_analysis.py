@@ -11,9 +11,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from xgboost import XGBClassifier
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.optimizers import Adam
+from sklearn.neural_network import MLPClassifier
+import os
 
 def load_data():
     """Load and preprocess the breast cancer dataset."""
@@ -24,8 +23,13 @@ def load_data():
     X = breast_cancer_data.data.features
     y = breast_cancer_data.data.targets
     
-    # Convert target to binary (0 for benign, 1 for malignant)
-    y = (y == 'M').astype(int)
+    # Convert target to binary (0 for benign, 1 for malignant) and ensure 1D array
+    y = (y == 'M').astype(int).values.ravel()
+    
+    # Save raw data to CSV
+    raw_data = pd.concat([X, pd.Series(y, name='diagnosis')], axis=1)
+    os.makedirs('data', exist_ok=True)
+    raw_data.to_csv('data/raw_breast_cancer_data.csv', index=False)
     
     return X, y
 
@@ -47,6 +51,17 @@ def preprocess_data(X, y):
     print(f"Number of components after PCA: {pca.n_components_}")
     print(f"Explained variance ratio: {pca.explained_variance_ratio_}")
     
+    # Save preprocessed data
+    os.makedirs('data', exist_ok=True)
+    
+    # Save training data
+    pd.DataFrame(X_train_pca).to_csv('data/X_train.csv', index=False)
+    pd.Series(y_train, name='diagnosis').to_csv('data/y_train.csv', index=False)
+    
+    # Save test data
+    pd.DataFrame(X_test_pca).to_csv('data/X_test.csv', index=False)
+    pd.Series(y_test, name='diagnosis').to_csv('data/y_test.csv', index=False)
+    
     return X_train_pca, X_test_pca, y_train, y_test
 
 def train_models(X_train, X_test, y_train, y_test):
@@ -55,10 +70,18 @@ def train_models(X_train, X_test, y_train, y_test):
         'Logistic Regression': LogisticRegression(max_iter=1000),
         'Random Forest': RandomForestClassifier(n_estimators=100, random_state=42),
         'SVM': SVC(probability=True, random_state=42),
-        'XGBoost': XGBClassifier(random_state=42)
+        'XGBoost': XGBClassifier(random_state=42),
+        'Neural Network': MLPClassifier(
+            hidden_layer_sizes=(64, 32),
+            activation='relu',
+            solver='adam',
+            max_iter=1000,
+            random_state=42
+        )
     }
     
     results = {}
+    predictions = {}
     
     for name, model in models.items():
         print(f"\nTraining {name}...")
@@ -74,25 +97,25 @@ def train_models(X_train, X_test, y_train, y_test):
             'roc_auc': roc_auc_score(y_test, y_prob)
         }
         
+        # Save predictions
+        predictions[name] = pd.DataFrame({
+            'actual': y_test,
+            'predicted': y_pred,
+            'probability': y_prob
+        })
+        
         print(f"Results for {name}:")
         for metric, value in results[name].items():
             print(f"{metric}: {value:.4f}")
     
+    # Save model results and predictions
+    results_df = pd.DataFrame(results).T
+    results_df.to_csv('data/model_results.csv')
+    
+    for name, pred_df in predictions.items():
+        pred_df.to_csv(f'data/predictions_{name.lower().replace(" ", "_")}.csv', index=False)
+    
     return results
-
-def create_neural_network(input_dim):
-    """Create and compile a neural network model."""
-    model = Sequential([
-        Dense(64, activation='relu', input_dim=input_dim),
-        Dense(32, activation='relu'),
-        Dense(1, activation='sigmoid')
-    ])
-    
-    model.compile(optimizer=Adam(learning_rate=0.001),
-                 loss='binary_crossentropy',
-                 metrics=['accuracy'])
-    
-    return model
 
 def plot_results(results):
     """Plot the performance metrics of different models."""
@@ -109,39 +132,26 @@ def plot_results(results):
         plt.ylim(0.8, 1.0)
     
     plt.tight_layout()
-    plt.savefig('model_comparison.png')
+    os.makedirs('plots', exist_ok=True)
+    plt.savefig('plots/model_comparison.png')
     plt.close()
 
 def main():
+    # Create necessary directories
+    os.makedirs('data', exist_ok=True)
+    os.makedirs('plots', exist_ok=True)
+    
     # Load and preprocess data
     X, y = load_data()
     X_train, X_test, y_train, y_test = preprocess_data(X, y)
     
-    # Train and evaluate traditional ML models
+    # Train and evaluate all models
     results = train_models(X_train, X_test, y_train, y_test)
-    
-    # Train and evaluate neural network
-    nn_model = create_neural_network(X_train.shape[1])
-    nn_model.fit(X_train, y_train, epochs=50, batch_size=32, verbose=0)
-    
-    y_pred_nn = (nn_model.predict(X_test) > 0.5).astype(int)
-    y_prob_nn = nn_model.predict(X_test)
-    
-    results['Neural Network'] = {
-        'accuracy': accuracy_score(y_test, y_pred_nn),
-        'precision': precision_score(y_test, y_pred_nn),
-        'recall': recall_score(y_test, y_pred_nn),
-        'f1': f1_score(y_test, y_pred_nn),
-        'roc_auc': roc_auc_score(y_test, y_prob_nn)
-    }
     
     # Plot and save results
     plot_results(results)
     
-    # Save results to CSV
-    results_df = pd.DataFrame(results).T
-    results_df.to_csv('model_results.csv')
-    print("\nResults saved to 'model_results.csv'")
+    print("\nAll results and data have been saved to the 'data' and 'plots' directories.")
 
 if __name__ == "__main__":
     main() 
