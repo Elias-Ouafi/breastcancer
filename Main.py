@@ -1,7 +1,8 @@
 import os
+import pandas as pd
 from ExtractData import extract_data
 from TransformData import transform_data
-from Analysis import analyze_data
+from AnalyzeData import analyze_data
 
 def main():
     """Main function to run the entire breast cancer analysis project."""
@@ -15,14 +16,17 @@ def main():
     # Step 1: Extract data
     print("\nStep 1: Extract the data")
     raw_data = extract_data()
+    print("Data extraction complete!")
+    print("Raw data saved to 'data/raw_breast_cancer_data.csv'")
     
     # Step 2: Transform data
     print("\nStep 2: Transform the data")
-    transformed_data, pca = transform_data(raw_data)
+    transformed_data, pca, feature_contributions, top_features = transform_data(raw_data)
     
     # Step 3: Analyze data
     print("\nStep 3: Analyze the data")
     results = analyze_data(transformed_data)
+    print("Analysis complete!")
     
     # Print final results
     print("\nAnalysis complete! Results summary:")
@@ -32,6 +36,8 @@ def main():
             print(f"{metric}: {value:.4f}")
     
     print("\nAll results and visualizations have been saved to their respective directories.")
+    
+    return results
 
 if __name__ == "__main__":
     main() 
