@@ -2,10 +2,10 @@ import pandas as pd
 from ucimlrepo import fetch_ucirepo
 import os
 
-def extract_data():
+def extract_breast_cancer_wisconsin_diagnostic_data():
     """
     Fetches the Breast Cancer Wisconsin (Diagnostic) dataset and saves it to CSV.
-    Returns the raw data as a pandas DataFrame.
+    Also returns the raw data as a pandas DataFrame for future use.
     """
     # Fetch the dataset
     breast_cancer_wisconsin_diagnostic = fetch_ucirepo(id=17)
@@ -23,7 +23,6 @@ def extract_data():
     # Save raw data to CSV
     data.to_csv('data/raw_breast_cancer_data.csv', index=False)
     
-    print("Data extraction complete!")
-    print(f"Raw data saved to 'data/raw_breast_cancer_data.csv'")
+    print("Data from Breast Cancer Wisconsin (Diagnostic) dataset has been extracted!")
     
     return data

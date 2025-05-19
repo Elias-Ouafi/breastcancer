@@ -9,6 +9,7 @@ import pydicom
 from tqdm import tqdm
 import logging
 from datetime import datetime
+import time
 
 # Set up logging
 logging.basicConfig(
@@ -27,6 +28,9 @@ class TCIAAPI:
         self.base_url = "https://services.cancerimagingarchive.net/services/v4"
         self.collection = "CBIS-DDSM"
         self.api_key = self._get_api_key()
+        self.session = requests.Session()
+        if self.api_key:
+            self.session.headers.update({'api-key': self.api_key})
     
     def _get_api_key(self):
         """Get API key from environment variable or prompt user."""
@@ -48,12 +52,9 @@ class TCIAAPI:
             "format": "json"
         }
         
-        if self.api_key:
-            params["api_key"] = self.api_key
-        
         try:
             logging.info(f"Fetching series from {endpoint}")
-            response = requests.get(endpoint, params=params)
+            response = self.session.get(endpoint, params=params)
             response.raise_for_status()
             
             series_data = response.json()
@@ -68,65 +69,76 @@ class TCIAAPI:
                 logging.error("Access forbidden. Please check your API key and permissions.")
             return []
     
-    def download_series(self, series_uid, output_dir):
-        """Download a specific series."""
+    def download_series(self, series_uid, output_dir, max_retries=3):
+        """Download a specific series with retry mechanism."""
         endpoint = f"{self.base_url}/TCIA/query/getImage"
         params = {
             "SeriesInstanceUID": series_uid,
             "format": "json"
         }
         
-        if self.api_key:
-            params["api_key"] = self.api_key
-        
-        try:
-            logging.info(f"Fetching images for series {series_uid}")
-            response = requests.get(endpoint, params=params)
-            response.raise_for_status()
-            
-            image_data = response.json()
-            if not image_data:
-                logging.warning(f"No images found for series {series_uid}")
-                return False
-            
-            # Create series directory
-            series_dir = os.path.join(output_dir, series_uid)
-            os.makedirs(series_dir, exist_ok=True)
-            
-            # Download each image in the series
-            for image in tqdm(image_data, desc=f"Downloading series {series_uid}"):
-                try:
-                    image_url = image['URL']
-                    image_filename = os.path.join(series_dir, f"{image['SOPInstanceUID']}.dcm")
+        for attempt in range(max_retries):
+            try:
+                logging.info(f"Fetching images for series {series_uid} (Attempt {attempt + 1}/{max_retries})")
+                response = self.session.get(endpoint, params=params)
+                response.raise_for_status()
+                
+                image_data = response.json()
+                if not image_data:
+                    logging.warning(f"No images found for series {series_uid}")
+                    return False
+                
+                # Create series directory
+                series_dir = os.path.join(output_dir, series_uid)
+                os.makedirs(series_dir, exist_ok=True)
+                
+                # Download each image in the series
+                for image in tqdm(image_data, desc=f"Downloading series {series_uid}"):
+                    try:
+                        image_url = image['URL']
+                        image_filename = os.path.join(series_dir, f"{image['SOPInstanceUID']}.dcm")
+                        
+                        # Skip if file already exists
+                        if os.path.exists(image_filename):
+                            logging.info(f"File {image_filename} already exists, skipping...")
+                            continue
+                        
+                        # Download image with retry
+                        for download_attempt in range(max_retries):
+                            try:
+                                image_response = self.session.get(image_url)
+                                image_response.raise_for_status()
+                                
+                                # Save DICOM file
+                                with open(image_filename, 'wb') as f:
+                                    f.write(image_response.content)
+                                
+                                logging.info(f"Downloaded {image_filename}")
+                                break
+                            except requests.exceptions.RequestException as e:
+                                if download_attempt == max_retries - 1:
+                                    raise
+                                logging.warning(f"Download attempt {download_attempt + 1} failed, retrying...")
+                                time.sleep(2 ** download_attempt)  # Exponential backoff
                     
-                    # Skip if file already exists
-                    if os.path.exists(image_filename):
-                        logging.info(f"File {image_filename} already exists, skipping...")
+                    except Exception as e:
+                        logging.error(f"Error downloading image {image['SOPInstanceUID']}: {str(e)}")
                         continue
-                    
-                    # Download image
-                    image_response = requests.get(image_url)
-                    image_response.raise_for_status()
-                    
-                    # Save DICOM file
-                    with open(image_filename, 'wb') as f:
-                        f.write(image_response.content)
-                    
-                    logging.info(f"Downloaded {image_filename}")
-                    
-                except Exception as e:
-                    logging.error(f"Error downloading image {image['SOPInstanceUID']}: {str(e)}")
-                    continue
-            
-            return True
-            
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Error downloading series {series_uid}: {str(e)}")
-            if response.status_code == 401:
-                logging.error("Unauthorized access. Please check your API key.")
-            elif response.status_code == 403:
-                logging.error("Access forbidden. Please check your API key and permissions.")
-            return False
+                
+                return True
+                
+            except requests.exceptions.RequestException as e:
+                if attempt == max_retries - 1:
+                    logging.error(f"Error downloading series {series_uid} after {max_retries} attempts: {str(e)}")
+                    if response.status_code == 401:
+                        logging.error("Unauthorized access. Please check your API key.")
+                    elif response.status_code == 403:
+                        logging.error("Access forbidden. Please check your API key and permissions.")
+                    return False
+                logging.warning(f"Attempt {attempt + 1} failed, retrying...")
+                time.sleep(2 ** attempt)  # Exponential backoff
+        
+        return False
 
 def download_cbis_ddsm(output_dir="data/CBIS_DDSM", max_series=5):
     """Download CBIS-DDSM dataset from TCIA."""
