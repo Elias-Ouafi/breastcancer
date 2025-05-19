@@ -1,254 +1,73 @@
-import os
-import pandas as pd
 import requests
-import json
-import numpy as np
-from PIL import Image
-import matplotlib.pyplot as plt
+import pandas as pd
+from tcia_utils import nbia
 import pydicom
-from tqdm import tqdm
-import logging
-from datetime import datetime
-import time
+import matplotlib.pyplot as plt
+import os
+import numpy as np
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('data/download.log'),
-        logging.StreamHandler()
-    ]
-)
 
-class TCIAAPI:
-    """Class to interact with TCIA REST API."""
-    
-    def __init__(self):
-        self.base_url = "https://services.cancerimagingarchive.net/services/v4"
-        self.collection = "CBIS-DDSM"
-        self.api_key = self._get_api_key()
-        self.session = requests.Session()
-        if self.api_key:
-            self.session.headers.update({'api-key': self.api_key})
-    
-    def _get_api_key(self):
-        """Get API key from environment variable or prompt user."""
-        api_key = os.getenv('TCIA_API_KEY')
-        if not api_key:
-            logging.warning("TCIA_API_KEY environment variable not set.")
-            logging.info("Please register at https://www.cancerimagingarchive.net/tcia-portal/access-tcia/")
-            logging.info("After registration, set your API key as an environment variable:")
-            logging.info("Windows: set TCIA_API_KEY=your_api_key")
-            logging.info("Linux/Mac: export TCIA_API_KEY=your_api_key")
-            return None
-        return api_key
-    
-    def get_series(self):
-        """Get all series for the CBIS-DDSM collection."""
-        endpoint = f"{self.base_url}/TCIA/query/getSeries"
-        params = {
-            "Collection": self.collection,
-            "format": "json"
-        }
-        
-        try:
-            logging.info(f"Fetching series from {endpoint}")
-            response = self.session.get(endpoint, params=params)
-            response.raise_for_status()
-            
-            series_data = response.json()
-            logging.info(f"Found {len(series_data)} series")
-            return series_data
-            
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Error fetching series: {str(e)}")
-            if response.status_code == 401:
-                logging.error("Unauthorized access. Please check your API key.")
-            elif response.status_code == 403:
-                logging.error("Access forbidden. Please check your API key and permissions.")
-            return []
-    
-    def download_series(self, series_uid, output_dir, max_retries=3):
-        """Download a specific series with retry mechanism."""
-        endpoint = f"{self.base_url}/TCIA/query/getImage"
-        params = {
-            "SeriesInstanceUID": series_uid,
-            "format": "json"
-        }
-        
-        for attempt in range(max_retries):
-            try:
-                logging.info(f"Fetching images for series {series_uid} (Attempt {attempt + 1}/{max_retries})")
-                response = self.session.get(endpoint, params=params)
-                response.raise_for_status()
-                
-                image_data = response.json()
-                if not image_data:
-                    logging.warning(f"No images found for series {series_uid}")
-                    return False
-                
-                # Create series directory
-                series_dir = os.path.join(output_dir, series_uid)
-                os.makedirs(series_dir, exist_ok=True)
-                
-                # Download each image in the series
-                for image in tqdm(image_data, desc=f"Downloading series {series_uid}"):
-                    try:
-                        image_url = image['URL']
-                        image_filename = os.path.join(series_dir, f"{image['SOPInstanceUID']}.dcm")
-                        
-                        # Skip if file already exists
-                        if os.path.exists(image_filename):
-                            logging.info(f"File {image_filename} already exists, skipping...")
-                            continue
-                        
-                        # Download image with retry
-                        for download_attempt in range(max_retries):
-                            try:
-                                image_response = self.session.get(image_url)
-                                image_response.raise_for_status()
-                                
-                                # Save DICOM file
-                                with open(image_filename, 'wb') as f:
-                                    f.write(image_response.content)
-                                
-                                logging.info(f"Downloaded {image_filename}")
-                                break
-                            except requests.exceptions.RequestException as e:
-                                if download_attempt == max_retries - 1:
-                                    raise
-                                logging.warning(f"Download attempt {download_attempt + 1} failed, retrying...")
-                                time.sleep(2 ** download_attempt)  # Exponential backoff
-                    
-                    except Exception as e:
-                        logging.error(f"Error downloading image {image['SOPInstanceUID']}: {str(e)}")
-                        continue
-                
-                return True
-                
-            except requests.exceptions.RequestException as e:
-                if attempt == max_retries - 1:
-                    logging.error(f"Error downloading series {series_uid} after {max_retries} attempts: {str(e)}")
-                    if response.status_code == 401:
-                        logging.error("Unauthorized access. Please check your API key.")
-                    elif response.status_code == 403:
-                        logging.error("Access forbidden. Please check your API key and permissions.")
-                    return False
-                logging.warning(f"Attempt {attempt + 1} failed, retrying...")
-                time.sleep(2 ** attempt)  # Exponential backoff
-        
-        return False
+def extract_dicom_series():
+    """Extract breast cancer MRI images and store them in the folder tciaDownload"""
+    data = nbia.getSeries(collection = "Breast-Cancer-Screening-DBT")
+    nbia.downloadSeries(data)
 
-def download_cbis_ddsm(output_dir="data/CBIS_DDSM", max_series=5):
-    """Download CBIS-DDSM dataset from TCIA."""
-    logging.info("\nStarting CBIS-DDSM dataset download...")
-    
-    # Create download directory
-    os.makedirs(output_dir, exist_ok=True)
-    
-    try:
-        # Initialize TCIA API client
-        tcia = TCIAAPI()
-        
-        # Get all series
-        series = tcia.get_series()
-        if not series:
-            logging.error("No series found!")
-            return False
-        
-        # Download specified number of series
-        successful_downloads = 0
-        for i, entry in enumerate(series[:max_series]):
-            series_uid = entry['SeriesInstanceUID']
-            logging.info(f"\nProcessing series {i+1}/{max_series}: {series_uid}")
-            
-            success = tcia.download_series(series_uid, output_dir)
-            if success:
-                successful_downloads += 1
-        
-        logging.info(f"\nDownload complete! {successful_downloads}/{max_series} series downloaded successfully.")
-        logging.info(f"Data saved to {output_dir}")
-        
-        return successful_downloads > 0
-        
-    except Exception as e:
-        logging.error(f"Error downloading CBIS-DDSM dataset: {str(e)}")
-        return False
 
-def preprocess_images(image_dir, output_dir="data/processed_images"):
-    """Preprocess downloaded DICOM images."""
-    logging.info("\nStarting image preprocessing...")
+def view_dicom_series(series_path):
+    """View a DICOM series using pydicom and matplotlib with slice navigation."""
+    # Get all DICOM files in the directory
+    dicom_files = [f for f in os.listdir(series_path) if f.endswith('.dcm')]
     
-    # Create output directory
-    os.makedirs(output_dir, exist_ok=True)
+    if not dicom_files:
+        print(f"No DICOM files found in {series_path}")
+        return
     
-    # Process each image
-    processed_data = []
-    for root, _, files in tqdm(list(os.walk(image_dir)), desc="Processing images"):
-        for file in files:
-            if file.endswith('.dcm'):
-                try:
-                    # Read DICOM image
-                    dicom_path = os.path.join(root, file)
-                    dicom = pydicom.dcmread(dicom_path)
-                    
-                    # Convert to numpy array
-                    image_array = dicom.pixel_array
-                    
-                    # Normalize to 0-255
-                    image_array = ((image_array - image_array.min()) / 
-                                 (image_array.max() - image_array.min()) * 255).astype(np.uint8)
-                    
-                    # Convert to PIL Image
-                    image = Image.fromarray(image_array)
-                    
-                    # Save processed image
-                    output_path = os.path.join(output_dir, f"{os.path.splitext(file)[0]}.png")
-                    image.save(output_path)
-                    
-                    # Add metadata to processed_data list
-                    processed_data.append({
-                        'image_path': output_path,
-                        'original_path': dicom_path,
-                        'patient_id': dicom.PatientID if 'PatientID' in dicom else os.path.basename(root),
-                        'study_date': dicom.StudyDate if 'StudyDate' in dicom else None,
-                        'modality': dicom.Modality if 'Modality' in dicom else None,
-                        'body_part': dicom.BodyPartExamined if 'BodyPartExamined' in dicom else None
-                    })
-                    
-                    logging.info(f"Processed {file}")
-                    
-                except Exception as e:
-                    logging.error(f"Error processing {file}: {str(e)}")
+    # Read the first DICOM file
+    dicom_path = os.path.join(series_path, dicom_files[0])
+    ds = pydicom.dcmread(dicom_path)
     
-    # Save metadata to CSV
-    metadata_df = pd.DataFrame(processed_data)
-    metadata_path = os.path.join(output_dir, "metadata.csv")
-    metadata_df.to_csv(metadata_path, index=False)
+    # Get the pixel data
+    pixel_data = ds.pixel_array
     
-    logging.info(f"\nPreprocessing complete! Processed images saved to {output_dir}")
-    logging.info(f"Metadata saved to {metadata_path}")
-    
-    return metadata_df
-
-def extract_cbis_ddsm_data(max_series=5):
-    """Main function to download and preprocess CBIS-DDSM data."""
-    # Download data
-    download_success = download_cbis_ddsm(max_series=max_series)
-    
-    if not download_success:
-        logging.error("Failed to download data. Check the logs for details.")
-        return None
-    
-    # Preprocess images
-    metadata = preprocess_images("data/CBIS_DDSM")
-    
-    return metadata
-
-if __name__ == "__main__":
-    # Example usage
-    metadata = extract_cbis_ddsm_data(max_series=5)
-    if metadata is not None:
-        logging.info("\nCBIS-DDSM data extraction complete!")
-        logging.info(f"Total processed images: {len(metadata)}") 
+    # Check if we have a 3D array (stack of images)
+    if len(pixel_data.shape) == 3:
+        num_slices = pixel_data.shape[0]
+        print(f"Found {num_slices} slices in the DICOM stack")
+        
+        # Create a figure with a slider
+        fig, ax = plt.subplots(figsize=(10, 10))
+        plt.subplots_adjust(bottom=0.2)  # Make room for the slider
+        
+        # Display the middle slice initially
+        current_slice = num_slices // 2
+        im = ax.imshow(pixel_data[current_slice], cmap=plt.cm.gray)
+        ax.set_title(f'Slice {current_slice + 1} of {num_slices}')
+        ax.axis('off')
+        
+        # Add a slider for slice navigation
+        from matplotlib.widgets import Slider
+        ax_slider = plt.axes([0.2, 0.1, 0.6, 0.03])
+        slider = Slider(
+            ax=ax_slider,
+            label='Slice',
+            valmin=0,
+            valmax=num_slices - 1,
+            valinit=current_slice,
+            valstep=1
+        )
+        
+        def update(val):
+            slice_idx = int(slider.val)
+            im.set_data(pixel_data[slice_idx])
+            ax.set_title(f'Slice {slice_idx + 1} of {num_slices}')
+            fig.canvas.draw_idle()
+        
+        slider.on_changed(update)
+        plt.show()
+    else:
+        # If it's a single 2D image, display it directly
+        plt.figure(figsize=(10, 10))
+        plt.imshow(pixel_data, cmap=plt.cm.gray)
+        plt.title(f"DICOM Image: {os.path.basename(dicom_path)}")
+        plt.axis('off')
+        plt.show()

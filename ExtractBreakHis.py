@@ -8,6 +8,7 @@ from PIL import Image
 import numpy as np
 import time
 
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,

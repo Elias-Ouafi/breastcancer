@@ -84,3 +84,29 @@ Processing series 5/5: 1.3.6.1.4.1.9590.100.1.2.43665767012035310007732414810147
 Download complete! 0/5 series downloaded successfully.
 2025-05-08 20:32:13,737 - INFO - Data saved to data/CBIS_DDSM
 2025-05-08 20:32:13,745 - ERROR - Failed to download data. Check the logs for details.
+2025-05-19 12:27:06,201 - INFO - 
+Starting CBIS-DDSM dataset download...
+2025-05-19 12:27:06,201 - WARNING - TCIA_API_KEY environment variable not set.
+2025-05-19 12:27:06,201 - INFO - Please register at https://www.cancerimagingarchive.net/tcia-portal/access-tcia/
+2025-05-19 12:27:06,203 - INFO - After registration, set your API key as an environment variable:
+2025-05-19 12:27:06,203 - INFO - Windows: set TCIA_API_KEY=your_api_key
+2025-05-19 12:27:06,203 - INFO - Linux/Mac: export TCIA_API_KEY=your_api_key
+2025-05-19 12:27:06,203 - INFO - Verifying collection CBIS-DDSM
+2025-05-19 12:27:11,530 - INFO - Collection CBIS-DDSM verified successfully
+2025-05-19 12:27:11,532 - INFO - Fetching studies from https://services.cancerimagingarchive.net/services/v4/TCIA/query/getPatientStudy
+2025-05-19 12:32:16,645 - ERROR - Error fetching studies: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2025-05-19 12:32:16,645 - ERROR - No studies found!
+2025-05-19 12:32:16,646 - ERROR - Failed to download data. Check the logs for details.
+2025-05-19 12:48:35,007 - INFO - 
+Starting CBIS-DDSM dataset download...
+2025-05-19 12:48:35,008 - WARNING - TCIA_API_KEY environment variable not set.
+2025-05-19 12:48:35,009 - INFO - Please register at https://www.cancerimagingarchive.net/tcia-portal/access-tcia/
+2025-05-19 12:48:35,009 - INFO - After registration, set your API key as an environment variable:
+2025-05-19 12:48:35,009 - INFO - Windows: set TCIA_API_KEY=your_api_key
+2025-05-19 12:48:35,009 - INFO - Linux/Mac: export TCIA_API_KEY=your_api_key
+2025-05-19 12:48:35,009 - INFO - Verifying collection CBIS-DDSM
+2025-05-19 12:48:39,789 - INFO - Collection CBIS-DDSM verified successfully
+2025-05-19 12:48:39,790 - INFO - Fetching studies from https://services.cancerimagingarchive.net/services/v4/TCIA/query/getPatientStudy
+2025-05-19 12:53:43,669 - ERROR - Error fetching studies: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2025-05-19 12:53:43,669 - ERROR - No studies found!
+2025-05-19 12:53:43,669 - ERROR - Failed to download data. Check the logs for details.
