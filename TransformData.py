@@ -6,6 +6,8 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
+import os
+import pydicom
 
 def clean_data(X, y):
     """Clean and preprocess the data."""
@@ -144,3 +146,75 @@ def transform_data(data):
     print("Scree plot saved to 'data/scree_plot.png'")
     
     return transformed_data, pca, feature_contributions, top_features 
+
+
+def load_dicom_volume(dicom_dir):
+    """
+    Load a 3D volume from a folder of DICOM slices.
+    Sorts slices by InstanceNumber.
+    """
+    dicom_files = sorted(
+        [f for f in os.listdir(dicom_dir) if f.endswith('.dcm')],
+        key=lambda f: int(pydicom.dcmread(os.path.join(dicom_dir, f)).InstanceNumber)
+    )
+    slices = [pydicom.dcmread(os.path.join(dicom_dir, f)).pixel_array for f in dicom_files]
+    volume = np.stack(slices, axis=0)  # Shape: (depth, height, width)
+    return volume
+
+def create_mask(volume_shape, bbox):
+    """
+    Create a binary mask from bounding box coordinates.
+    bbox keys: Start Slice, End Slice, Start Row, End Row, Start Column, End Column
+    """
+    mask = np.zeros(volume_shape, dtype=np.uint8)
+    z0, z1 = bbox['Start Slice'], bbox['End Slice']
+    y0, y1 = bbox['Start Row'], bbox['End Row']
+    x0, x1 = bbox['Start Column'], bbox['End Column']
+    mask[z0:z1, y0:y1, x0:x1] = 1
+    return mask
+
+def preprocess_mri_data(data_dir="tciaDownload", annotation_csv="tciaDownload/Annotation_Boxes.csv", output_dir="preprocessed_data"):
+    """
+    Process all patient MRI volumes in `data_dir` using bounding boxes from `annotation_csv`,
+    normalize them, generate binary tumor masks, and save as NumPy arrays in `output_dir`.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    annotations = pd.read_csv(annotation_csv)
+
+    for patient_id in annotations['Patient ID'].unique():
+        patient_annotations = annotations[annotations['Patient ID'] == patient_id]
+        patient_path = os.path.join(data_dir, str(patient_id))
+        
+        if not os.path.isdir(patient_path):
+            print(f"⚠️ Skipping {patient_id}: Folder not found.")
+            continue
+
+        try:
+            volume = load_dicom_volume(patient_path)
+            mask = np.zeros_like(volume, dtype=np.uint8)
+
+            for _, row in patient_annotations.iterrows():
+                bbox = {
+                    'Start Slice': int(row['Start Slice']),
+                    'End Slice': int(row['End Slice']),
+                    'Start Row': int(row['Start Row']),
+                    'End Row': int(row['End Row']),
+                    'Start Column': int(row['Start Column']),
+                    'End Column': int(row['End Column']),
+                }
+                mask += create_mask(volume.shape, bbox)
+
+            # Normalize volume to [0, 1]
+            volume = (volume - np.min(volume)) / (np.max(volume) - np.min(volume) + 1e-5)
+
+            # Save outputs
+            np.save(os.path.join(output_dir, f"{patient_id}_volume.npy"), volume)
+            np.save(os.path.join(output_dir, f"{patient_id}_mask.npy"), mask)
+
+            print(f"✅ Processed {patient_id}")
+        
+        except Exception as e:
+            print(f"❌ Failed {patient_id}: {e}")
+        
+
+preprocess_mri_data()

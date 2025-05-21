@@ -71,3 +71,5 @@ def view_dicom_series(series_path):
         plt.title(f"DICOM Image: {os.path.basename(dicom_path)}")
         plt.axis('off')
         plt.show()
+
+extract_dicom_series()
