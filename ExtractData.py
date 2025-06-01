@@ -32,10 +32,31 @@ def extract_breast_cancer_wisconsin_diagnostic_data():
     
     return data
 
+DOWNLOAD_DIR = 'tciaDownload'
+
 def extract_dicom_mri_images():
-    """Extract breast cancer MRI images and store them in the folder tciaDownload"""
-    data = nbia.getSeries(collection = "Breast-Cancer-Screening-DBT")
-    nbia.downloadSeries(data)
+    """Extract breast cancer MRI images and store them in the folder tciaDownload, skipping already downloaded series."""
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+    # Get list of series to download
+    all_series = nbia.getSeries(collection="Breast-Cancer-Screening-DBT")
+
+    # Identify already downloaded series
+    existing_series = {
+        name for name in os.listdir(DOWNLOAD_DIR)
+        if os.path.isdir(os.path.join(DOWNLOAD_DIR, name))
+    }
+
+    # Filter out already downloaded series
+    new_series = [s for s in all_series if s['SeriesInstanceUID'] not in existing_series]
+
+    if not new_series:
+        print("All available series are already downloaded.")
+        return
+
+    # Download only new series
+    nbia.downloadSeries(new_series)
+    print(f"Downloaded {len(new_series)} new series to {DOWNLOAD_DIR}")
 
 def view_dicom_series(series_path):
     """View a DICOM series using pydicom and matplotlib with slice navigation."""
