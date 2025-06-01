@@ -173,9 +173,33 @@ def create_mask(volume_shape, bbox):
     mask[z0:z1, y0:y1, x0:x1] = 1
     return mask
 
+
+root_directory = '/tciaDownload'
+
+def extract_patient_ids(root_dir):
+    patient_ids = set()
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        for filename in filenames:
+            if filename.lower().endswith('.dcm'):
+                filepath = os.path.join(dirpath, filename)
+                try:
+                    ds = pydicom.dcmread(filepath, stop_before_pixels=True)
+                    patient_ids.add(ds.PatientID)
+                except Exception as e:
+                    print(f"Error reading {filepath}: {e}")
+    return patient_ids
+
+# Usage
+
+patient_ids = extract_patient_ids(root_directory)
+print("Extracted patient IDs:")
+for pid in patient_ids:
+    print(pid)
+
+
 def preprocess_mri_data(data_dir="tciaDownload", annotation_csv="tciaDownload/Annotation_Boxes.csv", output_dir="preprocessed_data"):
     """
-    Process all patient MRI volumes in `data_dir` using bounding boxes from `annotation_csv`,
+    Process all patient MRI using bounding boxes from `annotation_csv`,
     normalize them, generate binary tumor masks, and save as NumPy arrays in `output_dir`.
     """
     os.makedirs(output_dir, exist_ok=True)
@@ -217,4 +241,4 @@ def preprocess_mri_data(data_dir="tciaDownload", annotation_csv="tciaDownload/An
             print(f"❌ Failed {patient_id}: {e}")
         
 
-preprocess_mri_data()
+# preprocess_mri_data()
