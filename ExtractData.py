@@ -1,13 +1,11 @@
-import pandas as pd
-from ucimlrepo import fetch_ucirepo
 import os
-import requests
 import pandas as pd
+import numpy as np
+from ucimlrepo import fetch_ucirepo
+import requests
 from tcia_utils import nbia
 import pydicom
 import matplotlib.pyplot as plt
-import os
-import numpy as np
 
 def extract_breast_cancer_wisconsin_diagnostic_data():
     """
@@ -34,13 +32,10 @@ def extract_breast_cancer_wisconsin_diagnostic_data():
     
     return data
 
-
-
 def extract_dicom_mri_images():
     """Extract breast cancer MRI images and store them in the folder tciaDownload"""
     data = nbia.getSeries(collection = "Breast-Cancer-Screening-DBT")
     nbia.downloadSeries(data)
-
 
 def view_dicom_series(series_path):
     """View a DICOM series using pydicom and matplotlib with slice navigation."""
