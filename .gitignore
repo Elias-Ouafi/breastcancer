@@ -44,6 +44,7 @@ venv.bak/
 .kaggle/
 data/
 tciaDownload/
+preprocessed_data/
 
 # Logs
 *.log

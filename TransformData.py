@@ -8,6 +8,13 @@ import seaborn as sns
 import os
 import os
 import pydicom
+import SimpleITK as sitk
+from tcia_utils import nbia
+import logging
+from pathlib import Path
+import itk
+import itkwidgets
+from itkwidgets import view
 
 def clean_data(X, y):
     """Clean and preprocess the data."""
@@ -197,48 +204,132 @@ for pid in patient_ids:
     print(pid)
 
 
-def preprocess_mri_data(data_dir="tciaDownload", annotation_csv="tciaDownload/Annotation_Boxes.csv", output_dir="preprocessed_data"):
+def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="preprocessed_data"):
     """
-    Process all patient MRI using bounding boxes from `annotation_csv`,
-    normalize them, generate binary tumor masks, and save as NumPy arrays in `output_dir`.
+    Process MRI data and its segmentations for a given series.
+    
+    Args:
+        series_instance_uid (str): The SeriesInstanceUID of the MRI series
+        local_dicom_path (str): Path to the local DICOM series
+        output_dir (str): Directory to save preprocessed data
+    
+    Returns:
+        tuple: (preprocessed_volume, tumor_mask) as NumPy arrays
     """
     os.makedirs(output_dir, exist_ok=True)
-    annotations = pd.read_csv(annotation_csv)
-
-    for patient_id in annotations['Patient ID'].unique():
-        patient_annotations = annotations[annotations['Patient ID'] == patient_id]
-        patient_path = os.path.join(data_dir, str(patient_id))
+    logging.basicConfig(level=logging.INFO)
+    
+    try:
+        # 1. Load the MRI series
+        logging.info("Loading MRI series...")
+        dicom_files = [f for f in os.listdir(local_dicom_path) if f.endswith('.dcm')]
+        if not dicom_files:
+            raise ValueError(f"No DICOM files found in {local_dicom_path}")
+            
+        # Handle both single file and series
+        if len(dicom_files) == 1:
+            logging.info("Processing single DICOM file...")
+            image = sitk.ReadImage(os.path.join(local_dicom_path, dicom_files[0]))
+        else:
+            logging.info("Processing DICOM series...")
+            reader = sitk.ImageSeriesReader()
+            dicom_names = reader.GetGDCMSeriesFileNames(local_dicom_path)
+            reader.SetFileNames(dicom_names)
+            image = reader.Execute()
         
-        if not os.path.isdir(patient_path):
-            print(f"⚠️ Skipping {patient_id}: Folder not found.")
-            continue
-
-        try:
-            volume = load_dicom_volume(patient_path)
-            mask = np.zeros_like(volume, dtype=np.uint8)
-
-            for _, row in patient_annotations.iterrows():
-                bbox = {
-                    'Start Slice': int(row['Start Slice']),
-                    'End Slice': int(row['End Slice']),
-                    'Start Row': int(row['Start Row']),
-                    'End Row': int(row['End Row']),
-                    'Start Column': int(row['Start Column']),
-                    'End Column': int(row['End Column']),
-                }
-                mask += create_mask(volume.shape, bbox)
-
-            # Normalize volume to [0, 1]
-            volume = (volume - np.min(volume)) / (np.max(volume) - np.min(volume) + 1e-5)
-
-            # Save outputs
-            np.save(os.path.join(output_dir, f"{patient_id}_volume.npy"), volume)
-            np.save(os.path.join(output_dir, f"{patient_id}_mask.npy"), mask)
-
-            print(f"✅ Processed {patient_id}")
+        # Convert to numpy array first, then to float32
+        image_array = sitk.GetArrayFromImage(image)
+        image_array = image_array.astype(np.float32)
+        image = sitk.GetImageFromArray(image_array)
         
-        except Exception as e:
-            print(f"❌ Failed {patient_id}: {e}")
+        # Get original spacing and size
+        original_spacing = image.GetSpacing()
+        original_size = image.GetSize()
         
+        # 2. Resample to standard spacing (1x1x1 mm)
+        logging.info("Resampling to standard spacing...")
+        standard_spacing = (1.0, 1.0, 1.0)
+        resampler = sitk.ResampleImageFilter()
+        resampler.SetOutputSpacing(standard_spacing)
+        resampler.SetSize([int(sz * spc / nspc) for sz, spc, nspc in zip(original_size, original_spacing, standard_spacing)])
+        resampler.SetInterpolator(sitk.sitkLinear)
+        resampled_image = resampler.Execute(image)
+        
+        # 3. Normalize intensity
+        logging.info("Normalizing intensity...")
+        # Convert to numpy array for processing
+        image_array = sitk.GetArrayFromImage(resampled_image)
+        
+        # Zero mean, unit variance normalization
+        mean = np.mean(image_array)
+        std = np.std(image_array)
+        normalized_array = (image_array - mean) / (std + 1e-8)
+        
+        # 4. Process segmentations
+        logging.info("Processing segmentations...")
+        mask = np.zeros_like(normalized_array, dtype=np.uint8)
+        
+        # Look for segmentation files in the same directory
+        seg_files = [f for f in os.listdir(local_dicom_path) if f.endswith('.dcm')]
+        
+        for seg_file in seg_files:
+            seg_path = os.path.join(local_dicom_path, seg_file)
+            try:
+                # Read DICOM file
+                ds = pydicom.dcmread(seg_path)
+                
+                # Check if it's a segmentation file
+                if ds.SOPClassUID == '1.2.840.10008.5.1.4.1.1.66.4':  # SEG
+                    logging.info(f"Processing SEG file: {seg_file}")
+                    seg_image = sitk.ReadImage(seg_path)
+                    # Convert to numpy array first, then to float32
+                    seg_array = sitk.GetArrayFromImage(seg_image)
+                    seg_array = seg_array.astype(np.float32)
+                    seg_image = sitk.GetImageFromArray(seg_array)
+                    resampled_seg = resampler.Execute(seg_image)
+                    seg_array = sitk.GetArrayFromImage(resampled_seg)
+                    mask = np.logical_or(mask, seg_array > 0).astype(np.uint8)
+                    
+                elif ds.SOPClassUID == '1.2.840.10008.5.1.4.1.1.481.3':  # RTSTRUCT
+                    logging.info(f"Processing RTSTRUCT file: {seg_file}")
+                    # Convert RTSTRUCT to binary mask
+                    rtstruct = itk.imread(seg_path)
+                    rtstruct_resampled = itk.resample_image_filter(
+                        rtstruct,
+                        size=resampled_image.GetSize(),
+                        spacing=standard_spacing
+                    )
+                    rtstruct_array = itk.GetArrayFromImage(rtstruct_resampled)
+                    mask = np.logical_or(mask, rtstruct_array > 0).astype(np.uint8)
+                    
+            except Exception as e:
+                logging.warning(f"Could not process segmentation file {seg_file}: {str(e)}")
+                continue
+        
+        # Save preprocessed data
+        patient_id = os.path.basename(local_dicom_path)
+        np.save(os.path.join(output_dir, f"{patient_id}_volume.npy"), normalized_array)
+        np.save(os.path.join(output_dir, f"{patient_id}_mask.npy"), mask)
+        
+        # Optional: Create visualization
+        if mask.any():
+            logging.info("Creating visualization...")
+            view(normalized_array, mask, ui_collapsed=True)
+        
+        logging.info(f"✅ Successfully processed {patient_id}")
+        return normalized_array, mask
+        
+    except Exception as e:
+        logging.error(f"❌ Failed to process series {series_instance_uid}: {str(e)}")
+        return None, None
 
-# preprocess_mri_data()
+# Example usage with actual data
+series_uid = "1.2.826.0.1.3680043.8.498.82499100658218008113791688848421488448"
+dicom_path = os.path.join("tciaDownload", series_uid)
+output_dir = "preprocessed_data"
+
+volume, mask = preprocess_mri_data(
+    series_instance_uid=series_uid,
+    local_dicom_path=dicom_path,
+    output_dir=output_dir
+)
