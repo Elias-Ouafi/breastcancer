@@ -204,50 +204,74 @@ for pid in patient_ids:
     print(pid)
 
 
-def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="preprocessed_data"):
+def process_all_mri_data(root_dir="tciaDownload", output_dir="preprocessed_data"):
     """
-    Process MRI data and its segmentations for a given series.
-    
-    Args:
-        series_instance_uid (str): The SeriesInstanceUID of the MRI series
-        local_dicom_path (str): Path to the local DICOM series
-        output_dir (str): Directory to save preprocessed data
-    
-    Returns:
-        tuple: (preprocessed_volume, tumor_mask) as NumPy arrays
+    Loop through all MRI data to preprocess them.
     """
     os.makedirs(output_dir, exist_ok=True)
     logging.basicConfig(level=logging.INFO)
     
+    # Store all subdirectories in a list to loop through
+    mri_dirs = [d for d in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, d))]
+    
+    processed_count = 0
+    failed_count = 0
+    
+    for mri_dir in mri_dirs:
+        try:
+            logging.info(f"Processing MRI directory: {mri_dir}")
+            local_dicom_path = os.path.join(root_dir, mri_dir)
+            
+            # Process the MRI data
+            volume, mask = preprocess_mri_data(
+                series_instance_uid=mri_dir,
+                local_dicom_path=local_dicom_path,
+                output_dir=output_dir
+            )
+            
+            if volume is not None and mask is not None:
+                processed_count += 1
+            else:
+                failed_count += 1
+                
+        except Exception as e:
+            logging.error(f"Failed to process {mri_dir}: {str(e)}")
+            failed_count += 1
+            continue
+    
+    logging.info(f"Successfully processed: {processed_count}")
+    logging.info(f"Failed to process: {failed_count}")
+    return processed_count, failed_count
+
+def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="preprocessed_data"):
+    """
+    Preprocess MRI data to add its segmentations.
+    """
     try:
-        # 1. Load the MRI series
-        logging.info("Loading MRI series...")
+        # STEP 1 - Load the MRI series
+        logging.info(f"\n Loading MRI series...")
         dicom_files = [f for f in os.listdir(local_dicom_path) if f.endswith('.dcm')]
         if not dicom_files:
             raise ValueError(f"No DICOM files found in {local_dicom_path}")
             
-        # Handle both single file and series
+        # STEP 2 -Read DICOM images with single or multiple files
         if len(dicom_files) == 1:
-            logging.info("Processing single DICOM file...")
+            logging.info("Single DICOM file.")
             image = sitk.ReadImage(os.path.join(local_dicom_path, dicom_files[0]))
         else:
-            logging.info("Processing DICOM series...")
+            logging.info("Multiple DICOM files.")
             reader = sitk.ImageSeriesReader()
             dicom_names = reader.GetGDCMSeriesFileNames(local_dicom_path)
             reader.SetFileNames(dicom_names)
             image = reader.Execute()
         
-        # Convert to numpy array first, then to float32
+        # STEP 3 - Convert images to numpy array first, then to float32
         image_array = sitk.GetArrayFromImage(image)
         image_array = image_array.astype(np.float32)
         image = sitk.GetImageFromArray(image_array)
-        
-        # Get original spacing and size
+        # Use the right spacing and size
         original_spacing = image.GetSpacing()
         original_size = image.GetSize()
-        
-        # 2. Resample to standard spacing (1x1x1 mm)
-        logging.info("Resampling to standard spacing...")
         standard_spacing = (1.0, 1.0, 1.0)
         resampler = sitk.ResampleImageFilter()
         resampler.SetOutputSpacing(standard_spacing)
@@ -255,23 +279,17 @@ def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="prepr
         resampler.SetInterpolator(sitk.sitkLinear)
         resampled_image = resampler.Execute(image)
         
-        # 3. Normalize intensity
-        logging.info("Normalizing intensity...")
-        # Convert to numpy array for processing
+        # STEP 4 - Convert to numpy array for processing
         image_array = sitk.GetArrayFromImage(resampled_image)
         
-        # Zero mean, unit variance normalization
+        # STEP 5 - Normalize the array
         mean = np.mean(image_array)
         std = np.std(image_array)
         normalized_array = (image_array - mean) / (std + 1e-8)
-        
-        # 4. Process segmentations
-        logging.info("Processing segmentations...")
         mask = np.zeros_like(normalized_array, dtype=np.uint8)
         
-        # Look for segmentation files in the same directory
+        # STEP 6 - Segment the data
         seg_files = [f for f in os.listdir(local_dicom_path) if f.endswith('.dcm')]
-        
         for seg_file in seg_files:
             seg_path = os.path.join(local_dicom_path, seg_file)
             try:
@@ -279,7 +297,7 @@ def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="prepr
                 ds = pydicom.dcmread(seg_path)
                 
                 # Check if it's a segmentation file
-                if ds.SOPClassUID == '1.2.840.10008.5.1.4.1.1.66.4':  # SEG
+                if ds.SOPClassUID == '1.2.840.10008.5.1.4.1.1.66.4':
                     logging.info(f"Processing SEG file: {seg_file}")
                     seg_image = sitk.ReadImage(seg_path)
                     # Convert to numpy array first, then to float32
@@ -306,16 +324,14 @@ def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="prepr
                 logging.warning(f"Could not process segmentation file {seg_file}: {str(e)}")
                 continue
         
-        # Save preprocessed data
+        # STEP 7 - Save preprocessed data
         patient_id = os.path.basename(local_dicom_path)
         np.save(os.path.join(output_dir, f"{patient_id}_volume.npy"), normalized_array)
         np.save(os.path.join(output_dir, f"{patient_id}_mask.npy"), mask)
-        
-        # Optional: Create visualization
         if mask.any():
-            logging.info("Creating visualization...")
             view(normalized_array, mask, ui_collapsed=True)
         
+        # The end
         logging.info(f"✅ Successfully processed {patient_id}")
         return normalized_array, mask
         
@@ -323,13 +339,9 @@ def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="prepr
         logging.error(f"❌ Failed to process series {series_instance_uid}: {str(e)}")
         return None, None
 
-# Example usage with actual data
-series_uid = "1.2.826.0.1.3680043.8.498.82499100658218008113791688848421488448"
-dicom_path = os.path.join("tciaDownload", series_uid)
-output_dir = "preprocessed_data"
-
-volume, mask = preprocess_mri_data(
-    series_instance_uid=series_uid,
-    local_dicom_path=dicom_path,
-    output_dir=output_dir
-)
+# Example usage
+if __name__ == "__main__":
+    processed_count, failed_count = process_all_mri_data(
+        root_dir="tciaDownload",
+        output_dir="preprocessed_data"
+    )
