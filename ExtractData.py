@@ -131,3 +131,73 @@ def clean_mri_annotation(folder_path="tciaDownload", filename="Annotation_Boxes.
 
     df = pd.read_excel(excel_path)
     df.to_csv(csv_path, index=False)
+
+def download_segmentations(
+    download_dir="tciaDownload",
+    output_dir="tciaSegmentations",
+    collection="Breast-Cancer-Screening-DBT"
+):
+    """
+    Download RTSTRUCT/SEG segmentations for each DICOM series from TCIA.
+    Uses patientId to get all series, then filters by StudyInstanceUID + modality.
+    """
+
+    os.makedirs(output_dir, exist_ok=True)
+    existing = {d for d in os.listdir(output_dir)
+                if os.path.isdir(os.path.join(output_dir, d))}
+
+    for series_folder in os.listdir(download_dir):
+        folder_path = os.path.join(download_dir, series_folder)
+        if not os.path.isdir(folder_path):
+            continue
+
+        dicoms = [f for f in os.listdir(folder_path) if f.lower().endswith(".dcm")]
+        if not dicoms:
+            print(f"[WARN] No DICOMs in {folder_path}, skipping.")
+            continue
+
+        try:
+            dcm = pydicom.dcmread(os.path.join(folder_path, dicoms[0]), stop_before_pixels=True)
+            series_uid = dcm.SeriesInstanceUID
+            study_uid = dcm.StudyInstanceUID
+            patient_id = dcm.PatientID
+        except Exception as e:
+            print(f"[ERROR] Reading DICOM in {folder_path}: {e}")
+            continue
+
+        print(f"\n[INFO] Series UID: {series_uid} | Study UID: {study_uid} | Patient ID: {patient_id}")
+
+        try:
+            all_series = nbia.getSeries(collection=collection, patientId=patient_id)
+        except Exception as e:
+            print(f"[ERROR] getSeries() failed for patient {patient_id}: {e}")
+            continue
+
+        # Filter to segmentations in the same study
+        segmentations = [
+            s for s in all_series
+            if s['StudyInstanceUID'] == study_uid and s['Modality'] in {"SEG", "RTSTRUCT"}
+        ]
+
+        if not segmentations:
+            print(f"[INFO] No segmentations found for study {study_uid}")
+            continue
+
+        for seg in segmentations:
+            seg_uid = seg['SeriesInstanceUID']
+            if seg_uid in existing:
+                print(f"[SKIP] Segmentation {seg_uid} already downloaded.")
+                continue
+
+            try:
+                print(f"[DOWNLOAD] Segmentation {seg_uid} ({seg['Modality']})...")
+                nbia.downloadSeries([seg], output_dir=output_dir)
+                existing.add(seg_uid)
+                print(f"[SUCCESS] Downloaded {seg_uid}")
+            except Exception as e:
+                print(f"[ERROR] Failed to download {seg_uid}: {e}")
+
+    print("\n✅ download_segmentations completed.")
+
+# Use default directories
+download_segmentations()
