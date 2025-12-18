@@ -7,6 +7,23 @@ from tcia_utils import nbia
 import pydicom
 import matplotlib.pyplot as plt
 
+
+def dir_size_bytes(path):
+    """Return total size in bytes under `path`. If the path does not exist return 0."""
+    total = 0
+    if not os.path.exists(path):
+        return 0
+    for root, dirs, files in os.walk(path):
+        for f in files:
+            try:
+                fp = os.path.join(root, f)
+                total += os.path.getsize(fp)
+            except OSError:
+                # Skip files that can't be accessed
+                continue
+    return total
+
+
 def extract_breast_cancer_wisconsin_diagnostic_data():
     """
     Fetches the Breast Cancer Wisconsin (Diagnostic) dataset and saves it to CSV.
@@ -32,10 +49,15 @@ def extract_breast_cancer_wisconsin_diagnostic_data():
     
     return data
 
-DOWNLOAD_DIR = 'tciaDownload'
+# Default location for downloaded DICOM series (set by user request)
+DOWNLOAD_DIR = 'D:\\'
 
-def extract_dicom_mri_images():
-    """Extract breast cancer MRI images and store them in the folder tciaDownload, skipping already downloaded series."""
+def extract_dicom_mri_images(max_gb=30):
+    """Extract breast cancer MRI images and store them in `DOWNLOAD_DIR`, skipping already downloaded series.
+
+    Downloads one series at a time and stops when the cumulative size in `DOWNLOAD_DIR`
+    reaches `max_gb` gigabytes (default 30 GB).
+    """
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
     # Get list of series to download
@@ -54,9 +76,31 @@ def extract_dicom_mri_images():
         print("All available series are already downloaded.")
         return
 
-    # Download only new series
-    nbia.downloadSeries(new_series)
-    print(f"Downloaded {len(new_series)} new series to {DOWNLOAD_DIR}")
+    max_bytes = int(max_gb * 1024 ** 3)
+    current_size = dir_size_bytes(DOWNLOAD_DIR)
+    if current_size >= max_bytes:
+        print(f"Storage limit reached: {current_size} bytes >= {max_bytes} bytes ({max_gb} GB). No downloads will be performed.")
+        return
+
+    downloaded_count = 0
+    for s in new_series:
+        current_size = dir_size_bytes(DOWNLOAD_DIR)
+        if current_size >= max_bytes:
+            print(f"Reached download cap of {max_gb} GB. Stopping further downloads.")
+            break
+
+        series_uid = s.get('SeriesInstanceUID', '<unknown>')
+        try:
+            print(f"[DOWNLOAD] Attempting to download series {series_uid} to {DOWNLOAD_DIR}...")
+            nbia.downloadSeries([s], output_dir=DOWNLOAD_DIR)
+            downloaded_count += 1
+            current_size = dir_size_bytes(DOWNLOAD_DIR)
+            print(f"[INFO] Downloaded series {series_uid}. Current storage used: {current_size} bytes.")
+        except Exception as e:
+            print(f"[ERROR] Failed to download series {series_uid}: {e}")
+            continue
+
+    print(f"Downloaded {downloaded_count} series to {DOWNLOAD_DIR} (cap was {max_gb} GB).")
 
 def view_dicom_series(series_path):
     """View a DICOM series using pydicom and matplotlib with slice navigation."""
@@ -133,18 +177,27 @@ def clean_mri_annotation(folder_path="tciaDownload", filename="Annotation_Boxes.
     df.to_csv(csv_path, index=False)
 
 def download_segmentations(
-    download_dir="tciaDownload",
-    output_dir="tciaSegmentations",
-    collection="Breast-Cancer-Screening-DBT"
+    download_dir=DOWNLOAD_DIR,
+    output_dir=DOWNLOAD_DIR,
+    collection="Breast-Cancer-Screening-DBT",
+    max_gb=30
 ):
     """
     Download RTSTRUCT/SEG segmentations for each DICOM series from TCIA.
     Uses patientId to get all series, then filters by StudyInstanceUID + modality.
+
+    Stops downloading when `output_dir` reaches `max_gb` gigabytes.
     """
 
     os.makedirs(output_dir, exist_ok=True)
     existing = {d for d in os.listdir(output_dir)
                 if os.path.isdir(os.path.join(output_dir, d))}
+
+    max_bytes = int(max_gb * 1024 ** 3)
+    current_size = dir_size_bytes(output_dir)
+    if current_size >= max_bytes:
+        print(f"Storage limit reached ({current_size} bytes >= {max_bytes} bytes). No segmentations will be downloaded.")
+        return
 
     for series_folder in os.listdir(download_dir):
         folder_path = os.path.join(download_dir, series_folder)
@@ -188,6 +241,11 @@ def download_segmentations(
             if seg_uid in existing:
                 print(f"[SKIP] Segmentation {seg_uid} already downloaded.")
                 continue
+
+            current_size = dir_size_bytes(output_dir)
+            if current_size >= max_bytes:
+                print(f"Reached download cap of {max_gb} GB while downloading segmentations. Stopping.")
+                return
 
             try:
                 print(f"[DOWNLOAD] Segmentation {seg_uid} ({seg['Modality']})...")
