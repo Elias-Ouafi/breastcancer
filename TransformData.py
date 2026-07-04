@@ -6,7 +6,7 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
-import os
+import shutil
 import pydicom
 import SimpleITK as sitk
 from tcia_utils import nbia
@@ -181,6 +181,79 @@ def create_mask(volume_shape, bbox):
     return mask
 
 
+def crop_to_roi(volume, mask, margin=16):
+    """Crop `volume` and `mask` to the mask's bounding box plus a voxel `margin`.
+
+    Segmentation masks are almost entirely background, so storing the full volume
+    wastes space. When the mask is empty we cannot infer a region of interest, so
+    the arrays are returned unchanged.
+    Returns (cropped_volume, cropped_mask, offset) where `offset` is the (z, y, x)
+    index of the crop origin in the original volume, so the crop can be located
+    back in the full image later.
+    """
+    if not mask.any():
+        return volume, mask, (0, 0, 0)
+
+    nonzero = np.argwhere(mask)
+    start = np.maximum(nonzero.min(axis=0) - margin, 0)
+    end = np.minimum(nonzero.max(axis=0) + margin + 1, mask.shape)
+
+    slices = tuple(slice(int(s), int(e)) for s, e in zip(start, end))
+    return volume[slices], mask[slices], tuple(int(s) for s in start)
+
+
+def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, crop=True):
+    """Save a preprocessed MRI volume + mask as a single compressed .npz file.
+
+    Three levers keep the files small:
+      - `crop`: keep only the region of interest around the segmentation.
+      - `dtype`: store intensities as float16 (half the size of float32); the
+        precision loss is negligible for z-normalised MRI data.
+      - `np.savez_compressed`: zlib-compresses the arrays; the mostly-empty mask
+        shrinks by orders of magnitude.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    offset = (0, 0, 0)
+    if crop:
+        volume, mask, offset = crop_to_roi(volume, mask)
+
+    volume = volume.astype(dtype)
+    mask = mask.astype(np.uint8)
+
+    out_path = os.path.join(output_dir, f"{patient_id}.npz")
+    np.savez_compressed(
+        out_path,
+        volume=volume,
+        mask=mask,
+        crop_offset=np.asarray(offset, dtype=np.int32),
+    )
+    return out_path
+
+
+def delete_dicom_source(dicom_dir, npz_path):
+    """Delete the raw DICOM folder `dicom_dir` after preprocessing.
+
+    Destructive — this permanently removes the original series. As a safety net the
+    deletion is skipped (with a warning) unless `npz_path` exists and is non-empty,
+    so a failed or partial save never costs you the source data.
+    Returns True if the folder was removed.
+    """
+    if not npz_path or not os.path.exists(npz_path) or os.path.getsize(npz_path) == 0:
+        logging.warning(
+            f"Skipping deletion of {dicom_dir}: preprocessed file "
+            f"{npz_path} is missing or empty."
+        )
+        return False
+    try:
+        shutil.rmtree(dicom_dir)
+        logging.info(f"🗑️  Removed raw DICOM source {dicom_dir} (kept {npz_path}).")
+        return True
+    except OSError as e:
+        logging.error(f"Failed to remove {dicom_dir}: {e}")
+        return False
+
+
 root_directory = '/tciaDownload'
 
 def extract_patient_ids(root_dir):
@@ -204,9 +277,13 @@ for pid in patient_ids:
     print(pid)
 
 
-def process_all_mri_data(root_dir="tciaDownload", output_dir="preprocessed_data"):
+def process_all_mri_data(root_dir="tciaDownload", output_dir="preprocessed_data", delete_source=False):
     """
     Loop through all MRI data to preprocess them.
+
+    Set `delete_source=True` to remove each raw DICOM folder after it has been
+    successfully preprocessed into a compressed .npz (reclaims most of the disk
+    space). It is off by default because it is destructive.
     """
     os.makedirs(output_dir, exist_ok=True)
     logging.basicConfig(level=logging.INFO)
@@ -226,7 +303,8 @@ def process_all_mri_data(root_dir="tciaDownload", output_dir="preprocessed_data"
             volume, mask = preprocess_mri_data(
                 series_instance_uid=mri_dir,
                 local_dicom_path=local_dicom_path,
-                output_dir=output_dir
+                output_dir=output_dir,
+                delete_source=delete_source
             )
             
             if volume is not None and mask is not None:
@@ -243,9 +321,12 @@ def process_all_mri_data(root_dir="tciaDownload", output_dir="preprocessed_data"
     logging.info(f"Failed to process: {failed_count}")
     return processed_count, failed_count
 
-def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="preprocessed_data"):
+def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="preprocessed_data", delete_source=False):
     """
     Preprocess MRI data to add its segmentations.
+
+    If `delete_source` is True, the raw DICOM folder is deleted once the compressed
+    .npz has been written successfully (see `delete_dicom_source`).
     """
     try:
         # STEP 1 - Load the MRI series
@@ -324,13 +405,16 @@ def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="prepr
                 logging.warning(f"Could not process segmentation file {seg_file}: {str(e)}")
                 continue
         
-        # STEP 7 - Save preprocessed data
+        # STEP 7 - Save preprocessed data (compressed to keep files small)
         patient_id = os.path.basename(local_dicom_path)
-        np.save(os.path.join(output_dir, f"{patient_id}_volume.npy"), normalized_array)
-        np.save(os.path.join(output_dir, f"{patient_id}_mask.npy"), mask)
+        npz_path = save_preprocessed(patient_id, normalized_array, mask, output_dir)
         if mask.any():
             view(normalized_array, mask, ui_collapsed=True)
-        
+
+        # STEP 8 - Optionally reclaim disk space by deleting the raw DICOM source
+        if delete_source:
+            delete_dicom_source(local_dicom_path, npz_path)
+
         # The end
         logging.info(f"✅ Successfully processed {patient_id}")
         return normalized_array, mask
@@ -341,7 +425,11 @@ def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="prepr
 
 # Example usage
 if __name__ == "__main__":
+    # delete_source=True also removes each raw DICOM folder after it is safely
+    # preprocessed. It is destructive, so keep it False until you have verified the
+    # compressed .npz outputs are correct.
     processed_count, failed_count = process_all_mri_data(
         root_dir="tciaDownload",
-        output_dir="preprocessed_data"
+        output_dir="preprocessed_data",
+        delete_source=False
     )

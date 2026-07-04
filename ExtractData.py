@@ -24,11 +24,22 @@ def dir_size_bytes(path):
     return total
 
 
-def extract_breast_cancer_wisconsin_diagnostic_data():
+def extract_breast_cancer_wisconsin_diagnostic_data(max_gb=30):
     """
     Fetches the Breast Cancer Wisconsin (Diagnostic) dataset and saves it to CSV.
-    Also returns the raw data as a pandas DataFrame for future use.
+    Stops and does not save if the cumulative size in `DOWNLOAD_DIR` would exceed `max_gb` gigabytes.
+    Also returns the raw data as a pandas DataFrame for future use (or None if not saved).
     """
+    # Ensure download directory exists
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+    # Respect storage cap
+    max_bytes = int(max_gb * 1024 ** 3)
+    current_size = dir_size_bytes(DOWNLOAD_DIR)
+    if current_size >= max_bytes:
+        print(f"Storage limit reached: {current_size} bytes >= {max_bytes} bytes ({max_gb} GB). Dataset will not be saved.")
+        return None
+
     # Fetch the dataset
     breast_cancer_wisconsin_diagnostic = fetch_ucirepo(id=17)
     
@@ -38,15 +49,46 @@ def extract_breast_cancer_wisconsin_diagnostic_data():
     
     # Combine features and target into a single DataFrame
     data = pd.concat([X, y], axis=1)
-    
-    # Create data directory if it doesn't exist
-    os.makedirs('data', exist_ok=True)
-    
-    # Save raw data to CSV
-    data.to_csv('data/raw_breast_cancer_data.csv', index=False)
-    
-    print("Data from Breast Cancer Wisconsin (Diagnostic) dataset has been extracted!")
-    
+
+    # Save to a temp file first to measure size
+    filename = 'raw_breast_cancer_data.csv'
+    temp_path = os.path.join(DOWNLOAD_DIR, filename + '.tmp')
+    final_path = os.path.join(DOWNLOAD_DIR, filename)
+
+    try:
+        data.to_csv(temp_path, index=False)
+        file_size = os.path.getsize(temp_path)
+    except Exception as e:
+        print(f"[ERROR] Failed to write temporary CSV: {e}")
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+        return None
+
+    # Check if adding this file would exceed the cap
+    current_size = dir_size_bytes(DOWNLOAD_DIR)
+    if current_size + file_size > max_bytes:
+        print(f"Saving this dataset would exceed the storage cap ({max_gb} GB). File of size {file_size} bytes will not be kept.")
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+        return None
+
+    # Move temp file to final path
+    try:
+        os.replace(temp_path, final_path)
+    except Exception as e:
+        print(f"[ERROR] Failed to move temporary file into place: {e}")
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+        return None
+
+    print("Data from Breast Cancer Wisconsin (Diagnostic) dataset has been extracted and saved to", final_path)
     return data
 
 # Default location for downloaded DICOM series (set by user request)
@@ -92,7 +134,9 @@ def extract_dicom_mri_images(max_gb=30):
         series_uid = s.get('SeriesInstanceUID', '<unknown>')
         try:
             print(f"[DOWNLOAD] Attempting to download series {series_uid} to {DOWNLOAD_DIR}...")
-            nbia.downloadSeries([s], output_dir=DOWNLOAD_DIR)
+            os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+            nbia.downloadSeries([s], path=DOWNLOAD_DIR)
+
             downloaded_count += 1
             current_size = dir_size_bytes(DOWNLOAD_DIR)
             print(f"[INFO] Downloaded series {series_uid}. Current storage used: {current_size} bytes.")
@@ -249,7 +293,9 @@ def download_segmentations(
 
             try:
                 print(f"[DOWNLOAD] Segmentation {seg_uid} ({seg['Modality']})...")
-                nbia.downloadSeries([seg], output_dir=output_dir)
+                os.makedirs(output_dir, exist_ok=True)
+                nbia.downloadSeries([seg], path=output_dir)
+
                 existing.add(seg_uid)
                 print(f"[SUCCESS] Downloaded {seg_uid}")
             except Exception as e:
@@ -258,4 +304,4 @@ def download_segmentations(
     print("\n✅ download_segmentations completed.")
 
 # Use default directories
-download_segmentations()
+extract_dicom_mri_images()
