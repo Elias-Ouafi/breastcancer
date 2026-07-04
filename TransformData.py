@@ -1,20 +1,47 @@
-import numpy as np
-import pandas as pd
-from ucimlrepo import fetch_ucirepo
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
-import matplotlib.pyplot as plt
-import seaborn as sns
 import os
 import shutil
-import pydicom
-import SimpleITK as sitk
-from tcia_utils import nbia
 import logging
 from pathlib import Path
-import itk
-import itkwidgets
-from itkwidgets import view
+
+import numpy as np
+import pandas as pd
+import pydicom
+
+# Optional heavy dependencies. Each is only needed by a specific pipeline (tabular
+# PCA, MRI SEG resampling, 3D viewing...). They are imported lazily so the module —
+# and the lightweight DBT box-annotation preprocessing — works without the full
+# stack installed. Functions that use a missing dependency will fail only when called.
+try:
+    from ucimlrepo import fetch_ucirepo
+except ImportError:
+    fetch_ucirepo = None
+try:
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.decomposition import PCA
+except ImportError:
+    StandardScaler = PCA = None
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
+try:
+    import seaborn as sns
+except ImportError:
+    sns = None
+try:
+    import SimpleITK as sitk
+except ImportError:
+    sitk = None
+try:
+    from tcia_utils import nbia
+except ImportError:
+    nbia = None
+try:
+    import itk
+    import itkwidgets
+    from itkwidgets import view
+except ImportError:
+    itk = itkwidgets = view = None
 
 def clean_data(X, y):
     """Clean and preprocess the data."""
@@ -252,6 +279,95 @@ def delete_dicom_source(dicom_dir, npz_path):
     except OSError as e:
         logging.error(f"Failed to remove {dicom_dir}: {e}")
         return False
+
+
+def dbt_series_view(ds):
+    """Return the BCS-DBT view key (e.g. ``'lmlo'``) for a DBT DICOM dataset.
+
+    Laterality lives either in the top-level ``ImageLaterality``/``Laterality`` tag
+    or, for multi-frame DBT, in
+    ``SharedFunctionalGroupsSequence -> FrameAnatomySequence -> FrameLaterality``.
+    Combined with ``ViewPosition`` (CC/MLO) this yields the ``l/r`` + ``cc/mlo`` key
+    used in the annotation boxes CSV.
+    """
+    lat = getattr(ds, "ImageLaterality", "") or getattr(ds, "Laterality", "")
+    if not lat:
+        sfg = getattr(ds, "SharedFunctionalGroupsSequence", None)
+        if sfg:
+            fas = getattr(sfg[0], "FrameAnatomySequence", None)
+            if fas:
+                lat = getattr(fas[0], "FrameLaterality", "")
+    view = getattr(ds, "ViewPosition", "")
+    return f"{lat}{view}".lower()
+
+
+def _boxes_for_series(ds, boxes_df):
+    """Rows of ``boxes_df`` matching this DICOM's PatientID and view."""
+    patient = getattr(ds, "PatientID", None)
+    view = dbt_series_view(ds)
+    if patient is None or not view:
+        return boxes_df.iloc[0:0]
+    return boxes_df[(boxes_df["PatientID"] == patient)
+                    & (boxes_df["View"].str.lower() == view)]
+
+
+def preprocess_dbt_with_boxes(root_dir="tciaDownload",
+                              boxes_csv="tciaDownload/BCS-DBT-boxes-train.csv",
+                              output_dir="preprocessed_data",
+                              skip_empty=True):
+    """Preprocess Breast-Cancer-Screening-DBT series using the bounding-box annotations.
+
+    DBT scans ship without DICOM SEG; lesions are given as 2D boxes in a separate
+    CSV (``PatientID``, ``View``, ``Slice``, ``X``, ``Y``, ``Width``, ``Height``).
+    For each series folder under ``root_dir`` this reads the multi-frame image,
+    z-normalises it, and builds a binary lesion mask from the matching box rows by
+    reusing :func:`create_mask` (one box = one slice). Volumes are cropped to the
+    lesion ROI and written as compressed ``.npz`` via :func:`save_preprocessed`.
+
+    Series with no matching box are skipped when ``skip_empty`` is True (an empty
+    mask is useless for the localisation model and would store the full frame).
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    boxes = pd.read_csv(boxes_csv)
+
+    saved, skipped = 0, 0
+    for name in sorted(os.listdir(root_dir)):
+        folder = os.path.join(root_dir, name)
+        if not os.path.isdir(folder):
+            continue
+        dcm_files = [f for f in os.listdir(folder) if f.lower().endswith(".dcm")]
+        if not dcm_files:
+            continue
+
+        ds = pydicom.dcmread(os.path.join(folder, dcm_files[0]))
+        volume = ds.pixel_array.astype(np.float32)
+        if volume.ndim == 2:
+            volume = volume[None]  # (1, rows, cols)
+
+        rows = _boxes_for_series(ds, boxes)
+        mask = np.zeros(volume.shape, dtype=np.uint8)
+        for _, r in rows.iterrows():
+            z = int(r["Slice"])
+            bbox = {
+                "Start Slice": z, "End Slice": z + 1,
+                "Start Row": int(r["Y"]), "End Row": int(r["Y"]) + int(r["Height"]),
+                "Start Column": int(r["X"]), "End Column": int(r["X"]) + int(r["Width"]),
+            }
+            mask = np.logical_or(mask, create_mask(volume.shape, bbox)).astype(np.uint8)
+
+        if skip_empty and mask.sum() == 0:
+            skipped += 1
+            continue
+
+        # z-normalise intensities (same convention as the MRI path).
+        volume = (volume - volume.mean()) / (volume.std() + 1e-8)
+        save_preprocessed(name, volume, mask, output_dir)
+        saved += 1
+        logging.info(f"[DBT] {name}: {len(rows)} box(es), "
+                     f"{int(mask.sum())} lesion voxels -> saved.")
+
+    logging.info(f"[DBT] Saved {saved} series, skipped {skipped} without annotations.")
+    return saved, skipped
 
 
 def extract_patient_ids(root_dir="tciaDownload"):

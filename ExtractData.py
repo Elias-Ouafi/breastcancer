@@ -1,11 +1,23 @@
 import os
 import pandas as pd
 import numpy as np
-from ucimlrepo import fetch_ucirepo
-import requests
-from tcia_utils import nbia
 import pydicom
-import matplotlib.pyplot as plt
+from tcia_utils import nbia
+
+# Optional dependencies used only by specific extractors (Wisconsin fetch, plotting).
+# Imported lazily so the DBT download path works without the full stack installed.
+try:
+    from ucimlrepo import fetch_ucirepo
+except ImportError:
+    fetch_ucirepo = None
+try:
+    import requests
+except ImportError:
+    requests = None
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
 
 
 def dir_size_bytes(path):
@@ -94,11 +106,13 @@ def extract_breast_cancer_wisconsin_diagnostic_data(max_gb=30):
 # Default location for downloaded DICOM series (set by user request)
 DOWNLOAD_DIR = 'D:\\'
 
-def extract_dicom_mri_images(max_gb=30):
+def extract_dicom_mri_images(max_gb=30, max_series=None):
     """Extract breast cancer MRI images and store them in `DOWNLOAD_DIR`, skipping already downloaded series.
 
-    Downloads one series at a time and stops when the cumulative size in `DOWNLOAD_DIR`
-    reaches `max_gb` gigabytes (default 30 GB).
+    Downloads one series at a time and stops when either the cumulative size in
+    `DOWNLOAD_DIR` reaches `max_gb` gigabytes (default 30 GB) or `max_series` new
+    series have been downloaded (default: no count limit). Use `max_series` to grab
+    just a handful of cases for a quick test.
     """
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -126,6 +140,10 @@ def extract_dicom_mri_images(max_gb=30):
 
     downloaded_count = 0
     for s in new_series:
+        if max_series is not None and downloaded_count >= max_series:
+            print(f"Reached series limit of {max_series}. Stopping further downloads.")
+            break
+
         current_size = dir_size_bytes(DOWNLOAD_DIR)
         if current_size >= max_bytes:
             print(f"Reached download cap of {max_gb} GB. Stopping further downloads.")
@@ -303,5 +321,46 @@ def download_segmentations(
 
     print("\n✅ download_segmentations completed.")
 
-# Use default directories
-extract_dicom_mri_images()
+def download_annotated_dbt_series(boxes_csv, max_patients=3, download_dir=DOWNLOAD_DIR,
+                                  collection="Breast-Cancer-Screening-DBT"):
+    """Download the DBT series for the first `max_patients` annotated patients.
+
+    Most BCS-DBT volumes are normal (no lesion); only patients listed in the boxes
+    CSV carry annotations. This reads that CSV, takes the first `max_patients`
+    annotated patients, and downloads all their series (every view) so the box
+    masks can later be matched in `preprocess_dbt_with_boxes`.
+    """
+    os.makedirs(download_dir, exist_ok=True)
+    boxes = pd.read_csv(boxes_csv)
+    patients = list(dict.fromkeys(boxes["PatientID"].tolist()))[:max_patients]
+    print(f"Annotated patients to fetch: {patients}")
+
+    existing = {name for name in os.listdir(download_dir)
+                if os.path.isdir(os.path.join(download_dir, name))}
+
+    downloaded = 0
+    for pid in patients:
+        try:
+            series = nbia.getSeries(collection=collection, patientId=pid)
+        except Exception as e:
+            print(f"[ERROR] getSeries failed for {pid}: {e}")
+            continue
+        for s in series:
+            uid = s.get("SeriesInstanceUID")
+            if uid in existing:
+                print(f"[SKIP] {uid} already downloaded.")
+                continue
+            try:
+                print(f"[DOWNLOAD] {pid} series {uid} -> {download_dir}")
+                nbia.downloadSeries([s], path=download_dir)
+                downloaded += 1
+            except Exception as e:
+                print(f"[ERROR] download {uid} failed: {e}")
+
+    print(f"Downloaded {downloaded} series for {len(patients)} patients into {download_dir}.")
+    return downloaded
+
+
+if __name__ == "__main__":
+    # Download to the configured DOWNLOAD_DIR. Pass max_series/max_gb to limit volume.
+    extract_dicom_mri_images()
