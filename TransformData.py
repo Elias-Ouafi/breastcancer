@@ -254,9 +254,8 @@ def delete_dicom_source(dicom_dir, npz_path):
         return False
 
 
-root_directory = '/tciaDownload'
-
-def extract_patient_ids(root_dir):
+def extract_patient_ids(root_dir="tciaDownload"):
+    """Walk `root_dir` and return the set of PatientIDs found in the DICOM files."""
     patient_ids = set()
     for dirpath, dirnames, filenames in os.walk(root_dir):
         for filename in filenames:
@@ -268,13 +267,6 @@ def extract_patient_ids(root_dir):
                 except Exception as e:
                     print(f"Error reading {filepath}: {e}")
     return patient_ids
-
-# Usage
-
-patient_ids = extract_patient_ids(root_directory)
-print("Extracted patient IDs:")
-for pid in patient_ids:
-    print(pid)
 
 
 def process_all_mri_data(root_dir="tciaDownload", output_dir="preprocessed_data", delete_source=False):
