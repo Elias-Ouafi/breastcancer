@@ -14,4 +14,5 @@ numpy==1.24.4
 openpyxl==3.1.2
 SimpleITK==2.3.1
 itk==5.3.0
-itkwidgets==0.32.6 
+itkwidgets==0.32.6
+torch>=2.2  # imaging U-Net; install the wheel matching your platform/CUDA 

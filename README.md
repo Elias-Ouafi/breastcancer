@@ -96,10 +96,22 @@ python ExtractData.py
 
 # 2. Preprocess every downloaded series into compressed arrays
 python TransformData.py
+
+# 3. Train the lesion-localisation U-Net on the preprocessed .npz volumes
+python -m imaging.train --data-dir preprocessed_data --epochs 30
 ```
 Preprocessing resamples each series to isotropic 1 mm spacing, z-normalises the
 intensities, builds a binary mask from the SEG/RTSTRUCT segmentations, and saves the
 result.
+
+The `imaging/` package then trains a **2D U-Net** to localise lesions: it reads the
+`.npz` volumes, splits them **by case** (train/val/test) to avoid leakage, serves
+axial slices, and optimises a combined BCE + soft-Dice loss. Metrics (**Dice**,
+**IoU**) are written to `results/segmentation_metrics.csv` and the best checkpoint to
+`results/unet_best.pt`. This first brick targets lesion *localisation* because the
+masks come from the annotation bounding boxes rather than fine contours. Requires
+`torch` (install the wheel matching your platform/CUDA). You can validate the whole
+loop without any data via `python -m imaging.train --smoke-test`.
 
 ### Histopathology (BreakHis)
 ```bash
@@ -150,6 +162,10 @@ Medical imaging data is large, so the pipeline is set up to keep the footprint d
   MRI volumes with their segmentation masks for the imaging pipeline. The goal is an
   interactive dashboard so results can be reviewed without reading the raw CSVs or
   regenerating the static figures in `plots/`.
+- **Imaging model, next steps.** The first brick is a 2D U-Net for lesion
+  localisation (`imaging/`). Follow-ups: a benign/malignant classifier once pathology
+  labels are wired in, a 3D U-Net variant, and a dedicated **BreakHis** histopathology
+  classification pipeline.
 - **Combined model.** Merge the strongest quantitative and imaging features into a
   single predictive model (see `Main.py`).
 
