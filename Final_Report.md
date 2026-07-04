@@ -116,7 +116,7 @@ The decision to retain 10 principal components was based on:
 ---
 
 ## **Model Performance and Best Model Selection**  
-We trained and evaluated multiple models, including Logistic Regression, Random Forest, SVM, XGBoost, Neural Network, and an Ensemble model combining all of them. The best-performing model was:
+We trained and evaluated multiple models, including Logistic Regression, Random Forest, SVM, K-Nearest Neighbors, and a Neural Network. The best-performing model was:
 
 **🏆 Best Model:** **Random Forest Classifier**
 
