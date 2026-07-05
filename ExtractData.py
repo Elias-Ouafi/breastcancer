@@ -322,33 +322,42 @@ def download_segmentations(
     print("\n✅ download_segmentations completed.")
 
 def download_annotated_dbt_series(boxes_csv, max_patients=3, download_dir=DOWNLOAD_DIR,
-                                  collection="Breast-Cancer-Screening-DBT"):
+                                  collection="Breast-Cancer-Screening-DBT", max_gb=None):
     """Download the DBT series for the first `max_patients` annotated patients.
 
     Most BCS-DBT volumes are normal (no lesion); only patients listed in the boxes
     CSV carry annotations. This reads that CSV, takes the first `max_patients`
     annotated patients, and downloads all their series (every view) so the box
     masks can later be matched in `preprocess_dbt_with_boxes`.
+
+    Downloading stops early once `download_dir` reaches `max_gb` gigabytes (if set),
+    so you can cap the total volume regardless of the patient count.
     """
     os.makedirs(download_dir, exist_ok=True)
     boxes = pd.read_csv(boxes_csv)
     patients = list(dict.fromkeys(boxes["PatientID"].tolist()))[:max_patients]
-    print(f"Annotated patients to fetch: {patients}")
+    print(f"Annotated patients to fetch: {len(patients)} (cap: {max_gb} GB)")
 
     existing = {name for name in os.listdir(download_dir)
                 if os.path.isdir(os.path.join(download_dir, name))}
+    max_bytes = int(max_gb * 1024 ** 3) if max_gb else None
 
     downloaded = 0
     for pid in patients:
+        if max_bytes is not None and dir_size_bytes(download_dir) >= max_bytes:
+            print(f"Reached {max_gb} GB cap. Stopping downloads.")
+            break
         try:
             series = nbia.getSeries(collection=collection, patientId=pid)
         except Exception as e:
             print(f"[ERROR] getSeries failed for {pid}: {e}")
             continue
         for s in series:
+            if max_bytes is not None and dir_size_bytes(download_dir) >= max_bytes:
+                print(f"Reached {max_gb} GB cap. Stopping downloads.")
+                break
             uid = s.get("SeriesInstanceUID")
             if uid in existing:
-                print(f"[SKIP] {uid} already downloaded.")
                 continue
             try:
                 print(f"[DOWNLOAD] {pid} series {uid} -> {download_dir}")
@@ -357,7 +366,8 @@ def download_annotated_dbt_series(boxes_csv, max_patients=3, download_dir=DOWNLO
             except Exception as e:
                 print(f"[ERROR] download {uid} failed: {e}")
 
-    print(f"Downloaded {downloaded} series for {len(patients)} patients into {download_dir}.")
+    total_gb = dir_size_bytes(download_dir) / 1024 ** 3
+    print(f"Downloaded {downloaded} new series into {download_dir} ({total_gb:.1f} GB total).")
     return downloaded
 
 

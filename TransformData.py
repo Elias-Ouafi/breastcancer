@@ -229,8 +229,9 @@ def crop_to_roi(volume, mask, margin=16):
     return volume[slices], mask[slices], tuple(int(s) for s in start)
 
 
-def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, crop=True):
-    """Save a preprocessed MRI volume + mask as a single compressed .npz file.
+def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, crop=True,
+                      case_id=None):
+    """Save a preprocessed volume + mask as a single compressed .npz file.
 
     Three levers keep the files small:
       - `crop`: keep only the region of interest around the segmentation.
@@ -238,6 +239,10 @@ def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, cr
         precision loss is negligible for z-normalised MRI data.
       - `np.savez_compressed`: zlib-compresses the arrays; the mostly-empty mask
         shrinks by orders of magnitude.
+
+    `case_id` is the real patient identifier used to group files for a leakage-free
+    train/val/test split (several series/views can belong to one patient). It is
+    stored inside the .npz; when omitted the filename (`patient_id`) is used.
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -254,6 +259,7 @@ def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, cr
         volume=volume,
         mask=mask,
         crop_offset=np.asarray(offset, dtype=np.int32),
+        case_id=np.asarray(str(case_id) if case_id is not None else str(patient_id)),
     )
     return out_path
 
@@ -361,7 +367,8 @@ def preprocess_dbt_with_boxes(root_dir="tciaDownload",
 
         # z-normalise intensities (same convention as the MRI path).
         volume = (volume - volume.mean()) / (volume.std() + 1e-8)
-        save_preprocessed(name, volume, mask, output_dir)
+        save_preprocessed(name, volume, mask, output_dir,
+                          case_id=getattr(ds, "PatientID", name))
         saved += 1
         logging.info(f"[DBT] {name}: {len(rows)} box(es), "
                      f"{int(mask.sum())} lesion voxels -> saved.")

@@ -45,6 +45,8 @@ venv.bak/
 data/
 tciaDownload/
 preprocessed_data/
+results/*.pt
+results/segmentation_*.csv
 
 # Logs
 *.log

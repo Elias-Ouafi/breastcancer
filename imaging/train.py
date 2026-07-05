@@ -56,19 +56,25 @@ def _make_loaders(args):
     )
     print(f"Cases -> train: {len(train_paths)}, val: {len(val_paths)}, test: {len(test_paths)}")
 
-    train_ds = MRISliceDataset(train_paths, image_size=args.image_size, positive_only=args.positive_only)
+    train_ds = MRISliceDataset(train_paths, image_size=args.image_size,
+                               positive_only=args.positive_only,
+                               neg_per_pos=args.neg_per_pos, seed=args.seed)
     if not len(train_ds):
         raise RuntimeError("No training slices found. Check the data or --positive-only.")
+    print(f"Training slices: {len(train_ds)} "
+          f"(neg_per_pos={args.neg_per_pos}, positive_only={args.positive_only})")
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
 
+    # Validation/test are measured on lesion-bearing slices only, so the reported
+    # Dice reflects localisation quality and is not inflated by empty->empty slices.
     val_loader = None
     if val_paths:
-        val_ds = MRISliceDataset(val_paths, image_size=args.image_size, positive_only=False)
+        val_ds = MRISliceDataset(val_paths, image_size=args.image_size, positive_only=True)
         val_loader = DataLoader(val_ds, batch_size=args.batch_size, num_workers=args.num_workers)
 
     test_loader = None
     if test_paths:
-        test_ds = MRISliceDataset(test_paths, image_size=args.image_size, positive_only=False)
+        test_ds = MRISliceDataset(test_paths, image_size=args.image_size, positive_only=True)
         test_loader = DataLoader(test_ds, batch_size=args.batch_size, num_workers=args.num_workers)
 
     return train_loader, val_loader, test_loader, len(train_ds)
@@ -165,6 +171,10 @@ def build_arg_parser():
                    help="Train only on slices containing lesion voxels.")
     p.add_argument("--all-slices", dest="positive_only", action="store_false",
                    help="Train on every slice, including lesion-free ones.")
+    p.add_argument("--neg-per-pos", type=float, default=None,
+                   help="Balanced sampling: train on all lesion slices plus this many "
+                        "randomly sampled background slices per lesion slice (e.g. 2). "
+                        "Overrides --positive-only/--all-slices. Recommended.")
     p.add_argument("--smoke-test", action="store_true",
                    help="Run the loop on random tensors (no real data) to validate the pipeline.")
     return p
