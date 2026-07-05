@@ -89,28 +89,62 @@ This downloads the Wisconsin dataset, standardizes it, applies PCA (95% variance
 retained), trains several classifiers, and writes results to `results/` and figures
 to `plots/`. See `Final_Report.md` for a summary of the outcomes.
 
-### Imaging pipeline (MRI/DBT)
-```bash
-# 1. Download DICOM series (and, separately, segmentations) from TCIA
-python ExtractData.py
+### Imaging pipeline
 
-# 2. Preprocess every downloaded series into compressed arrays
-python TransformData.py
+The imaging side trains a **2D U-Net** to *localise* lesions in breast scans. To
+learn, it needs, for each image, a **mask** marking where the lesion is. That mask
+can come from two sources depending on the dataset:
 
-# 3. Train the lesion-localisation U-Net on the preprocessed .npz volumes
-python -m imaging.train --data-dir preprocessed_data --epochs 30
+- **DBT (mammography / tomosynthesis)** — lesions are given as **bounding boxes** in
+  a separate annotation CSV. This is the working path below.
+- **MRI** — lesions may come as DICOM **SEG/RTSTRUCT** segmentations, handled by
+  `preprocess_mri_data` (resamples to 1 mm, builds the mask from the SEG files).
+
+#### DBT workflow (bounding-box annotations)
+
+DBT (Digital Breast Tomosynthesis) is a 3D mammogram: a stack of X-ray "slices" of
+the breast. In the `Breast-Cancer-Screening-DBT` collection, **most scans are
+normal** — only a subset of patients have a biopsied lesion, listed with a box
+(patient, view, slice, x/y/width/height) in the annotation CSV. So the pipeline is
+**annotation-driven**: fetch the boxes first, download only the annotated patients,
+then turn each box into a mask.
+
+```python
+from ExtractData import download_annotated_dbt_series
+from TransformData import preprocess_dbt_with_boxes
+
+# 0. Get the boxes CSV once (BCS-DBT-boxes-train.csv) into tciaDownload/ from TCIA.
+
+# 1. Download the DBT series of the annotated patients (cap the volume with max_gb).
+download_annotated_dbt_series(
+    "tciaDownload/BCS-DBT-boxes-train.csv", max_patients=101,
+    download_dir="tciaDownload", max_gb=10,
+)
+
+# 2. Build a box mask per series and save compressed .npz (skips views with no box).
+preprocess_dbt_with_boxes(
+    root_dir="tciaDownload",
+    boxes_csv="tciaDownload/BCS-DBT-boxes-train.csv",
+    output_dir="preprocessed_data",
+)
 ```
-Preprocessing resamples each series to isotropic 1 mm spacing, z-normalises the
-intensities, builds a binary mask from the SEG/RTSTRUCT segmentations, and saves the
-result.
+```bash
+# 3. Train the lesion-localisation U-Net on the preprocessed .npz volumes.
+python -m imaging.train --data-dir preprocessed_data --epochs 25
+```
 
-The `imaging/` package then trains a **2D U-Net** to localise lesions: it reads the
-`.npz` volumes, splits them **by case** (train/val/test) to avoid leakage, serves
-axial slices, and optimises a combined BCE + soft-Dice loss. Metrics (**Dice**,
-**IoU**) are written to `results/segmentation_metrics.csv` and the best checkpoint to
-`results/unet_best.pt`. This first brick targets lesion *localisation* because the
-masks come from the annotation bounding boxes rather than fine contours. Requires
-`torch` (install the wheel matching your platform/CUDA). You can validate the whole
+Step 2 matches each downloaded series to its boxes by **PatientID + view**
+(laterality from `FrameLaterality` + `ViewPosition`, e.g. `lmlo`), z-normalises the
+image, paints the box(es) into a binary mask with `create_mask`, crops to the lesion
+region of interest, and stores the real `PatientID` inside the `.npz` (as `case_id`).
+
+The `imaging/` package then trains the U-Net: it reads the `.npz` volumes, splits
+them **by patient** (`case_id`) so no patient straddles train/val/test, serves axial
+slices, and optimises a combined BCE + soft-Dice loss. Metrics (**Dice**, **IoU**)
+go to `results/segmentation_metrics.csv` and the best checkpoint to
+`results/unet_best.pt`. Because the masks are boxes rather than fine contours, this
+targets lesion *localisation*, and the achievable Dice is inherently limited.
+Requires `torch` (install the wheel matching your platform/CUDA). Validate the whole
 loop without any data via `python -m imaging.train --smoke-test`.
 
 ### Histopathology (BreakHis)
