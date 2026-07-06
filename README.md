@@ -8,6 +8,12 @@ The project currently uses two major datasets:
 1. CBIS-DDSM (Curated Breast Imaging Subset of DDSM)
 2. BreakHis (Breast Cancer Histopathological Database)
 
+Here are the major steps of the project:
+- Retrieve the necessary data
+- Preprocess the data
+- Iterate to find the best AI model
+- Develop an interface to use the model
+
 ## Prerequisites
 
 - Python 3.8 or higher
