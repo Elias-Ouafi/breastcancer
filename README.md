@@ -39,8 +39,8 @@ breastcancer/
 ## Prerequisites
 
 - Python 3.8 or higher
-- **Java 8/11/17 (a JVM)** on the `PATH` — required by **PySpark** for the
-  quantitative pipeline (e.g. Temurin/OpenJDK; set `JAVA_HOME`).
+- **Java 17 or newer (a JVM)** on the `PATH` — required by **PySpark 4** for the
+  quantitative pipeline (e.g. Temurin/OpenJDK 17; set `JAVA_HOME`).
 - **TCIA** access via `tcia_utils` / `nbia` (for the MRI/DBT dataset)
 - A **Kaggle** account and API token (for the BreakHis dataset)
 
@@ -87,12 +87,13 @@ Run the full extract → transform (PCA) → analyze pipeline:
 ```bash
 python Main.py
 ```
-This downloads the Wisconsin dataset, lifts it into a **Spark DataFrame**, then uses
-**Spark MLlib** to impute/standardize it, apply PCA (smallest number of components
-retaining 95% of the variance), and train several classifiers (Logistic Regression,
-Random Forest, Linear SVM, Gradient-Boosted Trees, and a Multilayer Perceptron). It
-writes results to `results/` and figures to `plots/`. Requires a JVM (see
-Prerequisites). See `Final_Report.md` for a summary of the outcomes.
+This downloads the Wisconsin dataset, lifts it into a **Spark DataFrame** (via a
+JVM-native `spark.read` of the fetched table), then uses **Spark MLlib** to
+impute/standardize it, apply PCA (smallest number of components retaining 95% of the
+variance), and train several classifiers (Logistic Regression, Random Forest, Linear
+SVM, Gradient-Boosted Trees, and a Multilayer Perceptron). It writes results to
+`results/` and figures to `plots/`. Requires a JVM (see Prerequisites). See
+`Final_Report.md` for a summary of the outcomes.
 
 > **Migration note:** the quantitative pipeline was moved from scikit-learn/XGBoost
 > to PySpark / Spark MLlib. `KNeighborsClassifier` has no MLlib equivalent and was

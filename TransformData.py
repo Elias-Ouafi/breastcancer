@@ -1,6 +1,7 @@
 import os
 import shutil
 import logging
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -56,6 +57,22 @@ def _get_spark(app_name="breastcancer-tabular"):
         .config("spark.sql.shuffle.partitions", "8")
         .getOrCreate()
     )
+
+
+def _pandas_to_spark(spark, pdf):
+    """Load a pandas DataFrame into Spark via a temporary CSV (JVM-native read).
+
+    ``spark.createDataFrame(pandas)`` builds a Python-backed RDD, so every
+    downstream read spins up a Python worker subprocess. Writing the (small)
+    tabular frame to CSV and reading it back with ``spark.read`` keeps the whole
+    pipeline on the JVM side, which is more robust across environments and
+    avoids a Python-worker dependency the rest of the tabular pipeline doesn't
+    need. Feature columns come back as ``double`` and ``Diagnosis`` as string.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="bc_ingest_")
+    csv_path = os.path.join(tmpdir, "data.csv")
+    pdf.to_csv(csv_path, index=False)
+    return spark.read.csv(csv_path, header=True, inferSchema=True)
 
 
 def clean_data(df, feature_cols):
@@ -226,9 +243,10 @@ def transform_data(data):
     """
     spark = _get_spark()
 
-    # Accept a pandas frame from ExtractData and lift it into Spark.
+    # Accept a pandas frame from ExtractData and lift it into Spark via a
+    # JVM-native CSV read (see _pandas_to_spark) rather than createDataFrame.
     if SparkDataFrame is not None and not isinstance(data, SparkDataFrame):
-        data = spark.createDataFrame(data)
+        data = _pandas_to_spark(spark, data)
 
     feature_names = [c for c in data.columns if c != 'Diagnosis']
     n_original = len(feature_names)
