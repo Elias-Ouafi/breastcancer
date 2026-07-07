@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.preprocessing import LabelEncoder
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
@@ -12,27 +11,24 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 
-def prepare_data(data):
-    """Prepare data for model training."""
-    # Separate features and target
-    X = data.drop('Diagnosis', axis=1)
-    y = data['Diagnosis']
-    
-    # Encode target variable
+def prepare_data(train_df, test_df):
+    """Prepare already-split, already-scaled/PCA'd train and test data for
+    model training. The split and the scaling/PCA fitting both happened
+    upstream in TransformData.transform_data(), fit on the training set
+    only - this function does not re-split or re-fit anything on the test
+    set, it just separates features/target and encodes the label (fit on
+    train, applied to test) so no test information leaks into training."""
+    X_train = train_df.drop('Diagnosis', axis=1)
+    y_train_raw = train_df['Diagnosis']
+    X_test = test_df.drop('Diagnosis', axis=1)
+    y_test_raw = test_df['Diagnosis']
+
+    # Encode target variable: fit on train only, apply same mapping to test
     label_encoder = LabelEncoder()
-    y_encoded = label_encoder.fit_transform(y)
-    
-    # Split the data
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded
-    )
-    
-    # Scale the features
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-    
-    return X_train_scaled, X_test_scaled, y_train, y_test, label_encoder
+    y_train = label_encoder.fit_transform(y_train_raw)
+    y_test = label_encoder.transform(y_test_raw)
+
+    return X_train.values, X_test.values, y_train, y_test, label_encoder
 
 def train_models(X_train, X_test, y_train, y_test):
     """Train and evaluate multiple models."""
@@ -89,15 +85,19 @@ def create_model_comparison_plot(results, save_path='plots/model_comparison.png'
     plt.savefig(save_path)
     plt.close()
 
-def analyze_data(data):
-    """Main function to analyze the data and evaluate models."""
+def analyze_data(train_df, test_df):
+    """Main function to analyze the data and evaluate models.
+
+    train_df/test_df must already be the leak-free, PCA-transformed splits
+    produced by TransformData.transform_data() - test_df is only ever used
+    here for final evaluation, never for fitting."""
     # Prepare data
-    X_train, X_test, y_train, y_test, label_encoder = prepare_data(data)
-    
+    X_train, X_test, y_train, y_test, label_encoder = prepare_data(train_df, test_df)
+
     # Train and evaluate models
     results = train_models(X_train, X_test, y_train, y_test)
-    
+
     # Create visualization
     create_model_comparison_plot(results)
-    
+
     return results 

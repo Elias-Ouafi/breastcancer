@@ -23,13 +23,16 @@ def main():
     print("\nStep 1: Extract the data")
     raw_data = extract_breast_cancer_wisconsin_diagnostic_data()
     
-    # Step 2: Transform data
+    # Step 2: Transform data (splits into train/test first, then fits
+    # scaling and PCA on the training set only - the test set is
+    # transformed with those same fitted parameters and never used to fit
+    # anything, so it stays a valid, leak-free final evaluation set)
     print("\nStep 2: Transform the data")
-    transformed_data, pca, feature_contributions, top_features = transform_data(raw_data)
-    
+    train_data, test_data, pca, scaler, feature_contributions, top_features = transform_data(raw_data)
+
     # Step 3: Analyze data
     print("\nStep 3: Analyze the data")
-    results = analyze_data(transformed_data)
+    results = analyze_data(train_data, test_data)
     print("Analysis complete!")
     
     # Print final results

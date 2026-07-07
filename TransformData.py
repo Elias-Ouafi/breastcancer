@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from ucimlrepo import fetch_ucirepo
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
@@ -16,8 +17,10 @@ import itk
 import itkwidgets
 from itkwidgets import view
 
-def clean_data(X, y):
-    """Clean and preprocess the data."""
+def clean_data(X):
+    """Handle missing values only. Scaling is intentionally NOT done here:
+    it must happen after the train/test split so the scaler is fit on
+    training data alone (see transform_data)."""
     # Check for missing values
     missing_values = X.isnull().sum()
     if missing_values.any():
@@ -25,12 +28,17 @@ def clean_data(X, y):
         print(missing_values[missing_values > 0])
         # Handle missing values (if any)
         X = X.fillna(X.mean())
-    
-    # Standardize features
+
+    return X
+
+
+def fit_scale_train_test(X_train, X_test):
+    """Fit StandardScaler on the training set only, then use those same
+    fitted parameters (mean/std) to transform both train and test."""
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
-    return X_scaled, y, scaler
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    return X_train_scaled, X_test_scaled, scaler
 
 def analyze_feature_contributions(pca, feature_names):
     """Analyze and return feature contributions to principal components."""
@@ -74,13 +82,17 @@ def create_scree_plot(pca, save_path='data/scree_plot.png'):
     plt.savefig(save_path)
     plt.close()
 
-def apply_pca(X_scaled, feature_names):
-    """Apply PCA and analyze component importance."""
-    # Apply PCA
+def apply_pca(X_train_scaled, X_test_scaled, feature_names):
+    """Fit PCA on the training set only, then project both train and test
+    onto those same components. The test set never influences which
+    components are chosen or how they are computed."""
+    # Fit PCA on train only
     pca = PCA(n_components=0.95)  # Keep 95% of variance
-    X_pca = pca.fit_transform(X_scaled)
-    
-    # Analyze PCA results
+    X_train_pca = pca.fit_transform(X_train_scaled)
+    # Project test data onto the components learned from train
+    X_test_pca = pca.transform(X_test_scaled)
+
+    # Analyze PCA results (based on the train-fitted PCA)
     print("\nPCA Analysis:")
     print(f"Number of components: {pca.n_components_}")
     print("\nExplained variance ratio:")
@@ -105,54 +117,79 @@ def apply_pca(X_scaled, feature_names):
     
     # Create scree plot
     create_scree_plot(pca)
-    
-    return X_pca, pca, feature_contributions, top_features
 
-def save_transformed_data(X_pca, y, pca, feature_contributions):
-    """Save the transformed data and PCA information."""
-    # Save transformed data
-    transformed_data = pd.DataFrame(X_pca, columns=[f'PC{i+1}' for i in range(pca.n_components_)])
-    transformed_data['Diagnosis'] = y
-    transformed_data.to_csv('data/transformed_data.csv', index=False)
-    
-    # Save PCA information
+    return X_train_pca, X_test_pca, pca, feature_contributions, top_features
+
+def save_transformed_data(X_train_pca, X_test_pca, y_train, y_test, pca, feature_contributions):
+    """Save the transformed train and test sets separately, so the held-out
+    test set is never mixed back into training data downstream."""
+    columns = [f'PC{i+1}' for i in range(pca.n_components_)]
+
+    train_df = pd.DataFrame(X_train_pca, columns=columns)
+    train_df['Diagnosis'] = y_train.reset_index(drop=True)
+    train_df.to_csv('data/transformed_train.csv', index=False)
+
+    test_df = pd.DataFrame(X_test_pca, columns=columns)
+    test_df['Diagnosis'] = y_test.reset_index(drop=True)
+    test_df.to_csv('data/transformed_test.csv', index=False)
+
+    # Save PCA information (fit on train only)
     pca_info = pd.DataFrame({
         'component': range(1, pca.n_components_ + 1),
         'explained_variance': pca.explained_variance_ratio_,
         'cumulative_variance': np.cumsum(pca.explained_variance_ratio_)
     })
     pca_info.to_csv('data/pca_info.csv', index=False)
-    
+
     # Save feature contributions
     feature_contributions.to_csv('data/feature_contributions.csv')
-    
-    return transformed_data
 
-def transform_data(data):
-    """Transform the data through cleaning and PCA."""
+    return train_df, test_df
+
+def transform_data(data, test_size=0.2, random_state=42):
+    """Split the data into train/test FIRST, then fit scaling and PCA on the
+    training set only. The test set is transformed using those same fitted
+    parameters and is never used to fit anything - this avoids the data
+    leakage that occurs when scaling/PCA are fit on the full dataset before
+    splitting."""
     # Separate features and target
     X = data.drop('Diagnosis', axis=1)
     y = data['Diagnosis']
     feature_names = X.columns.tolist()
-    
-    # Clean and preprocess data
-    X_scaled, y, scaler = clean_data(X, y)
-    
-    # Apply PCA
-    X_pca, pca, feature_contributions, top_features = apply_pca(X_scaled, feature_names)
-    
-    # Save transformed data
-    transformed_data = save_transformed_data(X_pca, y, pca, feature_contributions)
-    
+
+    # Clean (missing values only, no scaling yet)
+    X = clean_data(X)
+
+    # Split BEFORE any fitting. stratify keeps the B/M ratio consistent,
+    # and this test set stays untouched until final evaluation.
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state, stratify=y
+    )
+
+    # Fit scaler on train only, apply same transform to test
+    X_train_scaled, X_test_scaled, scaler = fit_scale_train_test(X_train, X_test)
+
+    # Fit PCA on train only, project test onto those same components
+    X_train_pca, X_test_pca, pca, feature_contributions, top_features = apply_pca(
+        X_train_scaled, X_test_scaled, feature_names
+    )
+
+    # Save transformed data (train/test kept separate)
+    train_df, test_df = save_transformed_data(
+        X_train_pca, X_test_pca, y_train, y_test, pca, feature_contributions
+    )
+
     print("\nData transformation complete!")
     print(f"Original number of features: {X.shape[1]}")
-    print(f"Number of features after PCA: {X_pca.shape[1]}")
-    print("\nTransformed data saved to 'data/transformed_data.csv'")
+    print(f"Number of features after PCA: {X_train_pca.shape[1]}")
+    print(f"Train samples: {X_train_pca.shape[0]} | Test samples: {X_test_pca.shape[0]}")
+    print("\nTransformed train data saved to 'data/transformed_train.csv'")
+    print("Transformed test data saved to 'data/transformed_test.csv'")
     print("PCA information saved to 'data/pca_info.csv'")
     print("Feature contributions saved to 'data/feature_contributions.csv'")
     print("Scree plot saved to 'data/scree_plot.png'")
-    
-    return transformed_data, pca, feature_contributions, top_features 
+
+    return train_df, test_df, pca, scaler, feature_contributions, top_features
 
 
 def load_dicom_volume(dicom_dir):
