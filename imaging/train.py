@@ -18,35 +18,43 @@ import argparse
 import csv
 import os
 
-import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 try:  # allow both "python -m imaging.train" and "python imaging/train.py"
     from .dataset import MRISliceDataset, split_npz_by_patient
-    from .metrics import DiceBCELoss, dice_coeff, iou_score
+    from .metrics import DiceBCELoss, segmentation_scores
     from .unet import UNet2D
 except ImportError:  # pragma: no cover - fallback for direct script execution
     from dataset import MRISliceDataset, split_npz_by_patient
-    from metrics import DiceBCELoss, dice_coeff, iou_score
+    from metrics import DiceBCELoss, segmentation_scores
     from unet import UNet2D
 
 
 def evaluate(model, loader, device, threshold=0.5):
-    """Return mean Dice and IoU over ``loader`` (empty loader -> NaN)."""
+    """Return mean localisation Dice and IoU over ``loader`` (empty loader -> NaN).
+
+    Scores per image and ignores empty-target frames (see
+    `metrics.segmentation_scores`): an empty mask carries no lesion to localise, so
+    rewarding an empty prediction on it with a perfect 1.0 would inflate the mean
+    with trivial true negatives and mask a model that predicts nothing. Sums are
+    accumulated across batches so the mean is exact regardless of batch size.
+    """
     if loader is None:
         return {"dice": float("nan"), "iou": float("nan")}
     model.eval()
-    dices, ious = [], []
+    dice_sum, iou_sum, count = 0.0, 0.0, 0
     with torch.no_grad():
         for img, msk in loader:
             img, msk = img.to(device), msk.to(device)
             pred = (torch.sigmoid(model(img)) > threshold).float()
-            dices.append(dice_coeff(pred, msk).item())
-            ious.append(iou_score(pred, msk).item())
-    if not dices:
+            s = segmentation_scores(pred, msk)
+            dice_sum += s["dice_sum"]
+            iou_sum += s["iou_sum"]
+            count += s["count"]
+    if count == 0:
         return {"dice": float("nan"), "iou": float("nan")}
-    return {"dice": float(np.mean(dices)), "iou": float(np.mean(ious))}
+    return {"dice": dice_sum / count, "iou": iou_sum / count}
 
 
 def _make_loaders(args):
