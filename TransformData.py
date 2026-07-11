@@ -408,6 +408,16 @@ def _boxes_for_series(ds, boxes_df):
                     & (boxes_df["View"].str.lower() == view)]
 
 
+def _read_boxes(boxes_csv):
+    """Read one CSV path, or a list/tuple of paths, into a single boxes DataFrame.
+
+    Pooling several CSVs (e.g. BCS-DBT ``boxes-train`` + ``boxes-validation``, which
+    hold disjoint patients under the same schema) grows the annotated set in one call.
+    """
+    paths = [boxes_csv] if isinstance(boxes_csv, (str, os.PathLike)) else list(boxes_csv)
+    return pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
+
+
 def preprocess_dbt_with_boxes(root_dir="tciaDownload",
                               boxes_csv="tciaDownload/BCS-DBT-boxes-train.csv",
                               output_dir="preprocessed_data",
@@ -421,11 +431,13 @@ def preprocess_dbt_with_boxes(root_dir="tciaDownload",
     reusing :func:`create_mask` (one box = one slice). Volumes are cropped to the
     lesion ROI and written as compressed ``.npz`` via :func:`save_preprocessed`.
 
-    Series with no matching box are skipped when ``skip_empty`` is True (an empty
-    mask is useless for the localisation model and would store the full frame).
+    ``boxes_csv`` may be a single path or a list of paths; pass both the train and
+    validation boxes CSVs to build masks for the pooled annotated set. Series with no
+    matching box are skipped when ``skip_empty`` is True (an empty mask is useless for
+    the localisation model and would store the full frame).
     """
     os.makedirs(output_dir, exist_ok=True)
-    boxes = pd.read_csv(boxes_csv)
+    boxes = _read_boxes(boxes_csv)
 
     saved, skipped = 0, 0
     for name in sorted(os.listdir(root_dir)):

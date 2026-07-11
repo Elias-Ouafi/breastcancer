@@ -127,18 +127,26 @@ then turn each box into a mask.
 from ExtractData import download_annotated_dbt_series
 from TransformData import preprocess_dbt_with_boxes
 
-# 0. Get the boxes CSV once (BCS-DBT-boxes-train.csv) into tciaDownload/ from TCIA.
+# 0. Get the boxes CSV(s) once into tciaDownload/ from TCIA. The training set
+#    (BCS-DBT-boxes-train.csv, 101 patients) can be grown with the validation set
+#    (BCS-DBT-boxes-validation.csv, 40 disjoint patients) — same schema. Both
+#    functions accept a single path or a list of paths and pool them.
+BOXES = [
+    "tciaDownload/BCS-DBT-boxes-train.csv",
+    "tciaDownload/BCS-DBT-boxes-validation.csv",
+]
 
 # 1. Download the DBT series of the annotated patients (cap the volume with max_gb).
+#    max_patients=None fetches every annotated patient in the pooled CSVs.
 download_annotated_dbt_series(
-    "tciaDownload/BCS-DBT-boxes-train.csv", max_patients=101,
-    download_dir="tciaDownload", max_gb=10,
+    BOXES, max_patients=None,
+    download_dir="tciaDownload", max_gb=25,
 )
 
 # 2. Build a box mask per series and save compressed .npz (skips views with no box).
 preprocess_dbt_with_boxes(
     root_dir="tciaDownload",
-    boxes_csv="tciaDownload/BCS-DBT-boxes-train.csv",
+    boxes_csv=BOXES,
     output_dir="preprocessed_data",
 )
 ```
