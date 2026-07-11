@@ -137,6 +137,19 @@ def train_models(train_df, test_df, n_features):
     return results
 
 
+def save_results(results, save_path="data/model_results.csv"):
+    """Persist the per-model metrics to CSV so the report can be regenerated.
+
+    Rows are model names, columns are the metrics from :func:`_evaluate`
+    (Accuracy, Precision, Recall, F1-Score, ROC AUC). This is the authoritative
+    Spark MLlib output the quantitative report is built from.
+    """
+    metrics_df = pd.DataFrame(results).T
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    metrics_df.to_csv(save_path)
+    return metrics_df
+
+
 def create_model_comparison_plot(results, save_path="plots/model_comparison.png"):
     """Create and save a comparison plot of model performance."""
     if plt is None:
@@ -161,5 +174,6 @@ def analyze_data(data: DataFrame):
     """Main entry point: prepare the data, train the models, evaluate, and plot."""
     train_df, test_df, n_features = prepare_data(data)
     results = train_models(train_df, test_df, n_features)
+    save_results(results)
     create_model_comparison_plot(results)
     return results

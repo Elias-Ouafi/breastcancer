@@ -13,9 +13,14 @@ The dataset used for this project was obtained from the **UCI Machine Learning R
 - **Sample Size**: 569 instances
 
 ## **2. Data Preprocessing**
-- **Missing Values**: No missing values detected
-- **Standardization**: All features standardized using StandardScaler
-- **Feature Engineering**: None performed
+The tabular pipeline runs entirely on **PySpark / Spark MLlib**.
+- **Missing Values**: imputed with Spark MLlib (no missing values remained in this dataset)
+- **Standardization**: features assembled with `VectorAssembler` and standardized with
+  Spark MLlib's `StandardScaler` (`withMean=True`, `withStd=True`) before PCA; the PCA
+  components are re-standardized before model training
+- **Label encoding**: the `Diagnosis` string label (`M`/`B`) is mapped to a numeric
+  label with `StringIndexer`, with malignant as the positive class (`1.0`)
+- **Feature Engineering**: none beyond PCA
 
 ## **3. Principal Component Analysis (PCA)**
 ### **3.1 Dimensionality Reduction**
@@ -115,34 +120,65 @@ The decision to retain 10 principal components was based on:
 
 ---
 
-## **Model Performance and Best Model Selection**  
-We trained and evaluated multiple models, including Logistic Regression, Random Forest, SVM, K-Nearest Neighbors, and a Neural Network. The best-performing model was:
+## **Model Performance and Best Model Selection**
+We trained and evaluated five **Spark MLlib** classifiers on the PCA-reduced data
+(80/20 train/test split, `seed=42`): **Logistic Regression**, **Random Forest**,
+**Linear SVM** (`LinearSVC`), **Gradient-Boosted Trees** (`GBTClassifier`), and a
+**Neural Network** (`MultilayerPerceptronClassifier`).
 
-**🏆 Best Model:** **Random Forest Classifier**
+> **Migration note.** This pipeline was ported from scikit-learn/XGBoost to Spark
+> MLlib. Models without a direct MLlib equivalent were remapped: `SVC` → `LinearSVC`
+> (MLlib only ships a linear SVM), and `KNeighborsClassifier` → `GBTClassifier`
+> (gradient-boosted trees), which also subsumes the previous XGBoost model. No k-NN
+> or XGBoost model is trained any more.
+
+**🏆 Best Model:** **Linear SVM** (`LinearSVC`) — highest ROC-AUC, tied with Logistic
+Regression on every other metric.
 
 **Key Performance Indicators (KPIs):**
-- **Accuracy:** 98.25%
-- **Precision:** 98.15%
-- **Recall:** 98.35%
-- **F1-Score:** 98.25%
-- **ROC-AUC Score:** 99.12%
+- **Accuracy:** 97.67%
+- **Precision:** 97.06%
+- **Recall:** 97.06%
+- **F1-Score:** 97.67%
+- **ROC-AUC Score:** 99.89%
 
-The Random Forest model demonstrated superior performance across all metrics, showing excellent balance between precision and recall. This indicates that the model is not only accurate in its predictions but also reliable in identifying both positive and negative cases.
+Full comparison across all five models (positive/malignant class):
 
-📈 *Model performance comparison visual:*  
+| Model | Accuracy | Precision | Recall | F1-Score | ROC-AUC |
+|-------|:--------:|:---------:|:------:|:--------:|:-------:|
+| **Linear SVM** | **97.67%** | **97.06%** | **97.06%** | **97.67%** | **99.89%** |
+| Logistic Regression | 97.67% | 97.06% | 97.06% | 97.67% | 99.83% |
+| Random Forest | 96.51% | 96.97% | 94.12% | 96.50% | 99.26% |
+| Gradient-Boosted Trees | 95.35% | 94.12% | 94.12% | 95.35% | 98.70% |
+| Neural Network | 94.19% | 91.43% | 94.12% | 94.20% | 97.96% |
+
+The linear models (Linear SVM and Logistic Regression) came out on top, which is
+consistent with the PCA-projected features being close to linearly separable. Linear
+SVM and Logistic Regression are effectively tied, with Linear SVM edging ahead on
+ROC-AUC (99.89% vs 99.83%).
+
+These numbers are produced by `AnalyzeData.py` and written to
+`data/model_results.csv`; re-run `python Main.py` (requires a JVM for PySpark) to
+regenerate them.
+
+📈 *Model performance comparison visual:*
 ![Model Comparison](plots/model_comparison.png)
 
 ---
 
 ## **Conclusion**
-The project successfully developed a highly accurate breast cancer prediction model using machine learning techniques. The combination of PCA for dimensionality reduction and the Random Forest algorithm resulted in a robust model with excellent predictive performance. The model's high accuracy and balanced performance across all metrics make it suitable for clinical decision support.
+The project successfully developed a highly accurate breast-cancer prediction pipeline
+on **PySpark / Spark MLlib**. Combining PCA for dimensionality reduction with a linear
+classifier (Linear SVM, tied with Logistic Regression) produced a robust model with
+excellent, balanced performance (F1 97.67%, ROC-AUC 99.89%), making it suitable for
+clinical decision support.
 
 ---
 
 ### Notes:
 - All visualizations are stored in the `plots/` directory
-- The model comparison plot shows the performance of all evaluated models
-- The feature importance plot highlights the most significant components in the prediction
+- The model comparison plot shows the performance of all five evaluated Spark MLlib models
+- Per-model metrics are persisted to `data/model_results.csv`
 
 ### References
 Wolberg, W., Mangasarian, O., Street, N., & Street, W. (1993). Breast Cancer Wisconsin (Diagnostic) [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C5DW2B. 

@@ -166,10 +166,16 @@ def build_arg_parser():
     p.add_argument("--output-dir", default="results", help="Where to write metrics and checkpoints.")
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=8)
-    p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--lr", type=float, default=2e-4,
+                   help="Adam learning rate. Kept low (2e-4): at 1e-3 the tiny lesion "
+                        "fraction makes training collapse to the all-background solution "
+                        "(val Dice -> 0 while loss still falls).")
     p.add_argument("--image-size", type=int, default=256, help="Square slice size (must be divisible by 16).")
     p.add_argument("--base-channels", type=int, default=32, help="U-Net width at the first level.")
-    p.add_argument("--bce-weight", type=float, default=0.5, help="Weight of BCE vs Dice in the loss.")
+    p.add_argument("--bce-weight", type=float, default=0.3,
+                   help="Weight of BCE vs Dice in the loss. Kept below 0.5 so the overlap "
+                        "(Dice) term dominates; a BCE-heavy loss on this class imbalance "
+                        "rewards predicting empty masks.")
     p.add_argument("--threshold", type=float, default=0.5, help="Probability threshold for the binary mask.")
     p.add_argument("--val-frac", type=float, default=0.15)
     p.add_argument("--test-frac", type=float, default=0.15)
@@ -179,10 +185,11 @@ def build_arg_parser():
                    help="Train only on slices containing lesion voxels.")
     p.add_argument("--all-slices", dest="positive_only", action="store_false",
                    help="Train on every slice, including lesion-free ones.")
-    p.add_argument("--neg-per-pos", type=float, default=None,
+    p.add_argument("--neg-per-pos", type=float, default=2.0,
                    help="Balanced sampling: train on all lesion slices plus this many "
-                        "randomly sampled background slices per lesion slice (e.g. 2). "
-                        "Overrides --positive-only/--all-slices. Recommended.")
+                        "randomly sampled background slices per lesion slice (default 2). "
+                        "Overrides --positive-only/--all-slices. Pass 0 to disable and "
+                        "fall back to --positive-only/--all-slices.")
     p.add_argument("--smoke-test", action="store_true",
                    help="Run the loop on random tensors (no real data) to validate the pipeline.")
     return p
