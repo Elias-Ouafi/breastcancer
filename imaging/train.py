@@ -166,10 +166,11 @@ def build_arg_parser():
     p.add_argument("--output-dir", default="results", help="Where to write metrics and checkpoints.")
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=8)
-    p.add_argument("--lr", type=float, default=2e-4,
-                   help="Adam learning rate. Kept low (2e-4): at 1e-3 the tiny lesion "
-                        "fraction makes training collapse to the all-background solution "
-                        "(val Dice -> 0 while loss still falls).")
+    p.add_argument("--lr", type=float, default=1e-3,
+                   help="Adam learning rate. 1e-3 trains well now that DoubleConv uses "
+                        "GroupNorm: the earlier all-background collapse at 1e-3 was a "
+                        "BatchNorm artifact (unstable running stats on the tiny lesion "
+                        "fraction), which forced a low 2e-4. GroupNorm removed it.")
     p.add_argument("--image-size", type=int, default=256, help="Square slice size (must be divisible by 16).")
     p.add_argument("--base-channels", type=int, default=32, help="U-Net width at the first level.")
     p.add_argument("--bce-weight", type=float, default=0.3,
