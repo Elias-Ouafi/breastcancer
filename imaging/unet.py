@@ -12,16 +12,29 @@ import torch.nn as nn
 
 
 class DoubleConv(nn.Module):
-    """(conv -> BN -> ReLU) x2, the basic U-Net block."""
+    """(conv -> GroupNorm -> ReLU) x2, the basic U-Net block.
 
-    def __init__(self, in_ch, out_ch):
+    GroupNorm (not BatchNorm) is used deliberately. The lesion foreground is a tiny
+    fraction of each slice and the effective batch is small, so BatchNorm's running
+    mean/variance never converge to statistics that match inference: the saved model
+    then collapses to sigmoid~0.5 everywhere in ``eval()`` mode (train-mode batch
+    stats hid this, giving reproducible Dice only while ``model.train()`` was on).
+    GroupNorm normalises per-sample over channel groups, so it behaves identically in
+    train and eval mode and removes that instability entirely.
+    """
+
+    def __init__(self, in_ch, out_ch, num_groups=8):
         super().__init__()
+        # Guard the group count so it always divides the channel width.
+        groups = min(num_groups, out_ch)
+        while out_ch % groups != 0:
+            groups -= 1
         self.block = nn.Sequential(
             nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_ch),
+            nn.GroupNorm(groups, out_ch),
             nn.ReLU(inplace=True),
             nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_ch),
+            nn.GroupNorm(groups, out_ch),
             nn.ReLU(inplace=True),
         )
 

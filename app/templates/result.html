@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+  {% set detected = result.lesion_detected %}
+  <div class="card" style="border-color: {{ 'var(--danger)' if detected else 'var(--ok)' }};">
+    <div style="font-size:.85rem; color:var(--muted);">Résultat pour {{ filename }}</div>
+    <div style="font-size:1.6rem; font-weight:800; margin:6px 0;
+                color: {{ 'var(--danger)' if detected else 'var(--ok)' }};">
+      {{ 'Lésion suspecte détectée' if detected else 'Aucune lésion détectée' }}
+    </div>
+    <div style="margin-top:8px;">
+      Confiance :
+      <strong>{{ '%.1f'|format(result.confidence * 100) }}%</strong>
+    </div>
+    <div style="height:10px; background:#0f1117; border-radius:6px; overflow:hidden;
+                margin-top:8px; border:1px solid var(--border);">
+      <div style="height:100%; width: {{ result.confidence * 100 }}%;
+                  background: {{ 'var(--danger)' if detected else 'var(--ok)' }};"></div>
+    </div>
+  </div>
+
+  {% if result.best_slice is not none or result.box_xywh or result.n_slices %}
+  <div class="card">
+    <div style="font-weight:600; margin-bottom:8px;">Détails</div>
+    <table style="width:100%; border-collapse:collapse; font-size:.9rem;">
+      {% if result.n_slices %}
+      <tr><td style="color:var(--muted); padding:4px 0;">Coupes</td>
+          <td style="text-align:right;">{{ result.n_slices }}</td></tr>{% endif %}
+      {% if result.best_slice is not none %}
+      <tr><td style="color:var(--muted); padding:4px 0;">Anomalie à la coupe</td>
+          <td style="text-align:right;">{{ result.best_slice }}</td></tr>{% endif %}
+      {% if result.box_xywh %}
+      <tr><td style="color:var(--muted); padding:4px 0;">Cadre englobant (x, y, l, h)</td>
+          <td style="text-align:right;">{{ result.box_xywh|join(', ') }}</td></tr>{% endif %}
+      <tr><td style="color:var(--muted); padding:4px 0;">Moteur</td>
+          <td style="text-align:right;">{{ result.backend }}</td></tr>
+    </table>
+  </div>
+  {% endif %}
+
+  <a href="{{ url_for('index') }}">&larr; Analyser un autre examen</a>
+{% endblock %}
