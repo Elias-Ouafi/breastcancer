@@ -321,6 +321,17 @@ def download_segmentations(
 
     print("\n✅ download_segmentations completed.")
 
+def _read_boxes(boxes_csv):
+    """Read one CSV path, or a list/tuple of paths, into a single boxes DataFrame.
+
+    Accepting several CSVs lets the annotated-training set be grown by combining the
+    BCS-DBT ``boxes-train`` and ``boxes-validation`` files (disjoint patients, same
+    schema) without any per-file bookkeeping downstream.
+    """
+    paths = [boxes_csv] if isinstance(boxes_csv, (str, os.PathLike)) else list(boxes_csv)
+    return pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
+
+
 def download_annotated_dbt_series(boxes_csv, max_patients=3, download_dir=DOWNLOAD_DIR,
                                   collection="Breast-Cancer-Screening-DBT", max_gb=None):
     """Download the DBT series for the first `max_patients` annotated patients.
@@ -330,11 +341,14 @@ def download_annotated_dbt_series(boxes_csv, max_patients=3, download_dir=DOWNLO
     annotated patients, and downloads all their series (every view) so the box
     masks can later be matched in `preprocess_dbt_with_boxes`.
 
-    Downloading stops early once `download_dir` reaches `max_gb` gigabytes (if set),
-    so you can cap the total volume regardless of the patient count.
+    `boxes_csv` may be a single path or a list of paths; passing both the train and
+    validation boxes CSVs pools their (disjoint) annotated patients into one set.
+    `max_patients=None` fetches every annotated patient. Downloading stops early once
+    `download_dir` reaches `max_gb` gigabytes (if set), so you can cap the total
+    volume regardless of the patient count.
     """
     os.makedirs(download_dir, exist_ok=True)
-    boxes = pd.read_csv(boxes_csv)
+    boxes = _read_boxes(boxes_csv)
     patients = list(dict.fromkeys(boxes["PatientID"].tolist()))[:max_patients]
     print(f"Annotated patients to fetch: {len(patients)} (cap: {max_gb} GB)")
 
