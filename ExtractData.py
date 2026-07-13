@@ -104,7 +104,7 @@ def extract_breast_cancer_wisconsin_diagnostic_data(max_gb=30):
     return data
 
 # Default location for downloaded DICOM series (set by user request)
-DOWNLOAD_DIR = 'D:\\'
+DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 
 def extract_dicom_mri_images(max_gb=30, max_series=None):
     """Extract breast cancer MRI images and store them in `DOWNLOAD_DIR`, skipping already downloaded series.

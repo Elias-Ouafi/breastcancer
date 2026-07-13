@@ -55,6 +55,9 @@ def _get_spark(app_name="breastcancer-tabular"):
     return (
         SparkSession.builder.appName(app_name)
         .config("spark.sql.shuffle.partitions", "8")
+        # v2 skips the task-path listing that trips Hadoop's Windows NativeIO shim
+        # (UnsatisfiedLinkError on access0) when winutils.exe lacks a matching hadoop.dll.
+        .config("spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version", "2")
         .getOrCreate()
     )
 

@@ -47,6 +47,7 @@ tciaDownload/
 preprocessed_data/
 results/*.pt
 results/segmentation_*.csv
+results/tabular_model/
 
 # Logs
 *.log
