@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import os
 
 import torch
@@ -23,12 +24,12 @@ from torch.utils.data import DataLoader, TensorDataset
 
 try:  # allow both "python -m imaging.train" and "python imaging/train.py"
     from .dataset import MRISliceDataset, split_npz_by_patient
-    from .metrics import DiceBCELoss, segmentation_scores
-    from .unet import UNet2D
+    from .metrics import DiceBCELoss, FocalTverskyLoss, segmentation_scores
+    from .unet import build_model
 except ImportError:  # pragma: no cover - fallback for direct script execution
     from dataset import MRISliceDataset, split_npz_by_patient
-    from metrics import DiceBCELoss, segmentation_scores
-    from unet import UNet2D
+    from metrics import DiceBCELoss, FocalTverskyLoss, segmentation_scores
+    from unet import build_model
 
 
 def evaluate(model, loader, device, threshold=0.5):
@@ -66,7 +67,8 @@ def _make_loaders(args):
 
     train_ds = MRISliceDataset(train_paths, image_size=args.image_size,
                                positive_only=args.positive_only,
-                               neg_per_pos=args.neg_per_pos, seed=args.seed)
+                               neg_per_pos=args.neg_per_pos, seed=args.seed,
+                               augment=not args.no_augment)
     if not len(train_ds):
         raise RuntimeError("No training slices found. Check the data or --positive-only.")
     print(f"Training slices: {len(train_ds)} "
@@ -108,14 +110,26 @@ def train(args):
     else:
         train_loader, val_loader, test_loader, n_train = _make_loaders(args)
 
-    model = UNet2D(base=args.base_channels).to(device)
-    criterion = DiceBCELoss(bce_weight=args.bce_weight)
+    model = build_model(architecture=args.architecture, base_channels=args.base_channels,
+                       encoder_name=args.encoder_name, encoder_weights=args.encoder_weights).to(device)
+    if args.loss == "focal_tversky":
+        criterion = FocalTverskyLoss(alpha=args.tversky_alpha, beta=args.tversky_beta,
+                                     gamma=args.tversky_gamma)
+    else:
+        criterion = DiceBCELoss(bce_weight=args.bce_weight)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    # Shrinks the LR once val Dice stops improving, instead of hammering the tiny
+    # lesion-fraction batches with a constant 1e-3 for all 30 epochs (that constant
+    # rate is what produced the epoch-to-epoch Dice swings between ~0.84 and ~0).
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="max", factor=args.lr_factor, patience=args.lr_patience
+    )
 
     os.makedirs(args.output_dir, exist_ok=True)
     metrics_path = os.path.join(args.output_dir, "segmentation_metrics.csv")
     ckpt_path = os.path.join(args.output_dir, "unet_best.pt")
-    best_dice = -1.0
+    best_smoothed_dice = -1.0
+    recent_dice = []
 
     with open(metrics_path, "w", newline="") as f:
         writer = csv.writer(f)
@@ -129,20 +143,36 @@ def train(args):
                 optimizer.zero_grad()
                 loss = criterion(model(img), msk)
                 loss.backward()
+                # Caps how much any single noisy batch (tiny lesion fraction, small
+                # batch size) can move the weights, the other half of the fix for
+                # the Dice swings described above.
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
                 optimizer.step()
                 running += loss.item() * img.size(0)
 
             train_loss = running / max(1, n_train)
             val_metrics = evaluate(model, val_loader, device, threshold=args.threshold)
+            lr = optimizer.param_groups[0]["lr"]
             print(f"Epoch {epoch:3d} | loss {train_loss:.4f} | "
-                  f"val Dice {val_metrics['dice']:.4f} | val IoU {val_metrics['iou']:.4f}")
+                  f"val Dice {val_metrics['dice']:.4f} | val IoU {val_metrics['iou']:.4f} | lr {lr:.2e}")
             writer.writerow([epoch, f"{train_loss:.6f}",
                              f"{val_metrics['dice']:.6f}", f"{val_metrics['iou']:.6f}"])
             f.flush()
 
-            if val_loader is not None and val_metrics["dice"] > best_dice:
-                best_dice = val_metrics["dice"]
-                torch.save(model.state_dict(), ckpt_path)
+            if val_loader is not None and not math.isnan(val_metrics["dice"]):
+                scheduler.step(val_metrics["dice"])
+
+                # Compare a moving average of the last few epochs, not the raw
+                # per-epoch value, so a single lucky spike (e.g. epoch 4's 0.84
+                # amid neighbours near 0) is not mistaken for a converged model.
+                recent_dice.append(val_metrics["dice"])
+                if len(recent_dice) > args.ckpt_smoothing:
+                    recent_dice.pop(0)
+                smoothed_dice = sum(recent_dice) / len(recent_dice)
+
+                if smoothed_dice > best_smoothed_dice:
+                    best_smoothed_dice = smoothed_dice
+                    torch.save(model.state_dict(), ckpt_path)
 
     # Final evaluation on the held-out test split, using the best checkpoint.
     if test_loader is not None:
@@ -172,12 +202,43 @@ def build_arg_parser():
                         "BatchNorm artifact (unstable running stats on the tiny lesion "
                         "fraction), which forced a low 2e-4. GroupNorm removed it.")
     p.add_argument("--image-size", type=int, default=256, help="Square slice size (must be divisible by 16).")
-    p.add_argument("--base-channels", type=int, default=32, help="U-Net width at the first level.")
+    p.add_argument("--architecture", choices=["scratch", "pretrained"], default="scratch",
+                   help="'scratch' trains UNet2D from random init. 'pretrained' uses "
+                        "segmentation_models_pytorch's U-Net with an ImageNet-pretrained "
+                        "encoder (see --encoder-name), which data-efficient DBT literature "
+                        "reports as a strong lever when annotated patients are scarce.")
+    p.add_argument("--encoder-name", default="resnet34",
+                   help="Encoder backbone for --architecture pretrained (any timm/smp encoder id).")
+    p.add_argument("--encoder-weights", default="imagenet",
+                   help="Pretrained weights for the encoder, or 'none' for random init.")
+    p.add_argument("--base-channels", type=int, default=32,
+                   help="U-Net width at the first level (--architecture scratch only).")
+    p.add_argument("--loss", choices=["focal_tversky", "dice_bce"], default="focal_tversky",
+                   help="focal_tversky (default) weights false negatives more than false "
+                        "positives and focuses on hard slices -- suited to the tiny "
+                        "lesion-vs-background imbalance here. dice_bce is the previous default.")
+    p.add_argument("--tversky-alpha", type=float, default=0.3,
+                   help="False-positive weight in the Focal Tversky loss.")
+    p.add_argument("--tversky-beta", type=float, default=0.7,
+                   help="False-negative weight in the Focal Tversky loss (> alpha favours recall).")
+    p.add_argument("--tversky-gamma", type=float, default=0.75,
+                   help="Focal exponent in the Focal Tversky loss (< 1 emphasises hard slices).")
     p.add_argument("--bce-weight", type=float, default=0.3,
-                   help="Weight of BCE vs Dice in the loss. Kept below 0.5 so the overlap "
+                   help="Weight of BCE vs Dice in --loss dice_bce. Kept below 0.5 so the overlap "
                         "(Dice) term dominates; a BCE-heavy loss on this class imbalance "
                         "rewards predicting empty masks.")
     p.add_argument("--threshold", type=float, default=0.5, help="Probability threshold for the binary mask.")
+    p.add_argument("--grad-clip", type=float, default=1.0,
+                   help="Max gradient norm (torch.nn.utils.clip_grad_norm_). Bounds how much a "
+                        "single noisy batch can move the weights; part of the fix for the "
+                        "epoch-to-epoch val-Dice collapse seen with a constant LR.")
+    p.add_argument("--lr-factor", type=float, default=0.5,
+                   help="Factor the LR is multiplied by when val Dice plateaus (ReduceLROnPlateau).")
+    p.add_argument("--lr-patience", type=int, default=3,
+                   help="Epochs with no val-Dice improvement before the LR is reduced.")
+    p.add_argument("--ckpt-smoothing", type=int, default=3,
+                   help="Number of trailing epochs averaged before comparing to the best-so-far "
+                        "Dice for checkpointing, so a single noisy spike isn't saved as 'best'.")
     p.add_argument("--val-frac", type=float, default=0.15)
     p.add_argument("--test-frac", type=float, default=0.15)
     p.add_argument("--seed", type=int, default=42)
@@ -191,6 +252,10 @@ def build_arg_parser():
                         "randomly sampled background slices per lesion slice (default 2). "
                         "Overrides --positive-only/--all-slices. Pass 0 to disable and "
                         "fall back to --positive-only/--all-slices.")
+    p.add_argument("--no-augment", action="store_true",
+                   help="Disable training-time augmentation (flips, small rotation/scale, "
+                        "gamma jitter). Augmentation is on by default to help the small "
+                        "annotated DBT set generalise.")
     p.add_argument("--smoke-test", action="store_true",
                    help="Run the loop on random tensors (no real data) to validate the pipeline.")
     return p

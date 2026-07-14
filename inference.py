@@ -120,14 +120,19 @@ def predict_tabular(features: Union[Mapping[str, float], Sequence[float]],
 DEFAULT_UNET_CKPT = os.path.join("results", "unet_best.pt")
 
 
-def load_unet(checkpoint: str = DEFAULT_UNET_CKPT, base: int = 32, device=None):
+def load_unet(checkpoint: str = DEFAULT_UNET_CKPT, base: int = 32, device=None,
+             architecture: str = "scratch", encoder_name: str = "resnet34"):
     """Load the trained U-Net in eval mode. Returns ``(model, device)``.
 
-    ``base`` must match the width used at training (``--base-channels``, default 32).
+    ``architecture``/``base``/``encoder_name`` must match what the checkpoint was
+    trained with (``imaging.train``'s ``--architecture``, ``--base-channels``,
+    ``--encoder-name``) since they determine the state_dict's layer shapes/keys.
+    ``encoder_weights`` is not needed here: the checkpoint overwrites whatever the
+    encoder was initialised with.
     """
     import torch
 
-    from imaging.unet import UNet2D
+    from imaging.unet import build_model
 
     if not os.path.exists(checkpoint):
         raise FileNotFoundError(
@@ -135,7 +140,8 @@ def load_unet(checkpoint: str = DEFAULT_UNET_CKPT, base: int = 32, device=None):
             "python -m imaging.train --data-dir preprocessed_data"
         )
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    model = UNet2D(base=base)
+    model = build_model(architecture=architecture, base_channels=base,
+                        encoder_name=encoder_name, encoder_weights=None)
     model.load_state_dict(torch.load(checkpoint, map_location=device))
     model.to(device).eval()
     return model, device
@@ -156,7 +162,9 @@ def predict_dbt(volume: Union[str, np.ndarray],
                 image_size: int = 256,
                 threshold: float = 0.5,
                 model=None,
-                device=None):
+                device=None,
+                architecture: str = "scratch",
+                encoder_name: str = "resnet34"):
     """Localise a lesion in a preprocessed DBT volume with the trained U-Net.
 
     Parameters
@@ -196,7 +204,8 @@ def predict_dbt(volume: Union[str, np.ndarray],
         raise ValueError(f"Expected a (depth, H, W) volume, got shape {vol.shape}.")
 
     if model is None:
-        model, device = load_unet(checkpoint, device=device)
+        model, device = load_unet(checkpoint, device=device,
+                                  architecture=architecture, encoder_name=encoder_name)
     elif device is None:
         device = next(model.parameters()).device
 
