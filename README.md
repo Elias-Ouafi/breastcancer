@@ -4,6 +4,9 @@ This project develops an app for breast cancer detection.
 The user provide their MRI data and the app returns the probability of cancer and if further medical analysis is required.
 WARNING : IT IS NOT CURRENTLY A VALID DIAGNOSTIC USABLE BY END USERS.
 
+My personal goal is to try to help the medical sector my own way and improve my data engineering skills.
+The technical results are summarised in Final_Report.md
+
 It uses two complementary angles:
 
 1. **Quantitative / tabular** — the **Breast Cancer Wisconsin (Diagnostic)** dataset

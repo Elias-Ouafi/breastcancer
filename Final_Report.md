@@ -1,11 +1,5 @@
 # **Breast Cancer Prediction Project - Final Report**
 
-## **Project Objective**  
-The objective of this project is to build a machine learning model that predicts whether a female patient has breast cancer based on diagnostic features.  
-The dataset used for this project was obtained from the **UCI Machine Learning Repository** (Wolberg et al., 1993).
-
----
-
 ## **1. Data Overview**
 - **Dataset Source**: UCI Machine Learning Repository
 - **Original Features**: 30 numerical features
@@ -125,12 +119,6 @@ We trained and evaluated five **Spark MLlib** classifiers on the PCA-reduced dat
 (80/20 train/test split, `seed=42`): **Logistic Regression**, **Random Forest**,
 **Linear SVM** (`LinearSVC`), **Gradient-Boosted Trees** (`GBTClassifier`), and a
 **Neural Network** (`MultilayerPerceptronClassifier`).
-
-> **Migration note.** This pipeline was ported from scikit-learn/XGBoost to Spark
-> MLlib. Models without a direct MLlib equivalent were remapped: `SVC` → `LinearSVC`
-> (MLlib only ships a linear SVM), and `KNeighborsClassifier` → `GBTClassifier`
-> (gradient-boosted trees), which also subsumes the previous XGBoost model. No k-NN
-> or XGBoost model is trained any more.
 
 **🏆 Best Model:** **Linear SVM** (`LinearSVC`) — highest ROC-AUC, tied with Logistic
 Regression on every other metric.
