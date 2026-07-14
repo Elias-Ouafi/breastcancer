@@ -9,6 +9,7 @@ split) to avoid optimistic leakage between train/val/test.
 """
 from __future__ import annotations
 
+import math
 import os
 import warnings
 from collections import OrderedDict
@@ -84,6 +85,41 @@ def split_npz_by_patient(data_dir, val_frac=0.15, test_frac=0.15, seed=42,
     return train, val, test
 
 
+def _gamma_jitter(img, rng, gamma_range=(0.8, 1.25)):
+    """Apply a random monotonic gamma curve to intensities, mask untouched.
+
+    Slices are z-normalised (mean 0, std 1), not in [0, 1], so classic gamma
+    correction is applied around the slice's own min-max range: rescale to [0, 1],
+    raise to a random power, then rescale back. This perturbs contrast/brightness
+    without changing the mask, which is exactly what gamma jitter should do.
+    """
+    gamma = rng.uniform(*gamma_range)
+    img_min, img_max = img.min(), img.max()
+    span = (img_max - img_min).clamp_min(1e-6)
+    normed = ((img - img_min) / span).clamp(0, 1).pow(gamma)
+    return normed * span + img_min
+
+
+def _random_affine(img, msk, rng, max_rotation_deg=15, max_scale_delta=0.1):
+    """Random rotation + isotropic scale, applied identically to image and mask.
+
+    Built on ``affine_grid``/``grid_sample`` (pure PyTorch, no extra dependency).
+    The image is resampled bilinearly, the mask with nearest-neighbour so it stays
+    binary.
+    """
+    angle = math.radians(rng.uniform(-max_rotation_deg, max_rotation_deg))
+    scale = 1.0 + rng.uniform(-max_scale_delta, max_scale_delta)
+    cos, sin = math.cos(angle) / scale, math.sin(angle) / scale
+    theta = torch.tensor([[cos, -sin, 0.0], [sin, cos, 0.0]], dtype=img.dtype).unsqueeze(0)
+
+    grid = F.affine_grid(theta, img.unsqueeze(0).size(), align_corners=False)
+    img_t = F.grid_sample(img.unsqueeze(0), grid, mode="bilinear",
+                          padding_mode="zeros", align_corners=False)[0]
+    msk_t = F.grid_sample(msk.unsqueeze(0), grid, mode="nearest",
+                          padding_mode="zeros", align_corners=False)[0]
+    return img_t, msk_t
+
+
 class MRISliceDataset(Dataset):
     """Serves 2D axial slices from a list of preprocessed ``.npz`` volumes.
 
@@ -101,14 +137,20 @@ class MRISliceDataset(Dataset):
     cache_size : int
         Number of decoded volumes kept in an in-memory LRU cache to avoid
         re-reading a file for every slice.
+    augment : bool
+        If True, apply random horizontal/vertical flips, a small random
+        rotation+scale, and gamma jitter to each served slice. Meant for the
+        training split only — validation/test must stay deterministic so
+        reported Dice/IoU are comparable across epochs.
     """
 
     def __init__(self, npz_paths, image_size=256, positive_only=True, neg_per_pos=None,
-                 cache_size=8, seed=0):
+                 cache_size=8, seed=0, augment=False):
         self.paths = list(npz_paths)
         self.image_size = image_size
         self.positive_only = positive_only
         self.neg_per_pos = neg_per_pos
+        self.augment = augment
         self._rng = np.random.default_rng(seed)
         self._cache_size = cache_size
         self._cache = OrderedDict()
@@ -168,4 +210,14 @@ class MRISliceDataset(Dataset):
         size = (self.image_size, self.image_size)
         img = F.interpolate(img, size=size, mode="bilinear", align_corners=False)
         msk = F.interpolate(msk, size=size, mode="nearest")
-        return img[0], msk[0]  # each (1, H, W)
+        img, msk = img[0], msk[0]  # each (1, H, W)
+
+        if self.augment:
+            if self._rng.random() < 0.5:
+                img, msk = torch.flip(img, dims=[2]), torch.flip(msk, dims=[2])
+            if self._rng.random() < 0.5:
+                img, msk = torch.flip(img, dims=[1]), torch.flip(msk, dims=[1])
+            img, msk = _random_affine(img, msk, self._rng)
+            img = _gamma_jitter(img, self._rng)
+
+        return img, msk

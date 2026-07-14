@@ -286,6 +286,20 @@ def load_dicom_volume(dicom_dir):
     volume = np.stack(slices, axis=0)  # Shape: (depth, height, width)
     return volume
 
+def normalize_intensity(volume, low_pct=1.0, high_pct=99.0):
+    """Clip to the [low_pct, high_pct] intensity percentiles, then z-normalise.
+
+    Plain global z-normalisation (subtract mean, divide by std over the whole
+    volume) is skewed in mammography/DBT/MRI by the large air/background region:
+    the mean and std mostly describe background, not tissue, so the useful
+    intensity range gets compressed. Clipping outliers (background floor, any
+    saturated pixels) first anchors the standardisation to the tissue range.
+    """
+    lo, hi = np.percentile(volume, [low_pct, high_pct])
+    clipped = np.clip(volume, lo, hi)
+    return (clipped - clipped.mean()) / (clipped.std() + 1e-8)
+
+
 def create_mask(volume_shape, bbox):
     """
     Create a binary mask from bounding box coordinates.
@@ -421,15 +435,23 @@ def _read_boxes(boxes_csv):
 def preprocess_dbt_with_boxes(root_dir="tciaDownload",
                               boxes_csv="tciaDownload/BCS-DBT-boxes-train.csv",
                               output_dir="preprocessed_data",
-                              skip_empty=True):
+                              skip_empty=True,
+                              slice_margin=2):
     """Preprocess Breast-Cancer-Screening-DBT series using the bounding-box annotations.
 
     DBT scans ship without DICOM SEG; lesions are given as 2D boxes in a separate
     CSV (``PatientID``, ``View``, ``Slice``, ``X``, ``Y``, ``Width``, ``Height``).
     For each series folder under ``root_dir`` this reads the multi-frame image,
-    z-normalises it, and builds a binary lesion mask from the matching box rows by
-    reusing :func:`create_mask` (one box = one slice). Volumes are cropped to the
-    lesion ROI and written as compressed ``.npz`` via :func:`save_preprocessed`.
+    normalises it (see :func:`normalize_intensity`), and builds a binary lesion mask
+    from the matching box rows by reusing :func:`create_mask`. Volumes are cropped to
+    the lesion ROI and written as compressed ``.npz`` via :func:`save_preprocessed`.
+
+    ``slice_margin`` extends each annotated box by this many slices on either side of
+    the labelled ``Slice`` (clamped to the volume). The BCS-DBT annotation only marks
+    one central slice per lesion, but the lesion itself typically spans several
+    neighbouring slices in the tomosynthesis stack — without this, positive (lesion)
+    slices are extremely rare, starving the 2D per-slice training loop of examples.
+    Pass 0 to keep the original single-slice behaviour.
 
     ``boxes_csv`` may be a single path or a list of paths; pass both the train and
     validation boxes CSVs to build masks for the pooled annotated set. Series with no
@@ -457,8 +479,10 @@ def preprocess_dbt_with_boxes(root_dir="tciaDownload",
         mask = np.zeros(volume.shape, dtype=np.uint8)
         for _, r in rows.iterrows():
             z = int(r["Slice"])
+            z0 = max(0, z - slice_margin)
+            z1 = min(volume.shape[0], z + 1 + slice_margin)
             bbox = {
-                "Start Slice": z, "End Slice": z + 1,
+                "Start Slice": z0, "End Slice": z1,
                 "Start Row": int(r["Y"]), "End Row": int(r["Y"]) + int(r["Height"]),
                 "Start Column": int(r["X"]), "End Column": int(r["X"]) + int(r["Width"]),
             }
@@ -468,8 +492,7 @@ def preprocess_dbt_with_boxes(root_dir="tciaDownload",
             skipped += 1
             continue
 
-        # z-normalise intensities (same convention as the MRI path).
-        volume = (volume - volume.mean()) / (volume.std() + 1e-8)
+        volume = normalize_intensity(volume)
         save_preprocessed(name, volume, mask, output_dir,
                           case_id=getattr(ds, "PatientID", name))
         saved += 1
@@ -582,9 +605,7 @@ def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="prepr
         image_array = sitk.GetArrayFromImage(resampled_image)
         
         # STEP 5 - Normalize the array
-        mean = np.mean(image_array)
-        std = np.std(image_array)
-        normalized_array = (image_array - mean) / (std + 1e-8)
+        normalized_array = normalize_intensity(image_array)
         mask = np.zeros_like(normalized_array, dtype=np.uint8)
         
         # STEP 6 - Segment the data

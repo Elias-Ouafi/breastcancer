@@ -107,3 +107,43 @@ class DiceBCELoss(nn.Module):
         probs = torch.sigmoid(logits)
         dice = 1.0 - dice_coeff(probs, target)
         return self.bce_weight * bce + (1.0 - self.bce_weight) * dice
+
+
+def tversky_index(pred, target, alpha=0.3, beta=0.7, eps=1e-6):
+    """Batch-mean Tversky index: trades recall vs precision via alpha/beta.
+
+    Generalises Dice (the alpha=beta=0.5 case) by weighting false positives
+    (``alpha``) separately from false negatives (``beta``). With ``beta > alpha``,
+    missed lesion voxels are penalised more than spurious ones — appropriate here
+    since the lesion is a tiny fraction of each slice and recall (not missing the
+    lesion) matters more than precision.
+    """
+    n = pred.shape[0]
+    pred = pred.reshape(n, -1)
+    target = target.reshape(n, -1)
+    tp = (pred * target).sum(dim=1)
+    fp = (pred * (1.0 - target)).sum(dim=1)
+    fn = ((1.0 - pred) * target).sum(dim=1)
+    return ((tp + eps) / (tp + alpha * fp + beta * fn + eps)).mean()
+
+
+class FocalTverskyLoss(nn.Module):
+    """Focal Tversky loss (Abraham & Khan, 2018) for foreground/background imbalance.
+
+    Built on `tversky_index`: ``alpha``/``beta`` trade precision vs recall (defaults
+    favour recall, suited to the tiny lesion-vs-background ratio in DBT/MRI slices),
+    and ``gamma`` raises ``(1 - Tversky)`` to a power < 1, which amplifies the loss
+    for harder/less-accurate slices relative to easy ones already segmented well.
+    """
+
+    def __init__(self, alpha=0.3, beta=0.7, gamma=0.75, eps=1e-6):
+        super().__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
+        self.eps = eps
+
+    def forward(self, logits, target):
+        probs = torch.sigmoid(logits)
+        tversky = tversky_index(probs, target, self.alpha, self.beta, self.eps)
+        return (1.0 - tversky).clamp_min(self.eps) ** self.gamma
