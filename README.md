@@ -1,7 +1,10 @@
 # Breast Cancer Detection Project
 
-This project develops machine learning models for breast cancer detection from two
-complementary angles:
+This project develops an app for breast cancer detection.
+The user provide their MRI data and the app returns the probability of cancer.
+WARNING : IT IS NOT CURRENTLY A VALID DIAGNOSTIC USABLE BY END USERS.
+
+It uses two complementary angles:
 
 1. **Quantitative / tabular** — the **Breast Cancer Wisconsin (Diagnostic)** dataset
    (UCI ML Repository), used to train and compare classical classifiers. This
@@ -13,61 +16,13 @@ complementary angles:
 The long-term goal (see `Main.py`) is to combine the strongest features from both
 the quantitative and imaging pipelines into a single model.
 
-## Project Structure
-
-```
-breastcancer/
-├── data/                   # Tabular data & outputs (gitignored)
-├── plots/                  # Generated figures (model comparison, etc.)
-├── results/                # Analysis results
-├── ExtractData.py          # Wisconsin dataset + TCIA MRI/DBT download & segmentations
-├── ExtractBreakHis.py      # BreakHis histopathology download (Kaggle)
-├── TransformData.py        # Spark MLlib scaling + PCA (tabular) + MRI preprocessing/compression
-├── AnalyzeData.py          # Train & compare Spark MLlib classifiers on tabular data
-├── Main.py                 # Orchestrates the tabular (PySpark) pipeline end-to-end
-├── Final_Report.md         # Report for the quantitative pipeline
-├── requirements.txt        # Core Python dependencies
-├── .gitignore
-└── README.md               # This file
-```
-
-> **Note:** Downloaded imaging data (DICOM series, preprocessed arrays) is **not**
-> stored in the repository. The default download location for MRI series is set in
-> `ExtractData.py` (`DOWNLOAD_DIR`), currently an external drive (`D:\`), because the
-> raw DICOM data is large.
-
 ## Prerequisites
 
-- Python 3.8 or higher
+- Python 3.12 or higher
 - **Java 17 or newer (a JVM)** on the `PATH` — required by **PySpark 4** for the
   quantitative pipeline (e.g. Temurin/OpenJDK 17; set `JAVA_HOME`).
 - **TCIA** access via `tcia_utils` / `nbia` (for the MRI/DBT dataset)
 - A **Kaggle** account and API token (for the BreakHis dataset)
-
-## Installation
-
-1. Clone the repository and enter it:
-   ```bash
-   git clone https://github.com/yourusername/breastcancer.git
-   cd breastcancer
-   ```
-2. Create and activate a virtual environment:
-   ```bash
-   python -m venv .venv
-   # Windows
-   .venv\Scripts\activate
-   # Unix / macOS
-   source .venv/bin/activate
-   ```
-3. Install the core dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-   The **MRI/DBT** pipeline additionally requires imaging libraries not in
-   `requirements.txt`:
-   ```bash
-   pip install SimpleITK itk itkwidgets tcia_utils openpyxl
-   ```
 
 ## Setup
 
@@ -173,92 +128,6 @@ loop without any data via `python -m imaging.train --smoke-test`.
 ```bash
 python ExtractBreakHis.py
 ```
-
-## Managing data size
-
-Medical imaging data is large, so the pipeline is set up to keep the footprint down:
-
-- **Download cap.** Both `extract_dicom_mri_images` and `download_segmentations`
-  accept a `max_gb` argument (default 30 GB) and stop once the target directory
-  reaches that size. Lower it to download less, e.g. `extract_dicom_mri_images(max_gb=5)`.
-- **Compressed, reduced-precision output.** `save_preprocessed` in `TransformData.py`
-  stores each series as a single `*.npz` file that is:
-  - **cropped** to the region of interest around the segmentation (`crop_to_roi`),
-    with the crop origin saved as `crop_offset` so it can be mapped back;
-  - stored as **float16** instead of float32 (half the size, negligible impact on
-    z-normalised intensities);
-  - **zlib-compressed** via `np.savez_compressed`, which shrinks the near-empty mask
-    dramatically.
-
-  Load a preprocessed series with:
-  ```python
-  import numpy as np
-  data = np.load("preprocessed_data/<patient_id>.npz")
-  volume, mask, offset = data["volume"], data["mask"], data["crop_offset"]
-  ```
-
-### Further reductions, if still too large
-- **Delete raw DICOM after preprocessing.** Pass `delete_source=True` to
-  `process_all_mri_data` (or `preprocess_mri_data`) to remove each original DICOM
-  folder once it has been successfully written to `.npz`, reclaiming the bulk of the
-  space. It is **destructive and off by default**: the deletion only happens after
-  the `.npz` is confirmed present and non-empty, so a failed save never loses the
-  source data. Verify the outputs first, then enable it.
-- **Downsample.** Resampling to a coarser spacing (e.g. 1.5–2 mm) in
-  `preprocess_mri_data` reduces voxel counts roughly with the cube of the spacing.
-- **Fewer series.** Process a subset rather than the full collection.
-- **Disable cropping** by calling `save_preprocessed(..., crop=False)` if you need the
-  full field of view (files will be larger).
-
-## Roadmap
-
-The direction below is informed by the current state of the field (2025–2026). For
-context, the **MASAI** randomised controlled trial (>100,000 women, published in *The
-Lancet*, 2026) showed AI-supported mammography screening lifting cancer detection by
-~29% with no rise in false positives and a ~44% cut in radiologist reading workload —
-strong evidence that the detection/localisation → classification direction this
-project follows is clinically worthwhile.
-
-- **Graphical interface for results visualization.** Build a GUI to explore the
-  analysis outputs visually — model performance comparisons, PCA scree plots and
-  feature contributions for the quantitative pipeline, and side-by-side viewing of
-  MRI/DBT volumes with their segmentation masks (and predicted boxes) for the imaging
-  pipeline. The goal is an interactive dashboard so results can be reviewed without
-  reading the raw CSVs or regenerating the static figures in `plots/`.
-- **Imaging model, next steps.** The first brick is a 2D U-Net for lesion
-  localisation (`imaging/`). Follow-ups, in roughly increasing effort:
-  - **Two-stage detection.** The current single U-Net conflates localisation and
-    scoring. Recent DBT pipelines separate the two: a detector (e.g. YOLO-family with
-    an attention block such as CBAM) proposes lesion regions, then a CNN classifies
-    each region. This tends to handle the heavy normal/lesion class imbalance in
-    `Breast-Cancer-Screening-DBT` better than dense segmentation over box masks.
-  - **Data-efficient 3D.** Move from per-slice 2D to volumetric modelling of the DBT
-    stack. Rather than a full 3D U-Net trained from scratch (data-hungry on the small
-    annotated subset), recent work adapts pretrained 2D backbones to 3D with little
-    extra cost ("2D-to-3D" inflation / slice-aggregation), which is a better fit for
-    the limited number of annotated patients here.
-  - **Benign/malignant classifier** once pathology/biopsy labels are wired in, so the
-    pipeline outputs a diagnosis and not only a location.
-- **BreakHis histopathology pipeline.** A dedicated classification pipeline for the
-  BreakHis images. The field has moved from training CNNs from scratch to reusing
-  **pathology foundation-model features** (self-supervised models such as UNI, CONCH,
-  Virchow) as frozen encoders with a lightweight classifier head — reported to reach
-  ~97–98% accuracy on BreakHis with far less labelled data than end-to-end training.
-  Start there rather than a bespoke CNN.
-- **Combined model.** Merge the strongest quantitative and imaging features into a
-  single predictive model (see `Main.py`). Prefer **intermediate, attention-based
-  fusion** (e.g. cross-attention between imaging embeddings and tabular/clinical
-  features) over naive concatenation of final scores — recent multimodal breast-cancer
-  reviews consistently find representation-level fusion outperforms early- or
-  late-fusion baselines, and it keeps the modalities interpretable.
-
-## Contributing
-
-1. Fork the repository.
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`).
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`).
-4. Push the branch (`git push origin feature/AmazingFeature`).
-5. Open a Pull Request.
 
 ## Acknowledgments
 
