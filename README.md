@@ -1,7 +1,7 @@
 # Breast Cancer Detection Project
 
 This project develops an app for breast cancer detection.
-The user provide their MRI data and the app returns the probability of cancer.
+The user provide their MRI data and the app returns the probability of cancer and if further medical analysis is required.
 WARNING : IT IS NOT CURRENTLY A VALID DIAGNOSTIC USABLE BY END USERS.
 
 It uses two complementary angles:
