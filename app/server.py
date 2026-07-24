@@ -10,6 +10,7 @@ before the real AI is connected. See ``app/predictor.py``.
 """
 from __future__ import annotations
 
+import base64
 import os
 import tempfile
 import uuid
@@ -32,6 +33,24 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 def _allowed(filename: str) -> bool:
     lower = filename.lower()
     return any(lower.endswith(ext) for ext in ALLOWED_EXTENSIONS)
+
+
+def _overlay_data_uri(file_path: str, result: dict) -> str | None:
+    """Render the annotated slice for `result` as a data: URI, or None if it can't be.
+
+    Best-effort: the mock backend's box/slice aren't grounded in real pixels, and any
+    real upload that isn't a scoreable `.npz` (e.g. a raw image) has nothing to draw
+    on, so failures here are swallowed -- the text result still renders without it.
+    """
+    if result.get("best_slice") is None or not file_path.lower().endswith(".npz"):
+        return None
+    try:
+        from inference import render_overlay_png
+
+        png_bytes = render_overlay_png(file_path, result["best_slice"], result.get("box_xywh"))
+        return "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
+    except Exception:
+        return None
 
 
 @app.route("/", methods=["GET"])
@@ -57,8 +76,10 @@ def predict():
     file.save(safe_path)
 
     predictor = get_predictor()
+    overlay_data_uri = None
     try:
         result = predictor.predict(safe_path)
+        overlay_data_uri = _overlay_data_uri(safe_path, result)
     except Exception as exc:  # surface backend errors in the UI instead of a 500 page
         return render_template("index.html", backend=predictor.name,
                                error=f"Échec de la prédiction : {exc}"), 500
@@ -68,7 +89,7 @@ def predict():
         except OSError:
             pass
 
-    return render_template("result.html", result=result,
+    return render_template("result.html", result=result, overlay_data_uri=overlay_data_uri,
                            filename=file.filename, backend=predictor.name)
 
 
@@ -84,6 +105,7 @@ def api_predict():
     predictor = get_predictor()
     try:
         result = predictor.predict(safe_path)
+        result["overlay_data_uri"] = _overlay_data_uri(safe_path, result)
     except Exception as exc:
         return {"error": str(exc)}, 500
     finally:

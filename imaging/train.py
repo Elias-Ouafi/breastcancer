@@ -68,7 +68,7 @@ def _make_loaders(args):
     train_ds = MRISliceDataset(train_paths, image_size=args.image_size,
                                positive_only=args.positive_only,
                                neg_per_pos=args.neg_per_pos, seed=args.seed,
-                               augment=not args.no_augment)
+                               augment=not args.no_augment, cache_size=args.cache_size)
     if not len(train_ds):
         raise RuntimeError("No training slices found. Check the data or --positive-only.")
     print(f"Training slices: {len(train_ds)} "
@@ -79,12 +79,14 @@ def _make_loaders(args):
     # Dice reflects localisation quality and is not inflated by empty->empty slices.
     val_loader = None
     if val_paths:
-        val_ds = MRISliceDataset(val_paths, image_size=args.image_size, positive_only=True)
+        val_ds = MRISliceDataset(val_paths, image_size=args.image_size, positive_only=True,
+                                 cache_size=args.cache_size)
         val_loader = DataLoader(val_ds, batch_size=args.batch_size, num_workers=args.num_workers)
 
     test_loader = None
     if test_paths:
-        test_ds = MRISliceDataset(test_paths, image_size=args.image_size, positive_only=True)
+        test_ds = MRISliceDataset(test_paths, image_size=args.image_size, positive_only=True,
+                                  cache_size=args.cache_size)
         test_loader = DataLoader(test_ds, batch_size=args.batch_size, num_workers=args.num_workers)
 
     return train_loader, val_loader, test_loader, len(train_ds)
@@ -243,6 +245,11 @@ def build_arg_parser():
     p.add_argument("--test-frac", type=float, default=0.15)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--num-workers", type=int, default=0, help="DataLoader workers (0 is safest on Windows).")
+    p.add_argument("--cache-size", type=int, default=8,
+                   help="Decoded volumes kept in each split's in-memory LRU cache "
+                        "(train/val/test each keep their own). Lower this on "
+                        "full-frame/uncropped data -- each volume is far larger "
+                        "than a cropped one, and the default was tuned for crops.")
     p.add_argument("--positive-only", action="store_true", default=True,
                    help="Train only on slices containing lesion voxels.")
     p.add_argument("--all-slices", dest="positive_only", action="store_false",

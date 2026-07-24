@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import logging
 import tempfile
@@ -439,15 +440,25 @@ def preprocess_dbt_with_boxes(root_dir="tciaDownload",
                               boxes_csv="tciaDownload/BCS-DBT-boxes-train.csv",
                               output_dir="preprocessed_data",
                               skip_empty=True,
-                              slice_margin=2):
+                              slice_margin=2,
+                              crop=True):
     """Preprocess Breast-Cancer-Screening-DBT series using the bounding-box annotations.
 
     DBT scans ship without DICOM SEG; lesions are given as 2D boxes in a separate
     CSV (``PatientID``, ``View``, ``Slice``, ``X``, ``Y``, ``Width``, ``Height``).
     For each series folder under ``root_dir`` this reads the multi-frame image,
     normalises it (see :func:`normalize_intensity`), and builds a binary lesion mask
-    from the matching box rows by reusing :func:`create_mask`. Volumes are cropped to
-    the lesion ROI and written as compressed ``.npz`` via :func:`save_preprocessed`.
+    from the matching box rows by reusing :func:`create_mask`. Volumes are written as
+    compressed ``.npz`` via :func:`save_preprocessed`.
+
+    ``crop`` (default True) keeps the historical behaviour of cropping to the lesion
+    ROI, which keeps files small but only teaches the model to localise within an
+    already-zoomed-in view. Pass ``crop=False`` to train on full, un-cropped frames
+    instead — required if the model needs to run on a raw uploaded scan (see
+    ``inference.predict_dbt``/``load_dbt_dicom``), since a model trained only on
+    tight crops has never seen the zoomed-out scale/context of a full frame and
+    over-predicts lesion almost everywhere on one (observed: ~70% of pixels flagged
+    positive on a full-frame test upload).
 
     ``slice_margin`` extends each annotated box by this many slices on either side of
     the labelled ``Slice`` (clamped to the volume). The BCS-DBT annotation only marks
@@ -496,7 +507,7 @@ def preprocess_dbt_with_boxes(root_dir="tciaDownload",
             continue
 
         volume = normalize_intensity(volume)
-        save_preprocessed(name, volume, mask, output_dir,
+        save_preprocessed(name, volume, mask, output_dir, crop=crop,
                           case_id=getattr(ds, "PatientID", name))
         saved += 1
         logging.info(f"[DBT] {name}: {len(rows)} box(es), "
@@ -664,6 +675,163 @@ def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="prepr
     except Exception as e:
         logging.error(f"❌ Failed to process series {series_instance_uid}: {str(e)}")
         return None, None
+
+# --------------------------------------------------------------------------- #
+# DCE-MRI (Duke-Breast-Cancer-MRI): multiphase subtraction + box annotations
+# --------------------------------------------------------------------------- #
+
+# Duke-Breast-Cancer-MRI mixes two SeriesDescription conventions across its cohort
+# (protocol/scanner varied over the years the collection was acquired):
+#   A) "ax dyn pre", "ax dyn 1st pass" .. "ax dyn 4th pass"       (spelled-out pass)
+#   B) "ax 3d dyn" (bare = pre-contrast), "Ph1/ax 3d dyn" .. "Ph4/..." (Ph-prefixed)
+# Verified on a 10-patient sample: exactly 5/10 use each convention, so both must be
+# handled or half the cohort silently loses its DCE series.
+_DCE_PASS_WORDS = [("1st", 1), ("2nd", 2), ("3rd", 3), ("4th", 4)]
+_DCE_PH_PREFIX_RE = re.compile(r"\bph\s*(\d)\b")
+
+
+def _dce_phase_rank(series_description):
+    """Return the phase rank (0=pre-contrast, 1..4=post-contrast passes) for a
+    Duke-Breast-Cancer-MRI ``SeriesDescription``, or None if it doesn't match the
+    dynamic-contrast protocol (e.g. the unrelated "ax t1 tse +c" or SEG series)."""
+    desc = (series_description or "").lower()
+    m = _DCE_PH_PREFIX_RE.search(desc)
+    if m:
+        return int(m.group(1))
+    for key, rank in _DCE_PASS_WORDS:
+        if key in desc:
+            return rank
+    if "pre" in desc:
+        return 0
+    if "dyn" in desc:
+        # Convention B's pre-contrast series carries no "Ph"/"pass"/"pre" marker at
+        # all -- a bare dynamic series is the baseline by elimination.
+        return 0
+    return None
+
+
+def group_dce_series_by_patient(root_dir):
+    """Walk ``root_dir``'s series subfolders (one ``SeriesInstanceUID`` per folder,
+    as written by :func:`ExtractData.download_dce_mri_series`) and group them by
+    ``PatientID -> {phase_rank: folder_path}``.
+
+    Only folders whose ``SeriesDescription`` matches the DCE dynamic protocol are
+    kept; unrelated series (T1 TSE, SEG) are ignored here.
+    """
+    groups = {}
+    for name in sorted(os.listdir(root_dir)):
+        folder = os.path.join(root_dir, name)
+        if not os.path.isdir(folder):
+            continue
+        dcm_files = [f for f in os.listdir(folder) if f.lower().endswith(".dcm")]
+        if not dcm_files:
+            continue
+        ds = pydicom.dcmread(os.path.join(folder, dcm_files[0]), stop_before_pixels=True)
+        rank = _dce_phase_rank(getattr(ds, "SeriesDescription", ""))
+        if rank is None:
+            continue
+        pid = getattr(ds, "PatientID", None)
+        if pid is None:
+            continue
+        groups.setdefault(pid, {})[rank] = folder
+    return groups
+
+
+def _load_series_volume(dicom_dir):
+    """Load one DICOM series folder into a ``(depth, H, W)`` float32 array, sorted
+    by ``InstanceNumber`` (slice order within the series)."""
+    dcm_files = sorted(
+        (f for f in os.listdir(dicom_dir) if f.lower().endswith(".dcm")),
+        key=lambda f: int(pydicom.dcmread(os.path.join(dicom_dir, f),
+                                          stop_before_pixels=True).InstanceNumber),
+    )
+    slices = [pydicom.dcmread(os.path.join(dicom_dir, f)).pixel_array for f in dcm_files]
+    return np.stack(slices, axis=0).astype(np.float32)
+
+
+def _read_mri_boxes(boxes_path):
+    """Read the Duke-Breast-Cancer-MRI ``Annotation_Boxes`` file (``.xlsx`` or the
+    ``.csv`` produced by :func:`ExtractData.clean_mri_annotation`) into a DataFrame.
+
+    Expected columns (1-indexed, inclusive, as published by TCIA): ``Patient ID``,
+    ``Start Row``, ``End Row``, ``Start Column``, ``End Column``, ``Start Slice``,
+    ``End Slice``. Column names are normalised (stripped) so minor header variants
+    still match.
+    """
+    if str(boxes_path).lower().endswith(".xlsx"):
+        df = pd.read_excel(boxes_path)
+    else:
+        df = pd.read_csv(boxes_path)
+    df.columns = [c.strip() for c in df.columns]
+    return df
+
+
+def preprocess_dce_mri_with_boxes(root_dir, boxes_path, output_dir="preprocessed_data_mri",
+                                  post_phase_rank=1, crop=True):
+    """Preprocess Duke-Breast-Cancer-MRI series into subtraction volumes + box masks.
+
+    For each patient with both a pre-contrast (rank 0) and the chosen post-contrast
+    pass (``post_phase_rank``, default 1 = "1st pass") series available, this:
+
+    1. Loads both phases (:func:`_load_series_volume`) -- they are acquired in the
+       same session without repositioning, so no inter-phase registration is applied
+       for this first pass.
+    2. Computes the enhancement subtraction ``post - pre`` (clipped at 0: only
+       contrast uptake is informative for lesion conspicuity), then z-normalises it
+       with :func:`normalize_intensity` -- the same convention already used by the
+       DBT path, so the resulting ``.npz`` is a drop-in for the existing
+       ``imaging/`` training/inference code (single-channel volume + mask).
+    3. Builds a binary lesion mask from the matching row(s) in the TCIA annotation
+       boxes file via :func:`create_mask` (1-indexed bounds are converted to the
+       0-indexed slicing ``create_mask``/numpy expect).
+
+    Patients with mismatched phase shapes (rare acquisition inconsistencies) or no
+    matching box row are skipped. Returns ``(saved, skipped)``.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    boxes = _read_mri_boxes(boxes_path)
+    groups = group_dce_series_by_patient(root_dir)
+
+    saved, skipped = 0, 0
+    for pid, phases in groups.items():
+        if 0 not in phases or post_phase_rank not in phases:
+            logging.warning(f"[MRI] {pid}: missing pre or post-phase {post_phase_rank} series, skipping.")
+            skipped += 1
+            continue
+
+        rows = boxes[boxes["Patient ID"] == pid]
+        if rows.empty:
+            skipped += 1
+            continue
+
+        pre = _load_series_volume(phases[0])
+        post = _load_series_volume(phases[post_phase_rank])
+        if pre.shape != post.shape:
+            logging.warning(f"[MRI] {pid}: phase shape mismatch {pre.shape} vs {post.shape}, skipping.")
+            skipped += 1
+            continue
+
+        subtraction = np.clip(post - pre, a_min=0, a_max=None)
+
+        mask = np.zeros(subtraction.shape, dtype=np.uint8)
+        for _, r in rows.iterrows():
+            bbox = {
+                # TCIA boxes are 1-indexed inclusive; create_mask/numpy slicing is
+                # 0-indexed exclusive on the end, so subtract 1 only from the starts.
+                "Start Slice": int(r["Start Slice"]) - 1, "End Slice": int(r["End Slice"]),
+                "Start Row": int(r["Start Row"]) - 1, "End Row": int(r["End Row"]),
+                "Start Column": int(r["Start Column"]) - 1, "End Column": int(r["End Column"]),
+            }
+            mask = np.logical_or(mask, create_mask(subtraction.shape, bbox)).astype(np.uint8)
+
+        subtraction = normalize_intensity(subtraction)
+        save_preprocessed(pid, subtraction, mask, output_dir, crop=crop, case_id=pid)
+        saved += 1
+        logging.info(f"[MRI] {pid}: {len(rows)} box(es), {int(mask.sum())} lesion voxels -> saved.")
+
+    logging.info(f"[MRI] Saved {saved} patients, skipped {skipped}.")
+    return saved, skipped
+
 
 # Example usage
 if __name__ == "__main__":
