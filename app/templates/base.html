@@ -3,44 +3,96 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Détection de cancer du sein par IRM</title>
+  <title>Détection de lésion par IRM — Research Use Only</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #0f1117; --card: #1a1d27; --fg: #e7e9ee; --muted: #9aa0ad;
-      --accent: #6ea8fe; --danger: #f26d6d; --ok: #57c78a; --border: #2a2e3a;
+      /* Tokens — voir plan.md, Partie 3 (brand guidelines) */
+      --bg: #0B0F14;
+      --surface: #141A22;
+      --surface-2: #1E2733;
+      --border: #2A3644;
+      --text: #E8EDF2;
+      --text-muted: #93A1B0;
+
+      --primary: #2FB6C9;
+      --primary-700: #1B7F8E;
+      --accent: #FF7A59;
+      --accent-2: #F2C14E;
+
+      --success: #3FB98A;
+      --warning: #E4B34A;
+      --danger: #E5544B;
+
+      --font-display: "Space Grotesk", system-ui, sans-serif;
+      --font-body: "Inter", system-ui, sans-serif;
+      --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+      --fs-xs: 0.75rem; --fs-sm: 0.875rem; --fs-md: 1rem;
+      --fs-lg: 1.25rem; --fs-xl: 1.5rem; --fs-2xl: 2rem;
+      --lh-body: 1.5; --lh-tight: 1.15;
+
+      --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px; --sp-8: 48px;
+
+      --radius-sm: 6px; --radius-md: 10px; --radius-lg: 16px;
+      --shadow-2: 0 8px 24px rgba(0,0,0,.45);
+      --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--primary);
     }
     * { box-sizing: border-box; }
     body {
-      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      background: var(--bg); color: var(--fg); line-height: 1.5;
+      margin: 0; font-family: var(--font-body); font-size: var(--fs-md);
+      background: var(--bg); color: var(--text); line-height: var(--lh-body);
     }
-    .wrap { max-width: 640px; margin: 0 auto; padding: 40px 20px; }
-    h1 { font-size: 1.5rem; margin: 0 0 4px; }
-    .sub { color: var(--muted); margin: 0 0 28px; font-size: .95rem; }
+    .wrap { max-width: 640px; margin: 0 auto; padding: var(--sp-6) var(--sp-4) var(--sp-8); }
+    h1 {
+      font-family: var(--font-display); font-weight: 600; line-height: var(--lh-tight);
+      font-size: var(--fs-xl); margin: 0 0 4px; letter-spacing: -0.01em;
+    }
+    .sub { color: var(--text-muted); margin: 0 0 var(--sp-5); font-size: var(--fs-sm); }
     .card {
-      background: var(--card); border: 1px solid var(--border);
-      border-radius: 14px; padding: 24px; margin-bottom: 18px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); padding: var(--sp-5); margin-bottom: var(--sp-4);
+      box-shadow: var(--shadow-2);
     }
     .badge {
-      display: inline-block; font-size: .75rem; padding: 2px 10px;
-      border-radius: 999px; border: 1px solid var(--border); color: var(--muted);
+      display: inline-block; font-family: var(--font-mono); font-size: var(--fs-xs);
+      padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border);
+      color: var(--text-muted); background: var(--surface-2);
     }
-    .disclaimer {
-      font-size: .8rem; color: var(--muted); border-top: 1px solid var(--border);
-      padding-top: 16px; margin-top: 8px;
+    .metric, code { font-family: var(--font-mono); }
+    a { color: var(--primary); }
+    a:hover { color: var(--primary-700); }
+    :focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+    .btn-primary {
+      background: var(--accent); color: #2A0F06; border: none;
+      padding: var(--sp-3) var(--sp-5); border-radius: var(--radius-md);
+      font-weight: 600; font-family: var(--font-body); font-size: var(--fs-md);
+      cursor: pointer; width: 100%;
     }
-    a { color: var(--accent); }
+    .btn-primary:hover { filter: brightness(1.08); }
+
+    .field-hint { color: var(--text-muted); font-size: var(--fs-xs); margin: var(--sp-3) 0 var(--sp-5); }
+
+    .ruo-banner {
+      background: color-mix(in srgb, var(--warning) 15%, var(--surface));
+      border: 1px solid var(--warning); color: var(--text);
+      font-size: var(--fs-xs); padding: var(--sp-3) var(--sp-4);
+      border-radius: var(--radius-sm); letter-spacing: .01em; margin-top: var(--sp-2);
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Détection de cancer du sein par IRM</h1>
-    <p class="sub">Envoyez un examen pour obtenir un verdict de détection.
+    <h1>Détection de lésion par IRM</h1>
+    <p class="sub">Envoyez un examen pour obtenir une localisation.
       Modèle actif : <span class="badge">{{ backend }}</span></p>
     {% block content %}{% endblock %}
-    <p class="disclaimer">
-      Outil de recherche/démonstration uniquement — n'est pas un dispositif médical
-      et ne doit pas être utilisé à des fins cliniques.
+    <p class="ruo-banner">
+      Research Use Only — Not for diagnostic use. Aucune décision clinique ne doit
+      reposer sur cet outil.
       {% if backend == "mock" %}Le moteur <strong>mock</strong> génère des résultats
       fictifs et ne lit pas l'image ; connectez le vrai modèle pour obtenir de véritables
       prédictions.{% endif %}

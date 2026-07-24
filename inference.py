@@ -15,6 +15,7 @@ needs a JVM (PySpark); the imaging path needs only ``torch`` + ``numpy``.
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 from typing import Mapping, Sequence, Union
@@ -147,6 +148,28 @@ def load_unet(checkpoint: str = DEFAULT_UNET_CKPT, base: int = 32, device=None,
     return model, device
 
 
+def load_dbt_dicom(path):
+    """Read a single (possibly multi-frame) DBT DICOM file into a normalised volume.
+
+    BCS-DBT series are stored as one multi-frame DICOM file per view (see
+    ``TransformData.preprocess_dbt_with_boxes``, which reads only the first ``.dcm``
+    in a series folder), so a single uploaded file is enough to reconstruct the full
+    ``(depth, H, W)`` stack. Intensities are normalised with
+    ``TransformData.normalize_intensity`` — the same convention used to build the
+    training data — so a raw upload is scored on the distribution the model saw at
+    training time, not the raw pixel values.
+    """
+    import pydicom
+
+    from TransformData import normalize_intensity
+
+    ds = pydicom.dcmread(path)
+    volume = ds.pixel_array.astype(np.float32)
+    if volume.ndim == 2:
+        volume = volume[None]
+    return normalize_intensity(volume)
+
+
 def _bounding_box(binary_mask):
     """Axis-aligned box ``(x, y, w, h)`` around the True pixels, or ``None`` if empty."""
     ys, xs = np.nonzero(binary_mask)
@@ -157,60 +180,20 @@ def _bounding_box(binary_mask):
     return (x0, y0, x1 - x0 + 1, y1 - y0 + 1)
 
 
-def predict_dbt(volume: Union[str, np.ndarray],
-                checkpoint: str = DEFAULT_UNET_CKPT,
-                image_size: int = 256,
-                threshold: float = 0.5,
-                model=None,
-                device=None,
-                architecture: str = "scratch",
-                encoder_name: str = "resnet34"):
-    """Localise a lesion in a preprocessed DBT volume with the trained U-Net.
+def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_offset=(0, 0, 0)):
+    """Shared slice-scan loop behind :func:`predict_dbt` and :func:`predict_dce_mri`.
 
-    Parameters
-    ----------
-    volume : str or np.ndarray
-        Path to a preprocessed ``.npz`` (uses its ``volume`` key, and ``crop_offset``
-        if present to map the box back to full-frame coordinates), or a raw
-        ``(depth, H, W)`` z-normalised volume array.
-    checkpoint, image_size, threshold : see training defaults.
-    model, device : optional preloaded ``load_unet(...)`` result, to score many
-        volumes without reloading the weights.
-
-    Returns
-    -------
-    dict
-        ``{"lesion_detected": bool, "confidence": float, "best_slice": int,
-        "box_xywh": (x, y, w, h) | None, "box_full_frame_xywh": ... | None,
-        "n_slices": int}``. ``confidence`` is the max lesion-probability over the
-        volume; ``best_slice`` is the slice achieving it (in the given volume's
-        indexing). Boxes are on the best slice at the original slice resolution.
+    Scores every axial slice of ``vol`` (a ``(depth, H, W)`` z-normalised array) with
+    ``model``, keeps the slice with the highest lesion probability, and returns its
+    bounding box both in the given volume's own indexing and mapped back to the
+    original (uncropped) frame via ``crop_offset`` (as stored by
+    ``TransformData.save_preprocessed``).
     """
     import torch
     import torch.nn.functional as F
 
-    crop_offset = (0, 0, 0)
-    if isinstance(volume, str):
-        with np.load(volume) as data:
-            vol = data["volume"].astype(np.float32)
-            if "crop_offset" in data.files:
-                crop_offset = tuple(int(v) for v in data["crop_offset"])
-    else:
-        vol = np.asarray(volume, dtype=np.float32)
-
-    if vol.ndim == 2:
-        vol = vol[None]
-    if vol.ndim != 3:
-        raise ValueError(f"Expected a (depth, H, W) volume, got shape {vol.shape}.")
-
-    if model is None:
-        model, device = load_unet(checkpoint, device=device,
-                                  architecture=architecture, encoder_name=encoder_name)
-    elif device is None:
-        device = next(model.parameters()).device
-
     depth, orig_h, orig_w = vol.shape
-    best_conf, best_slice, best_prob_map = -1.0, 0, None
+    best_conf, best_slice, best_prob_small = -1.0, 0, None
 
     with torch.no_grad():
         for z in range(depth):
@@ -218,12 +201,16 @@ def predict_dbt(volume: Union[str, np.ndarray],
             img = F.interpolate(img, size=(image_size, image_size),
                                 mode="bilinear", align_corners=False)
             prob = torch.sigmoid(model(img))
-            # Resize probabilities back to the slice's native resolution for the box.
-            prob_full = F.interpolate(prob, size=(orig_h, orig_w), mode="bilinear",
-                                      align_corners=False)[0, 0].cpu().numpy()
-            conf = float(prob_full.max())
+            conf = float(prob.max())
             if conf > best_conf:
-                best_conf, best_slice, best_prob_map = conf, z, prob_full
+                best_conf, best_slice, best_prob_small = conf, z, prob
+
+        # Only the winning slice needs the (potentially large) native-resolution
+        # map, since only its box is returned -- upsampling every slice to native
+        # resolution dominated runtime on full-frame (uncropped) uploads for no
+        # benefit (the max is already known from the small-scale map).
+        best_prob_map = F.interpolate(best_prob_small, size=(orig_h, orig_w),
+                                      mode="bilinear", align_corners=False)[0, 0].cpu().numpy()
 
     lesion_detected = best_conf >= threshold
     box = _bounding_box(best_prob_map >= threshold) if lesion_detected else None
@@ -241,6 +228,177 @@ def predict_dbt(volume: Union[str, np.ndarray],
         "box_full_frame_xywh": box_full,
         "n_slices": depth,
     }
+
+
+def _load_volume_and_offset(volume, raw_loader, raw_extensions):
+    """Resolve ``volume`` (path or array) to a ``(vol, crop_offset)`` pair.
+
+    ``.npz`` paths use their ``volume``/``crop_offset`` keys (as written by
+    ``TransformData.save_preprocessed``); paths ending in ``raw_extensions`` go
+    through ``raw_loader``; anything else is treated as an already-loaded array.
+    """
+    crop_offset = (0, 0, 0)
+    if isinstance(volume, str):
+        lower = volume.lower()
+        if lower.endswith(".npz"):
+            with np.load(volume) as data:
+                vol = data["volume"].astype(np.float32)
+                if "crop_offset" in data.files:
+                    crop_offset = tuple(int(v) for v in data["crop_offset"])
+        elif lower.endswith(raw_extensions):
+            vol = raw_loader(volume)
+        else:
+            raise ValueError(
+                f"Unsupported volume file {volume!r}: expected .npz or {raw_extensions}."
+            )
+    else:
+        vol = np.asarray(volume, dtype=np.float32)
+
+    if vol.ndim == 2:
+        vol = vol[None]
+    if vol.ndim != 3:
+        raise ValueError(f"Expected a (depth, H, W) volume, got shape {vol.shape}.")
+    return vol, crop_offset
+
+
+def predict_dbt(volume: Union[str, np.ndarray],
+                checkpoint: str = DEFAULT_UNET_CKPT,
+                image_size: int = 256,
+                threshold: float = 0.5,
+                model=None,
+                device=None,
+                architecture: str = "scratch",
+                encoder_name: str = "resnet34"):
+    """Localise a lesion in a preprocessed DBT volume with the trained U-Net.
+
+    Parameters
+    ----------
+    volume : str or np.ndarray
+        Path to a preprocessed ``.npz`` (uses its ``volume`` key, and ``crop_offset``
+        if present to map the box back to full-frame coordinates), a raw DBT
+        ``.dcm``/``.dicom`` file (single multi-frame series, normalised on the fly
+        via :func:`load_dbt_dicom`), or a raw ``(depth, H, W)`` z-normalised volume
+        array.
+    checkpoint, image_size, threshold : see training defaults.
+    model, device : optional preloaded ``load_unet(...)`` result, to score many
+        volumes without reloading the weights.
+
+    Returns
+    -------
+    dict
+        ``{"lesion_detected": bool, "confidence": float, "best_slice": int,
+        "box_xywh": (x, y, w, h) | None, "box_full_frame_xywh": ... | None,
+        "n_slices": int}``. ``confidence`` is the max lesion-probability over the
+        volume; ``best_slice`` is the slice achieving it (in the given volume's
+        indexing). Boxes are on the best slice at the original slice resolution.
+    """
+    vol, crop_offset = _load_volume_and_offset(volume, load_dbt_dicom, (".dcm", ".dicom"))
+
+    if model is None:
+        model, device = load_unet(checkpoint, device=device,
+                                  architecture=architecture, encoder_name=encoder_name)
+    elif device is None:
+        device = next(model.parameters()).device
+
+    return _localize_lesion(vol, model, device, image_size, threshold, crop_offset)
+
+
+DEFAULT_MRI_UNET_CKPT = os.path.join("results_mri", "unet_best.pt")
+
+
+def predict_dce_mri(volume: Union[str, np.ndarray],
+                    checkpoint: str = DEFAULT_MRI_UNET_CKPT,
+                    image_size: int = 256,
+                    threshold: float = 0.5,
+                    model=None,
+                    device=None,
+                    architecture: str = "scratch",
+                    encoder_name: str = "resnet34"):
+    """Localise a lesion in a preprocessed DCE-MRI subtraction volume with the
+    trained U-Net (see ``TransformData.preprocess_dce_mri_with_boxes``).
+
+    Parameters
+    ----------
+    volume : str or np.ndarray
+        Path to a preprocessed ``.npz`` (post-minus-pre subtraction volume, as
+        written by ``preprocess_dce_mri_with_boxes``) or a raw ``(depth, H, W)``
+        z-normalised subtraction array. Unlike DBT, there is no single-file raw
+        DICOM path here: DCE-MRI needs two whole series (pre + post-contrast) to
+        compute the subtraction, so a web upload must be the already-preprocessed
+        ``.npz``.
+    checkpoint, image_size, threshold : see training defaults. ``checkpoint``
+        defaults to the DCE-MRI checkpoint (``results_mri/unet_best.pt``), distinct
+        from the DBT one, since the two are trained on different modalities.
+    model, device : optional preloaded ``load_unet(...)`` result, to score many
+        volumes without reloading the weights.
+
+    Returns
+    -------
+    dict
+        Same contract as :func:`predict_dbt` (``lesion_detected``, ``confidence``,
+        ``best_slice``, ``box_xywh``, ``box_full_frame_xywh``, ``n_slices``).
+    """
+    vol, crop_offset = _load_volume_and_offset(volume, raw_loader=None, raw_extensions=())
+
+    if model is None:
+        model, device = load_unet(checkpoint, device=device,
+                                  architecture=architecture, encoder_name=encoder_name)
+    elif device is None:
+        device = next(model.parameters()).device
+
+    return _localize_lesion(vol, model, device, image_size, threshold, crop_offset)
+
+
+def render_overlay_png(volume: Union[str, np.ndarray], best_slice: int, box_xywh=None):
+    """Render the scored slice with the detected lesion box drawn on top, as PNG bytes.
+
+    Meant to be called right after :func:`predict_dbt`/:func:`predict_dce_mri` with
+    their own ``best_slice``/``box_xywh`` (the *local*, cropped-volume-relative box
+    -- not ``box_full_frame_xywh``), on the same ``.npz``/array that was scored.
+
+    ``best_slice`` is the *full-frame* index those functions return (offset by the
+    stored ``crop_offset``); this re-reads ``crop_offset`` from the ``.npz`` to map
+    it back to an index into the (already cropped) ``volume`` array actually stored
+    on disk, since that is what a demo upload has -- the original uncropped scan is
+    typically not around to re-load.
+    """
+    from PIL import Image, ImageDraw
+
+    crop_offset = (0, 0, 0)
+    if isinstance(volume, str):
+        with np.load(volume) as data:
+            vol = data["volume"].astype(np.float32)
+            if "crop_offset" in data.files:
+                crop_offset = tuple(int(v) for v in data["crop_offset"])
+    else:
+        vol = np.asarray(volume, dtype=np.float32)
+    if vol.ndim == 2:
+        vol = vol[None]
+
+    local_slice = max(0, min(best_slice - crop_offset[0], vol.shape[0] - 1))
+    img = vol[local_slice]
+
+    # Percentile stretch to 8-bit grayscale for display (the stored array is
+    # z-normalised, i.e. roughly zero-mean float, not in a displayable range).
+    lo, hi = np.percentile(img, [1, 99])
+    img = np.clip((img - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
+    pil_img = Image.fromarray((img * 255).astype(np.uint8), mode="L").convert("RGB")
+
+    if box_xywh is not None:
+        x, y, w, h = box_xywh
+        # Brand accent (--accent, #FF7A59 -- "rehaussement"/overlay lesion, per
+        # plan.md Partie 3) rather than an arbitrary red.
+        ImageDraw.Draw(pil_img).rectangle([x, y, x + w, y + h], outline=(255, 122, 89), width=2)
+
+    # Upscale small crops so the box is legible in the UI (nearest-neighbour to
+    # keep the pixelation honest rather than implying resolution that isn't there).
+    scale = max(1, 320 // max(pil_img.size))
+    if scale > 1:
+        pil_img = pil_img.resize((pil_img.width * scale, pil_img.height * scale), Image.NEAREST)
+
+    buf = io.BytesIO()
+    pil_img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 if __name__ == "__main__":

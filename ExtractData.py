@@ -385,6 +385,71 @@ def download_annotated_dbt_series(boxes_csv, max_patients=3, download_dir=DOWNLO
     return downloaded
 
 
+def download_dce_mri_series(patient_ids=None, max_patients=10,
+                            download_dir=os.path.join("tciaDownload", "duke_mri"),
+                            collection="Duke-Breast-Cancer-MRI", series_filter="dyn",
+                            max_gb=None):
+    """Download the DCE-MRI dynamic series (pre + post-contrast passes) for patients
+    in the Duke-Breast-Cancer-MRI collection.
+
+    Each patient carries several series (a T1 pre-contrast pass and multiple
+    post-contrast passes, e.g. ``ax dyn pre``, ``ax dyn 1st pass`` .. ``ax dyn 4th
+    pass``) plus unrelated series (T1 TSE, SEG). ``series_filter`` keeps only series
+    whose ``SeriesDescription`` contains this substring (case-insensitive), so only
+    the multiphase DCE stack is pulled.
+
+    ``patient_ids`` lets you target specific patients; when omitted the first
+    ``max_patients`` patients in the collection (by ``PatientID`` sort order) are
+    used. Downloading stops early once `download_dir` reaches `max_gb` gigabytes (if
+    set). Each series lands in its own ``SeriesInstanceUID`` subfolder, same layout
+    as `download_annotated_dbt_series`.
+    """
+    os.makedirs(download_dir, exist_ok=True)
+
+    if patient_ids is None:
+        all_series = nbia.getSeries(collection=collection)
+        patient_ids = sorted({s["PatientID"] for s in all_series})[:max_patients]
+    print(f"Patients to fetch: {len(patient_ids)} (cap: {max_gb} GB)")
+
+    existing = {name for name in os.listdir(download_dir)
+                if os.path.isdir(os.path.join(download_dir, name))}
+    max_bytes = int(max_gb * 1024 ** 3) if max_gb else None
+
+    downloaded = 0
+    for pid in patient_ids:
+        if max_bytes is not None and dir_size_bytes(download_dir) >= max_bytes:
+            print(f"Reached {max_gb} GB cap. Stopping downloads.")
+            break
+        try:
+            series = nbia.getSeries(collection=collection, patientId=pid)
+        except Exception as e:
+            print(f"[ERROR] getSeries failed for {pid}: {e}")
+            continue
+
+        dyn_series = [s for s in series
+                     if series_filter.lower() in (s.get("SeriesDescription") or "").lower()]
+        print(f"[INFO] {pid}: {len(dyn_series)} DCE series matching '{series_filter}'")
+
+        for s in dyn_series:
+            if max_bytes is not None and dir_size_bytes(download_dir) >= max_bytes:
+                print(f"Reached {max_gb} GB cap. Stopping downloads.")
+                break
+            uid = s.get("SeriesInstanceUID")
+            if uid in existing:
+                continue
+            try:
+                print(f"[DOWNLOAD] {pid} | {s.get('SeriesDescription')} | {uid} -> {download_dir}")
+                nbia.downloadSeries([s], path=download_dir)
+                existing.add(uid)
+                downloaded += 1
+            except Exception as e:
+                print(f"[ERROR] download {uid} failed: {e}")
+
+    total_gb = dir_size_bytes(download_dir) / 1024 ** 3
+    print(f"Downloaded {downloaded} new series into {download_dir} ({total_gb:.1f} GB total).")
+    return downloaded
+
+
 if __name__ == "__main__":
     # Download to the configured DOWNLOAD_DIR. Pass max_series/max_gb to limit volume.
     extract_dicom_mri_images()

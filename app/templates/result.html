@@ -1,38 +1,50 @@
 {% extends "base.html" %}
 {% block content %}
   {% set detected = result.lesion_detected %}
-  <div class="card" style="border-color: {{ 'var(--danger)' if detected else 'var(--ok)' }};">
-    <div style="font-size:.85rem; color:var(--muted);">Résultat pour {{ filename }}</div>
-    <div style="font-size:1.6rem; font-weight:800; margin:6px 0;
-                color: {{ 'var(--danger)' if detected else 'var(--ok)' }};">
+  <div class="card" style="border-color: {{ 'var(--danger)' if detected else 'var(--success)' }};">
+    <div style="font-size:var(--fs-sm); color:var(--text-muted);">Résultat pour {{ filename }}</div>
+    <div style="font-family:var(--font-display); font-size:var(--fs-2xl); font-weight:600; margin:6px 0;
+                color: {{ 'var(--danger)' if detected else 'var(--success)' }};">
       {{ 'Lésion suspecte détectée' if detected else 'Aucune lésion détectée' }}
     </div>
-    <div style="margin-top:8px;">
+    <div style="margin-top:var(--sp-2);">
       Confiance :
-      <strong>{{ '%.1f'|format(result.confidence * 100) }}%</strong>
+      <strong class="metric">{{ '%.1f'|format(result.confidence * 100) }}%</strong>
     </div>
-    <div style="height:10px; background:#0f1117; border-radius:6px; overflow:hidden;
-                margin-top:8px; border:1px solid var(--border);">
+    <div style="height:10px; background:var(--surface-2); border-radius:var(--radius-sm); overflow:hidden;
+                margin-top:var(--sp-2); border:1px solid var(--border);">
       <div style="height:100%; width: {{ result.confidence * 100 }}%;
-                  background: {{ 'var(--danger)' if detected else 'var(--ok)' }};"></div>
+                  background: {{ 'var(--danger)' if detected else 'var(--success)' }};"></div>
     </div>
   </div>
 
+  {% if overlay_data_uri %}
+  <div class="card">
+    <div style="font-weight:600; margin-bottom:var(--sp-3);">Coupe annotée</div>
+    <img src="{{ overlay_data_uri }}" alt="Coupe avec la zone détectée"
+         style="max-width:100%; display:block; border-radius:var(--radius-md); border:1px solid var(--border);">
+    <div style="color:var(--text-muted); font-size:var(--fs-xs); margin-top:var(--sp-3);">
+      Cadre = zone de plus forte confiance détectée par le modèle. Image recadrée/agrandie
+      pour la lisibilité, pas à l'échelle du volume complet.
+    </div>
+  </div>
+  {% endif %}
+
   {% if result.best_slice is not none or result.box_xywh or result.n_slices %}
   <div class="card">
-    <div style="font-weight:600; margin-bottom:8px;">Détails</div>
-    <table style="width:100%; border-collapse:collapse; font-size:.9rem;">
+    <div style="font-weight:600; margin-bottom:var(--sp-3);">Détails</div>
+    <table style="width:100%; border-collapse:collapse; font-size:var(--fs-sm);">
       {% if result.n_slices %}
-      <tr><td style="color:var(--muted); padding:4px 0;">Coupes</td>
-          <td style="text-align:right;">{{ result.n_slices }}</td></tr>{% endif %}
+      <tr><td style="color:var(--text-muted); padding:4px 0;">Coupes</td>
+          <td class="metric" style="text-align:right;">{{ result.n_slices }}</td></tr>{% endif %}
       {% if result.best_slice is not none %}
-      <tr><td style="color:var(--muted); padding:4px 0;">Anomalie à la coupe</td>
-          <td style="text-align:right;">{{ result.best_slice }}</td></tr>{% endif %}
+      <tr><td style="color:var(--text-muted); padding:4px 0;">Anomalie à la coupe</td>
+          <td class="metric" style="text-align:right;">{{ result.best_slice }}</td></tr>{% endif %}
       {% if result.box_xywh %}
-      <tr><td style="color:var(--muted); padding:4px 0;">Cadre englobant (x, y, l, h)</td>
-          <td style="text-align:right;">{{ result.box_xywh|join(', ') }}</td></tr>{% endif %}
-      <tr><td style="color:var(--muted); padding:4px 0;">Moteur</td>
-          <td style="text-align:right;">{{ result.backend }}</td></tr>
+      <tr><td style="color:var(--text-muted); padding:4px 0;">Cadre englobant (x, y, l, h)</td>
+          <td class="metric" style="text-align:right;">{{ result.box_xywh|join(', ') }}</td></tr>{% endif %}
+      <tr><td style="color:var(--text-muted); padding:4px 0;">Moteur</td>
+          <td style="text-align:right;"><span class="badge">{{ result.backend }}</span></td></tr>
     </table>
   </div>
   {% endif %}

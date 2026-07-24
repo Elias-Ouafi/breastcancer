@@ -16,4 +16,5 @@ itk>=5.4
 itkwidgets==0.32.6
 torch>=2.2  # imaging U-Net; install the wheel matching your platform/CUDA
 segmentation-models-pytorch>=0.3  # optional: imaging.train --architecture pretrained
+python-gdcm>=3.0  # fast JPEG2000 decode for raw DBT DICOM uploads (inference.load_dbt_dicom)
 Flask>=3.0  # MRI cancer-detection web app (app/)

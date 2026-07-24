@@ -87,6 +87,30 @@ class DbtUNetPredictor(Predictor):
         return result
 
 
+class DceMriUNetPredictor(Predictor):
+    """Real backend: the trained 2D U-Net via ``inference.predict_dce_mri``.
+
+    Trained on Duke-Breast-Cancer-MRI subtraction volumes (post minus pre-contrast),
+    distinct from the DBT U-Net above. Set ``MRI_APP_BACKEND=dce_mri`` to connect it
+    (the checkpoint at ``results_mri/unet_best.pt`` must exist). The upload must be a
+    preprocessed ``.npz`` (see ``TransformData.preprocess_dce_mri_with_boxes``) --
+    unlike DBT there is no single-file raw-DICOM path, since DCE-MRI needs two whole
+    series (pre + post-contrast) to build the subtraction.
+    """
+
+    name = "dce_mri"
+
+    def __init__(self, checkpoint: Optional[str] = None):
+        self.checkpoint = checkpoint
+
+    def predict(self, file_path: str) -> dict:
+        from inference import DEFAULT_MRI_UNET_CKPT, predict_dce_mri
+
+        result = predict_dce_mri(file_path, checkpoint=self.checkpoint or DEFAULT_MRI_UNET_CKPT)
+        result.setdefault("backend", self.name)
+        return result
+
+
 def get_predictor() -> Predictor:
     """Return the active backend.
 
@@ -96,4 +120,6 @@ def get_predictor() -> Predictor:
     backend = os.environ.get("MRI_APP_BACKEND", "mock").lower()
     if backend == "unet":
         return DbtUNetPredictor()
+    if backend == "dce_mri":
+        return DceMriUNetPredictor()
     return MockPredictor()

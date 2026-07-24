@@ -21,19 +21,22 @@ configurable, via `MRI_APP_PORT`.
 ## Connecting the real AI (later)
 
 The web layer only talks to a `Predictor` (see [`predictor.py`](predictor.py)).
-Two backends exist:
+Three backends exist:
 
 | Backend | Selected by | What it does |
 |---------|-------------|--------------|
 | `mock` (default) | — | Fabricates a plausible result; ignores pixels. |
-| `unet` | `MRI_APP_BACKEND=unet` | Runs the trained U-Net via `inference.predict_dbt`. |
+| `unet` | `MRI_APP_BACKEND=unet` | DBT lesion localisation via `inference.predict_dbt` (checkpoint `results/unet_best.pt`). |
+| `dce_mri` | `MRI_APP_BACKEND=dce_mri` | DCE-MRI lesion localisation via `inference.predict_dce_mri` (checkpoint `results_mri/unet_best.pt`), scored on the post-minus-pre subtraction volume. |
 
-To go live, set one env var (the checkpoint `results/unet_best.pt` must exist and the
-upload must be a preprocessed `.npz` volume):
+To go live, set one env var (the matching checkpoint must exist and the upload must
+be a preprocessed `.npz` volume -- for `dce_mri`, produced by
+`TransformData.preprocess_dce_mri_with_boxes`):
 
 ```bash
 # Windows PowerShell
-$env:MRI_APP_BACKEND = "unet"; python -m app.server
+$env:MRI_APP_BACKEND = "unet"; python -m app.server      # DBT
+$env:MRI_APP_BACKEND = "dce_mri"; python -m app.server   # DCE-MRI
 ```
 
 Nothing else in the app changes — the result contract

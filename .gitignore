@@ -46,9 +46,15 @@ venv.bak/
 data/
 tciaDownload/
 preprocessed_data/
+preprocessed_data_full/
+preprocessed_data_mri/
+preprocessed_data_mri_full/
 results/*.pt
 results/segmentation_*.csv
 results/tabular_model/
+results_full/
+results_mri/
+results_mri_full/
 
 # Logs
 *.log
