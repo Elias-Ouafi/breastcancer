@@ -49,12 +49,16 @@ preprocessed_data/
 preprocessed_data_full/
 preprocessed_data_mri/
 preprocessed_data_mri_full/
+preprocessed_data_mri_p2/
+slice_bank*/
 results/*.pt
 results/segmentation_*.csv
+results/smoke_test/
 results/tabular_model/
 results_full/
 results_mri/
 results_mri_full/
+results_mri_p2/
 
 # Logs
 *.log
@@ -83,4 +87,11 @@ var/
 wheels/
 *.egg-info/
 .installed.cfg
-*.egg 
+*.egg
+
+results_ablation_*/
+results_mri_bankbench/
+results_mri_p2_negfix/
+results_mri_bankbench2/
+results_mri_p2_negfix_smoke/
+demo_cases/

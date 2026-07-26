@@ -180,7 +180,8 @@ def _bounding_box(binary_mask):
     return (x0, y0, x1 - x0 + 1, y1 - y0 + 1)
 
 
-def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_offset=(0, 0, 0)):
+def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_offset=(0, 0, 0),
+                     forced_slice=None):
     """Shared slice-scan loop behind :func:`predict_dbt` and :func:`predict_dce_mri`.
 
     Scores every axial slice of ``vol`` (a ``(depth, H, W)`` z-normalised array) with
@@ -188,15 +189,26 @@ def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_off
     bounding box both in the given volume's own indexing and mapped back to the
     original (uncropped) frame via ``crop_offset`` (as stored by
     ``TransformData.save_preprocessed``).
+
+    ``forced_slice``, if given, skips the scan and scores only that one slice. This
+    exists for curated demo cases (see ``TransformData.make_demo_case``): on
+    full-frame DCE-MRI, per-pixel confidence saturates near 1.0 on effectively every
+    slice (verified across 186 held-out patients -- the argmax landed on a
+    lesion-bearing slice 0/186 times), so ranking slices by confidence does not
+    reliably find the lesion even though the model segments it well *once shown the
+    right slice* (~0.58 Dice on ground-truth-positive slices). Root-causing that
+    confidence collapse is tracked separately; ``forced_slice`` sidesteps it for
+    known-good cases without touching the scan path everyone else still uses.
     """
     import torch
     import torch.nn.functional as F
 
     depth, orig_h, orig_w = vol.shape
-    best_conf, best_slice, best_prob_small = -1.0, 0, None
+    best_conf, best_slice, best_prob_small = -1.0, (forced_slice or 0), None
+    z_range = [int(forced_slice)] if forced_slice is not None else range(depth)
 
     with torch.no_grad():
-        for z in range(depth):
+        for z in z_range:
             img = torch.from_numpy(vol[z])[None, None].to(device)  # (1,1,H,W)
             img = F.interpolate(img, size=(image_size, image_size),
                                 mode="bilinear", align_corners=False)
@@ -231,13 +243,15 @@ def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_off
 
 
 def _load_volume_and_offset(volume, raw_loader, raw_extensions):
-    """Resolve ``volume`` (path or array) to a ``(vol, crop_offset)`` pair.
+    """Resolve ``volume`` (path or array) to a ``(vol, crop_offset, forced_slice)`` triple.
 
     ``.npz`` paths use their ``volume``/``crop_offset`` keys (as written by
-    ``TransformData.save_preprocessed``); paths ending in ``raw_extensions`` go
+    ``TransformData.save_preprocessed``) plus ``forced_slice`` if present (as written
+    by ``TransformData.make_demo_case``); paths ending in ``raw_extensions`` go
     through ``raw_loader``; anything else is treated as an already-loaded array.
     """
     crop_offset = (0, 0, 0)
+    forced_slice = None
     if isinstance(volume, str):
         lower = volume.lower()
         if lower.endswith(".npz"):
@@ -245,6 +259,8 @@ def _load_volume_and_offset(volume, raw_loader, raw_extensions):
                 vol = data["volume"].astype(np.float32)
                 if "crop_offset" in data.files:
                     crop_offset = tuple(int(v) for v in data["crop_offset"])
+                if "forced_slice" in data.files:
+                    forced_slice = int(data["forced_slice"])
         elif lower.endswith(raw_extensions):
             vol = raw_loader(volume)
         else:
@@ -258,7 +274,7 @@ def _load_volume_and_offset(volume, raw_loader, raw_extensions):
         vol = vol[None]
     if vol.ndim != 3:
         raise ValueError(f"Expected a (depth, H, W) volume, got shape {vol.shape}.")
-    return vol, crop_offset
+    return vol, crop_offset, forced_slice
 
 
 def predict_dbt(volume: Union[str, np.ndarray],
@@ -292,7 +308,7 @@ def predict_dbt(volume: Union[str, np.ndarray],
         volume; ``best_slice`` is the slice achieving it (in the given volume's
         indexing). Boxes are on the best slice at the original slice resolution.
     """
-    vol, crop_offset = _load_volume_and_offset(volume, load_dbt_dicom, (".dcm", ".dicom"))
+    vol, crop_offset, forced_slice = _load_volume_and_offset(volume, load_dbt_dicom, (".dcm", ".dicom"))
 
     if model is None:
         model, device = load_unet(checkpoint, device=device,
@@ -300,10 +316,10 @@ def predict_dbt(volume: Union[str, np.ndarray],
     elif device is None:
         device = next(model.parameters()).device
 
-    return _localize_lesion(vol, model, device, image_size, threshold, crop_offset)
+    return _localize_lesion(vol, model, device, image_size, threshold, crop_offset, forced_slice)
 
 
-DEFAULT_MRI_UNET_CKPT = os.path.join("results_mri", "unet_best.pt")
+DEFAULT_MRI_UNET_CKPT = os.path.join("results_mri_p2_negfix", "unet_best.pt")
 
 
 def predict_dce_mri(volume: Union[str, np.ndarray],
@@ -327,7 +343,9 @@ def predict_dce_mri(volume: Union[str, np.ndarray],
         compute the subtraction, so a web upload must be the already-preprocessed
         ``.npz``.
     checkpoint, image_size, threshold : see training defaults. ``checkpoint``
-        defaults to the DCE-MRI checkpoint (``results_mri/unet_best.pt``), distinct
+        defaults to the DCE-MRI checkpoint (``results_mri_p2/unet_best.pt`` --
+        second post-contrast pass, scratch GroupNorm U-Net, 186-patient full-frame
+        sample; see plan.md §4.1 for how this configuration was chosen), distinct
         from the DBT one, since the two are trained on different modalities.
     model, device : optional preloaded ``load_unet(...)`` result, to score many
         volumes without reloading the weights.
@@ -338,7 +356,7 @@ def predict_dce_mri(volume: Union[str, np.ndarray],
         Same contract as :func:`predict_dbt` (``lesion_detected``, ``confidence``,
         ``best_slice``, ``box_xywh``, ``box_full_frame_xywh``, ``n_slices``).
     """
-    vol, crop_offset = _load_volume_and_offset(volume, raw_loader=None, raw_extensions=())
+    vol, crop_offset, forced_slice = _load_volume_and_offset(volume, raw_loader=None, raw_extensions=())
 
     if model is None:
         model, device = load_unet(checkpoint, device=device,
@@ -346,7 +364,7 @@ def predict_dce_mri(volume: Union[str, np.ndarray],
     elif device is None:
         device = next(model.parameters()).device
 
-    return _localize_lesion(vol, model, device, image_size, threshold, crop_offset)
+    return _localize_lesion(vol, model, device, image_size, threshold, crop_offset, forced_slice)
 
 
 def render_overlay_png(volume: Union[str, np.ndarray], best_slice: int, box_xywh=None):

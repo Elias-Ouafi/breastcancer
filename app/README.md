@@ -27,7 +27,7 @@ Three backends exist:
 |---------|-------------|--------------|
 | `mock` (default) | — | Fabricates a plausible result; ignores pixels. |
 | `unet` | `MRI_APP_BACKEND=unet` | DBT lesion localisation via `inference.predict_dbt` (checkpoint `results/unet_best.pt`). |
-| `dce_mri` | `MRI_APP_BACKEND=dce_mri` | DCE-MRI lesion localisation via `inference.predict_dce_mri` (checkpoint `results_mri/unet_best.pt`), scored on the post-minus-pre subtraction volume. |
+| `dce_mri` | `MRI_APP_BACKEND=dce_mri` | DCE-MRI lesion localisation via `inference.predict_dce_mri` (checkpoint `results_mri_p2_negfix/unet_best.pt` -- 2nd post-contrast pass, scratch GroupNorm U-Net, 186-patient sample; see `plan.md` §4.1), scored on the post-minus-pre subtraction volume. |
 
 To go live, set one env var (the matching checkpoint must exist and the upload must
 be a preprocessed `.npz` volume -- for `dce_mri`, produced by
@@ -38,6 +38,15 @@ be a preprocessed `.npz` volume -- for `dce_mri`, produced by
 $env:MRI_APP_BACKEND = "unet"; python -m app.server      # DBT
 $env:MRI_APP_BACKEND = "dce_mri"; python -m app.server   # DCE-MRI
 ```
+
+**Known limitation (`dce_mri` backend, see `plan.md` §4.2):** automatic slice
+selection on a raw full-volume upload does not reliably find the lesion yet
+(verified 0/186 on held-out patients — the model segments well once shown the right
+slice, it just can't find that slice unassisted). For a demo that works every time,
+upload one of the curated cases in `demo_cases/` (regenerate with
+`TransformData.make_demo_case`, which pins a verified-good slice via a
+`forced_slice` key read automatically by `inference.predict_dce_mri`) rather than an
+arbitrary patient volume.
 
 Nothing else in the app changes — the result contract
 (`lesion_detected`, `confidence`, `best_slice`, `box_xywh`, `n_slices`) is identical.
