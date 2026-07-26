@@ -144,6 +144,19 @@ class FocalTverskyLoss(nn.Module):
         self.eps = eps
 
     def forward(self, logits, target):
-        probs = torch.sigmoid(logits)
-        tversky = tversky_index(probs, target, self.alpha, self.beta, self.eps)
-        return (1.0 - tversky).clamp_min(self.eps) ** self.gamma
+        # Force fp32 regardless of an enclosing torch.amp.autocast context. The
+        # fractional power below (gamma < 1) has gradient d/dx[x^gamma] = gamma *
+        # x^(gamma-1), which diverges as x -> 0 -- and x = (1 - tversky) does hit
+        # near-zero often once training sees enough easy, well-predicted negative
+        # slices (e.g. after raising --neg-per-pos). fp16's limited precision near
+        # zero turns that steep-but-finite gradient into an outright NaN; observed
+        # in practice as train_loss -> nan and val Dice collapsing to 0 within one
+        # epoch once neg_per_pos went from 2 to 8. The rest of the model (forward,
+        # backward through the conv layers) stays in fp16 for speed -- only this
+        # numerically sensitive tail is exempted.
+        with torch.autocast(device_type=logits.device.type, enabled=False):
+            logits = logits.float()
+            target = target.float()
+            probs = torch.sigmoid(logits)
+            tversky = tversky_index(probs, target, self.alpha, self.beta, self.eps)
+            return (1.0 - tversky).clamp_min(self.eps) ** self.gamma

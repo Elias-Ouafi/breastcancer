@@ -32,6 +32,9 @@ except ImportError:  # pragma: no cover - fallback for direct script execution
     from unet import build_model
 
 
+_DEFAULT_OUTPUT_DIR = "results"
+
+
 def evaluate(model, loader, device, threshold=0.5):
     """Return mean localisation Dice and IoU over ``loader`` (empty loader -> NaN).
 
@@ -58,12 +61,54 @@ def evaluate(model, loader, device, threshold=0.5):
     return {"dice": dice_sum / count, "iou": iou_sum / count}
 
 
+def _make_bank_loaders(args, train_paths, val_paths, test_paths):
+    """Build loaders backed by a memmapped slice bank (see ``imaging.slicebank``).
+
+    Used when ``--slice-bank`` is set. The bank is built once from every split's
+    volumes (the split itself is still by patient, and each split only ever reads its
+    own ``case_id``s, so no leakage is introduced by sharing one bank file).
+    """
+    from .slicebank import SliceBankDataset, build_slice_bank, case_ids_for_paths
+
+    all_paths = list(train_paths) + list(val_paths) + list(test_paths)
+    print(f"Building/reusing slice bank at {args.slice_bank} ...")
+    build_slice_bank(all_paths, args.slice_bank, image_size=args.image_size)
+
+    train_ds = SliceBankDataset(args.slice_bank, case_ids=case_ids_for_paths(train_paths),
+                                positive_only=args.positive_only,
+                                neg_per_pos=args.neg_per_pos, seed=args.seed,
+                                augment=not args.no_augment)
+    if not len(train_ds):
+        raise RuntimeError("No training slices found in the slice bank.")
+    print(f"Training slices: {len(train_ds)} "
+          f"(neg_per_pos={args.neg_per_pos}, positive_only={args.positive_only})")
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
+                              num_workers=args.num_workers)
+
+    val_loader = None
+    if val_paths:
+        val_ds = SliceBankDataset(args.slice_bank, case_ids=case_ids_for_paths(val_paths),
+                                  positive_only=True)
+        val_loader = DataLoader(val_ds, batch_size=args.batch_size, num_workers=args.num_workers)
+
+    test_loader = None
+    if test_paths:
+        test_ds = SliceBankDataset(args.slice_bank, case_ids=case_ids_for_paths(test_paths),
+                                   positive_only=True)
+        test_loader = DataLoader(test_ds, batch_size=args.batch_size, num_workers=args.num_workers)
+
+    return train_loader, val_loader, test_loader, len(train_ds)
+
+
 def _make_loaders(args):
     """Build train/val/test DataLoaders from the preprocessed .npz files."""
     train_paths, val_paths, test_paths = split_npz_by_patient(
         args.data_dir, val_frac=args.val_frac, test_frac=args.test_frac, seed=args.seed
     )
     print(f"Cases -> train: {len(train_paths)}, val: {len(val_paths)}, test: {len(test_paths)}")
+
+    if args.slice_bank:
+        return _make_bank_loaders(args, train_paths, val_paths, test_paths)
 
     train_ds = MRISliceDataset(train_paths, image_size=args.image_size,
                                positive_only=args.positive_only,
@@ -109,6 +154,13 @@ def train(args):
 
     if args.smoke_test:
         train_loader, val_loader, test_loader, n_train = _make_smoke_loaders(args)
+        # A smoke run trains on random tensors, so its checkpoint is garbage. Keep it
+        # out of the default --output-dir: writing there silently destroyed a real
+        # trained checkpoint (results/unet_best.pt, the DBT model the demo app serves)
+        # simply by running --smoke-test with no other flags.
+        if args.output_dir == _DEFAULT_OUTPUT_DIR:
+            args.output_dir = os.path.join(_DEFAULT_OUTPUT_DIR, "smoke_test")
+            print(f"Smoke test: writing throwaway artefacts to {args.output_dir}")
     else:
         train_loader, val_loader, test_loader, n_train = _make_loaders(args)
 
@@ -127,6 +179,16 @@ def train(args):
         optimizer, mode="max", factor=args.lr_factor, patience=args.lr_patience
     )
 
+    # Mixed precision: runs the forward/backward in fp16 on the tensor cores and keeps
+    # a fp32 master copy of the weights, with a loss scaler to stop small gradients
+    # underflowing. Standard practice for CUDA segmentation training -- it cuts step
+    # time and activation memory without changing the maths the optimiser sees. Off on
+    # CPU (no benefit) and skippable via --no-amp if a numerical issue is ever suspected.
+    use_amp = args.amp and device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    if use_amp:
+        print("Mixed precision (AMP): enabled")
+
     os.makedirs(args.output_dir, exist_ok=True)
     metrics_path = os.path.join(args.output_dir, "segmentation_metrics.csv")
     ckpt_path = os.path.join(args.output_dir, "unet_best.pt")
@@ -143,13 +205,18 @@ def train(args):
             for img, msk in train_loader:
                 img, msk = img.to(device), msk.to(device)
                 optimizer.zero_grad()
-                loss = criterion(model(img), msk)
-                loss.backward()
+                with torch.amp.autocast("cuda", enabled=use_amp):
+                    loss = criterion(model(img), msk)
+                scaler.scale(loss).backward()
+                # Unscale before clipping so the threshold applies to true gradient
+                # norms, not the loss-scaled ones.
+                scaler.unscale_(optimizer)
                 # Caps how much any single noisy batch (tiny lesion fraction, small
                 # batch size) can move the weights, the other half of the fix for
                 # the Dice swings described above.
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 running += loss.item() * img.size(0)
 
             train_loss = running / max(1, n_train)
@@ -195,7 +262,8 @@ def train(args):
 def build_arg_parser():
     p = argparse.ArgumentParser(description="Train a 2D U-Net for MRI lesion localisation.")
     p.add_argument("--data-dir", default="preprocessed_data", help="Folder of preprocessed .npz volumes.")
-    p.add_argument("--output-dir", default="results", help="Where to write metrics and checkpoints.")
+    p.add_argument("--output-dir", default=_DEFAULT_OUTPUT_DIR,
+                   help="Where to write metrics and checkpoints.")
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--lr", type=float, default=1e-3,
@@ -263,6 +331,14 @@ def build_arg_parser():
                    help="Disable training-time augmentation (flips, small rotation/scale, "
                         "gamma jitter). Augmentation is on by default to help the small "
                         "annotated DBT set generalise.")
+    p.add_argument("--slice-bank", default=None,
+                   help="Directory for a memmapped slice bank (see imaging.slicebank). "
+                        "Strongly recommended on full-frame volumes: reading slices "
+                        "straight from the compressed .npz re-inflates a whole volume "
+                        "(~0.2s) per shuffled access, which starved the GPU at ~5-28%% "
+                        "utilisation and ~17 min/epoch. The bank pays that cost once.")
+    p.add_argument("--no-amp", dest="amp", action="store_false", default=True,
+                   help="Disable CUDA mixed precision (enabled by default on GPU).")
     p.add_argument("--smoke-test", action="store_true",
                    help="Run the loop on random tensors (no real data) to validate the pipeline.")
     return p

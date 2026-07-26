@@ -92,10 +92,19 @@ class DceMriUNetPredictor(Predictor):
 
     Trained on Duke-Breast-Cancer-MRI subtraction volumes (post minus pre-contrast),
     distinct from the DBT U-Net above. Set ``MRI_APP_BACKEND=dce_mri`` to connect it
-    (the checkpoint at ``results_mri/unet_best.pt`` must exist). The upload must be a
-    preprocessed ``.npz`` (see ``TransformData.preprocess_dce_mri_with_boxes``) --
-    unlike DBT there is no single-file raw-DICOM path, since DCE-MRI needs two whole
-    series (pre + post-contrast) to build the subtraction.
+    (the checkpoint at ``results_mri_p2_negfix/unet_best.pt`` must exist -- second
+    post-contrast pass, scratch GroupNorm U-Net, 186-patient full-frame sample; see
+    plan.md §4.1). The upload must be a preprocessed ``.npz`` (see
+    ``TransformData.preprocess_dce_mri_with_boxes``) -- unlike DBT there is no
+    single-file raw-DICOM path, since DCE-MRI needs two whole series (pre +
+    post-contrast) to build the subtraction.
+
+    KNOWN LIMITATION (plan.md §4.2): automatic slice selection does not yet work on
+    a raw full-volume upload -- verified 0/186 on held-out patients, the model's
+    confidence saturates on essentially every slice. It segments well once shown the
+    right slice, it just cannot find that slice on its own yet. Use
+    ``TransformData.make_demo_case`` to pin a verified-good ``forced_slice`` for
+    reliable demo cases (see ``demo_cases/``) until that ranking problem is fixed.
     """
 
     name = "dce_mri"

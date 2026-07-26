@@ -405,7 +405,7 @@ Backlog priorisé à partir de l'état réel du dépôt (voir synthèse en tête
 | Tâche | Est. | Critère de « fait » |
 |-------|:---:|------|
 | ✅ Diagnostiquer la confiance à 1.0 | 0,5 j | **Cause identifiée** : `preprocess_dce_mri_with_boxes` utilise `crop=True` par défaut (comme le pipeline DBT), qui recadre chaque volume à la ROI de la lésion + marge de 16 voxels. Résultat : des volumes minuscules (ex. 45×72×70) où 29 % des coupes contiennent déjà la lésion — le modèle n'apprend qu'à localiser *dans un patch déjà centré sur la cible*, une tâche artificiellement facile. Confirmé sur les **9 patients du vrai split de test** (jamais vus à l'entraînement) : confiance = 1.0000 sur 9/9, pas un hasard sur 2 cas. C'est exactement la mise en garde déjà documentée dans le code DBT existant (`crop` docstring, `TransformData.py`) — elle s'applique aussi au MRI. **Fix retenu** : ré-entraîner avec `crop=False` (volumes pleine trame) en même temps que l'élargissement de l'échantillon (tâche suivante). |
-| Élargir l'échantillon d'entraînement (64 → ~150-200 patients Duke-Breast-Cancer-MRI) et ré-entraîner | 1 j | Nouveau Dice/IoU test calculé sur un split plus large ; chiffre accompagné d'un intervalle approximatif (ex. bootstrap sur le split test), pas un point unique présenté comme définitif |
+| ✅ Élargir l'échantillon d'entraînement (64 → ~150-200 patients) et ré-entraîner | 1 j | **Fait** : 60 Go téléchargés, **186 patients** préprocessés en pleine trame. Voir §4.1 pour les résultats et les optimisations d'entraînement appliquées. Reste ouvert : l'intervalle de confiance (bootstrap sur le split test) n'est pas encore calculé — à faire avant d'avancer un chiffre en pitch. |
 | Figer 3 cas de démo garantis à froid (sélectionnés, re-testés plusieurs fois, jamais d'échec) | 0,5 j | 3 `.npz` identifiés + scriptés (`scripts/demo_cases.py` ou équivalent), testés 3 fois de suite sans erreur, overlay visuellement convaincant sur chacun |
 | Test réel dans un navigateur interactif (upload via le formulaire, pas seulement `curl`) | 0,5 j | Parcours complet (upload → overlay → détails) validé à la main ou via un outil d'automation fonctionnel, captures d'écran à l'appui ; aucun bug JS/CSS non détecté par les tests HTTP directs |
 
@@ -429,3 +429,141 @@ Backlog priorisé à partir de l'état réel du dépôt (voir synthèse en tête
 **Chemin critique vers un MVP pitchable** : diagnostic de la confiance → échantillon élargi + ré-entraînement →
 3 cas de démo figés → test navigateur réel. Le reste (P1/P2) améliore la crédibilité et le confort mais
 n'empêche pas un premier pitch fonctionnel.
+
+---
+
+### 4.1 Optimisation entraînement & préprocessing (2026-07-26)
+
+Revue de littérature puis application de ce qui tient sur ces données. **Ce qui a été mesuré, pas supposé.**
+
+#### Appliqué et validé
+
+| Levier | Source / justification | Résultat mesuré |
+|--------|------------------------|-----------------|
+| **Banque de coupes memmap** (`imaging/slicebank.py`, `--slice-bank`) | Diagnostic local : lire une coupe ré-inflatait un `.npz` entier (0,20 s mesuré) avec un cache de 4 volumes sur 130 mélangés → GPU à 5-28 % d'utilisation. La banque paie la décompression une seule fois dans un memmap plat. | **143 s/époque contre 1020 s, soit 7,1×.** 30 époques : 8,5 h → 1,2 h. C'est ce qui rend les ablations abordables. |
+| **2ᵉ passe post-contraste** au lieu de la 1ʳᵉ (`post_phase_rank=2`) | Zhou et al., [PMC10658935](https://pmc.ncbi.nlm.nih.gov/articles/PMC10658935/) : comparaison frontale sur cette tâche exacte, 2ᵉ soustraction > 1ʳᵉ (DSC p<0,05, 2D et 3D). Vérifié ici : les deux phases existent pour les mêmes 186 patients, donc zéro coût en échantillon. | ⚠️ **N'a pas répliqué ici** : 0,552 contre 0,550 en phase 1, soit +0,001 — du bruit. Voir l'encadré ci-dessous. Conservé comme défaut (aucun coût, et cohérent avec la littérature) mais **ne pas le présenter comme un gain**. |
+| **Précision mixte AMP** (`torch.amp`, `--no-amp` pour désactiver) | Pratique standard CUDA. `unscale_` avant le clipping pour que le seuil porte sur les vraies normes de gradient. | Actif, aucune instabilité numérique observée sur 30 époques. |
+| **U-Net 2D conservé** | Même source (PMC10658935) : leur 2D (DSC 0,806 sur masses) bat leur 3D (0,767). | Aucun changement nécessaire — l'architecture existante est le bon choix. |
+
+#### Écarté sur preuve — encodeur ImageNet pré-entraîné
+
+La littérature le recommande pour les petits jeux de données, et le code le supportait déjà
+(`--architecture pretrained`). **Il s'effondre ici** : Dice validation à 0,000 de l'époque 10 à 30,
+sans récupération. Cause vérifiée : le U-Net resnet34 de `smp` contient **46 couches BatchNorm**
+(contre 0 dans le modèle from-scratch, qui utilise 18 GroupNorm). C'est exactement le mode d'échec
+déjà documenté dans `imaging/unet.py` : avec une fraction de lésion minuscule et de petits batches,
+les statistiques BatchNorm ne convergent jamais vers celles de l'inférence. Dice test 0,414 (issu
+d'un checkpoint précoce sauvé avant l'effondrement) contre 0,467 pour le from-scratch.
+
+> **Piste restante si besoin** : convertir les BatchNorm en GroupNorm tout en gardant les poids
+> convolutifs pré-entraînés — récupère le prior ImageNet sans l'instabilité. Non testé.
+
+#### Non appliqué (coût > bénéfice attendu à ce stade)
+
+Correction de champ N4 et recadrage sur la **région mammaire** (à ne pas confondre avec le recadrage
+sur la lésion, qui lui trichait) — [PMC9889463](https://pmc.ncbi.nlm.nih.gov/articles/PMC9889463/)
+atteint DSC 0,781, comparable à l'accord inter-radiologue (0,778), avec ce préprocessing. Coûteux en
+calcul ; à déclencher seulement si le Dice plafonne (voir P2).
+
+#### Comparaison des configurations (186 patients, pleine trame, 30 époques, config identique)
+
+| Configuration | Dice test | IoU test | Pic Dice val |
+|---------------|:---------:|:--------:|:------------:|
+| Phase 1 + encodeur pré-entraîné | 0,414 | 0,300 | effondré (0,000 dès l'ép. 10) |
+| Phase 1 + GroupNorm (contrôle) | 0,550 | 0,417 | **0,655** |
+| Phase 2 + GroupNorm (retenue) | 0,552 | 0,418 | 0,618 |
+
+> **Le changement de phase n'a rien apporté de mesurable.** L'écart phase 2 − phase 1 est de
+> **+0,001 sur le Dice test**, et le pic de validation est même *meilleur* en phase 1 (0,655 contre
+> 0,618). Le résultat de Zhou et al. (p<0,05) **ne réplique pas sur nos données**. Explication la
+> plus plausible : leurs masques sont des contours experts, où la conspicuité fine de la lésion
+> compte ; les nôtres sont des boîtes englobantes, une cible bien plus grossière qui absorbe ce
+> genre de différence. Un effet réel mais petit serait aussi invisible sur un split test de ~28
+> patients. **À retenir : le seul gain franc de cette session est l'accélération 7,1×, qui est un
+> gain d'ingénierie, pas de précision. La précision reste à ~0,55 dans toutes les configurations
+> viables.**
+
+> **Lecture honnête de ces chiffres.** Le Dice n'est pas comparable à la littérature (~0,80) : nos
+> masques sont des **boîtes englobantes** TCIA, pas des contours fins, ce qui plafonne mécaniquement
+> le Dice atteignable. Ces valeurs servent à comparer nos configurations entre elles, pas à se
+> mesurer à l'état de l'art. Aucun de ces chiffres ne doit être présenté comme une performance
+> clinique.
+
+#### Incident à noter
+
+Le smoke test (`--smoke-test`) écrivait par défaut dans `--output-dir results`, ce qui a **écrasé
+`results/unet_best.pt`**, le checkpoint DBT servi par l'app en backend `unet`. Les données sources
+(`preprocessed_data/`, 147 volumes) sont intactes, donc le modèle est ré-entraînable, mais il est
+actuellement perdu. Correctif appliqué : un smoke run écrit désormais dans `results/smoke_test/`.
+**À faire** : ré-entraîner le modèle DBT si le backend `unet` doit resservir.
+
+---
+
+### 4.2 Échec de la localisation automatique sur volume complet — et contournement (2026-07-26)
+
+**Constat, vérifié sur les 186 patients, pas une hypothèse** : le pipeline choisi pour le MVP
+(Phase 2 + GroupNorm) **ne trouve jamais tout seul la bonne coupe** dans un volume complet.
+`predict_dce_mri` scanne les ~150-200 coupes d'un volume et garde celle où la confiance (probabilité
+max d'un pixel) est la plus haute. Sur les 186 patients : **0/186** cette coupe tombe sur une coupe
+contenant réellement la lésion.
+
+**Cause identifiée** : la confiance du modèle est saturée à ~1,0 sur *chaque* coupe du volume, y
+compris les coupes vides en bordure — pas de signal discriminant. Ce n'est pas propre à un seul
+pixel isolé : l'aire moyenne de la région prédite au-dessus du seuil est quasi identique sur les
+coupes avec lésion (1228,6 px) et sans (1228,3 px). Deux corrections tentées, aucune n'a résolu le
+problème :
+
+1. **Ratio négatif réaliste** (`neg_per_pos` 2 → 8, pour se rapprocher du ratio réel ~1:8 d'un volume
+   complet) : Dice sur coupes positives amélioré (0,552 → 0,580), mais localisation réelle **toujours
+   0/186**. La métrique d'entraînement s'est améliorée sans que le vrai problème bouge — piège à
+   retenir : le Dice mesuré en `positive_only=True` ne dit rien de la capacité à *trouver* la coupe.
+2. **Bug de NaN découvert en cours de route** : `FocalTverskyLoss` (`(1-tversky).clamp_min(eps) **
+   gamma`, gamma=0,75) a un gradient qui diverge quand `(1-tversky) → 0`, ce qui devient fréquent avec
+   plus de coupes négatives faciles. Sous AMP (fp16), ça produit un NaN qui finit par corrompre les
+   poids (effondrement Dice → 0,000, irréversible). **Corrigé** : la perte force maintenant un calcul
+   en fp32 (`imaging/metrics.py`, `FocalTverskyLoss.forward`), indépendamment du contexte autocast
+   englobant. Le correctif a retardé la divergence (époque 15 au lieu de 11) mais ne l'a pas éliminée
+   — la source résiduelle est probablement un débordement fp16 dans le forward pass du modèle
+   lui-même, pas seulement dans la perte. Non résolu ; le checkpoint sauvegardé avant la divergence
+   reste valide (la logique de sauvegarde ne retient que la meilleure époque lissée).
+
+**Ce que ça signifie concrètement** : le modèle segmente correctement une lésion *quand on lui
+montre la bonne coupe* (Dice 0,58 sur coupes positives, IoU jusqu'à 0,83 sur les meilleurs cas
+vérifiés manuellement), mais ne sait pas la trouver seul dans un volume brut. C'est un problème de
+sélection, pas de segmentation.
+
+**Contournement retenu pour le MVP** : mode « coupe figée ». `TransformData.make_demo_case(source,
+out, slice_index)` copie un `.npz` en y ajoutant une clé `forced_slice` ; `inference._localize_lesion`
+détecte cette clé et évalue uniquement cette coupe au lieu de scanner tout le volume. Trois cas ont
+été sélectionnés en évaluant le modèle sur la coupe la plus représentative de la lésion (aire de
+masque maximale) pour chaque patient, puis en retenant les 3 meilleurs par IoU réel :
+
+| Cas | Patient | Coupe | IoU (coupe forcée) | Cadre |
+|-----|---------|:-----:|:-------------------:|-------|
+| 1 | Breast_MRI_135 | 52 | 0,830 | 39×42 px |
+| 2 | Breast_MRI_105 | 62 | 0,738 | 42×44 px |
+| 3 | Breast_MRI_079 | 104 | 0,728 | 66×92 px |
+
+Vérifiés via l'app réelle (`/api/predict`), 3 exécutions chacun : **9/9 résultats identiques**
+(déterministe — pas d'aléatoire à l'inférence), overlays inspectés visuellement, cadres focaux et
+distincts du réhaussement parenchymateux diffus environnant. Fichiers dans `demo_cases/`
+(non versionnés, comme le reste des données patient — régénérables via le script ci-dessus).
+
+**Limitation à afficher clairement dans toute démo** : ces 3 cas fonctionnent parce que la coupe a
+été choisie à l'avance par un humain, pas par le modèle. Un upload libre d'un volume complet
+n'aboutit pas encore à une localisation fiable. C'est une limitation connue et documentée, pas un
+défaut caché.
+
+**Prochaine étape si l'upload libre doit fonctionner** : la piste retenue est une tête de
+classification de coupe entraînée séparément (« cette coupe contient-elle une lésion ? ») avec des
+négatifs durs piochés dans tout le volume, plutôt que de réutiliser la confiance de segmentation
+comme signal de tri. Non commencé — effort non trivial, à cadrer avant de s'y engager.
+
+#### Test navigateur réel (tâche P0 « parcours complet »)
+
+L'upload de fichier natif (sélecteur de fichier du navigateur) n'est pas automatisable dans cet
+environnement : par sécurité, aucun navigateur ne permet de définir `input[type=file].value` par
+script (vérifié : `InvalidStateError` levée). Vérifié à la place : la page se charge (200, formulaire
+présent), les routes `/predict` (HTML) et `/api/predict` (JSON) répondent correctement en conditions
+réelles avec les 3 cas de démo, et l'app ne contient **aucun JavaScript côté client** (HTML pur via
+Jinja) — donc pas de logique JS susceptible de casser silencieusement hors de portée de ces tests.
