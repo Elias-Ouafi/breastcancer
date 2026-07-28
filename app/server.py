@@ -53,6 +53,34 @@ def _overlay_data_uri(file_path: str, result: dict) -> str | None:
         return None
 
 
+def _overlay_box_pct(file_path: str, result: dict) -> dict | None:
+    """Express `box_xywh` as percentages of the rendered slice, for the CSS marker.
+
+    The overlay PNG already carries the drawn box; this only lets the results page
+    position its pulsing marker on the *real* detection instead of a decorative
+    spot. Percentages survive the uniform upscale `render_overlay_png` applies.
+    Returns None whenever the box can't be located -- the page renders fine without.
+    """
+    box = result.get("box_xywh")
+    if not box or not file_path.lower().endswith(".npz"):
+        return None
+    try:
+        import numpy as np
+
+        with np.load(file_path) as data:
+            shape = data["volume"].shape
+        height, width = shape[-2], shape[-1]
+        x, y, w, h = box
+        return {
+            "left": round(100 * x / width, 2),
+            "top": round(100 * y / height, 2),
+            "width": round(100 * w / width, 2),
+            "height": round(100 * h / height, 2),
+        }
+    except Exception:
+        return None
+
+
 @app.route("/", methods=["GET"])
 def index():
     predictor = get_predictor()
@@ -77,9 +105,11 @@ def predict():
 
     predictor = get_predictor()
     overlay_data_uri = None
+    overlay_box_pct = None
     try:
         result = predictor.predict(safe_path)
         overlay_data_uri = _overlay_data_uri(safe_path, result)
+        overlay_box_pct = _overlay_box_pct(safe_path, result)
     except Exception as exc:  # surface backend errors in the UI instead of a 500 page
         return render_template("index.html", backend=predictor.name,
                                error=f"Échec de la prédiction : {exc}"), 500
@@ -90,6 +120,7 @@ def predict():
             pass
 
     return render_template("result.html", result=result, overlay_data_uri=overlay_data_uri,
+                           overlay_box_pct=overlay_box_pct,
                            filename=file.filename, backend=predictor.name)
 
 
