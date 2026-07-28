@@ -3,100 +3,244 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Détection de lésion par IRM — Research Use Only</title>
+  <title>Écoute — Analyse d'IRM mammaire (Research Use Only)</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap" rel="stylesheet">
   <style>
+    /* ──────────────────────────────────────────────────────────────────────
+       Design system "Modernist" — tokens repris tels quels du handoff
+       (design_handoff_breast_cancer_app/_ds/modernist-.../styles.css).
+       Seuls ajouts : --color-ok / --color-warn, absents du système mais
+       nécessaires pour l'état « aucune lésion » et le bandeau RUO.
+       ────────────────────────────────────────────────────────────────────── */
     :root {
-      /* Tokens — voir plan.md, Partie 3 (brand guidelines) */
-      --bg: #0B0F14;
-      --surface: #141A22;
-      --surface-2: #1E2733;
-      --border: #2A3644;
-      --text: #E8EDF2;
-      --text-muted: #93A1B0;
+      --color-bg: #f3f2f2;
+      --color-surface: #eae9e9;
+      --color-text: #201e1d;
+      --color-accent: #ec3013;
+      --color-accent-2: #e15b47;
+      --color-divider: color-mix(in srgb, #201e1d 40%, transparent);
 
-      --primary: #2FB6C9;
-      --primary-700: #1B7F8E;
-      --accent: #FF7A59;
-      --accent-2: #F2C14E;
+      --color-neutral-100: #f8f4f4;
+      --color-neutral-200: #eae7e7;
+      --color-neutral-300: #d7d3d3;
+      --color-neutral-400: #bab6b6;
+      --color-neutral-500: #9b9797;
+      --color-neutral-600: #7d7979;
+      --color-neutral-700: #605d5d;
+      --color-neutral-800: #444141;
+      --color-neutral-900: #2d2b2b;
 
-      --success: #3FB98A;
-      --warning: #E4B34A;
-      --danger: #E5544B;
+      --color-accent-100: #fff2ef;
+      --color-accent-200: #ffe0d9;
+      --color-accent-300: #ffc4b8;
+      --color-accent-400: #ff9783;
+      --color-accent-500: #ff563c;
+      --color-accent-600: #dd2b0f;
+      --color-accent-700: #ae1800;
+      --color-accent-800: #7c1405;
+      --color-accent-900: #4d170e;
 
-      --font-display: "Space Grotesk", system-ui, sans-serif;
-      --font-body: "Inter", system-ui, sans-serif;
-      --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+      --color-accent-2-100: #fff2ef;
+      --color-accent-2-800: #71261b;
 
-      --fs-xs: 0.75rem; --fs-sm: 0.875rem; --fs-md: 1rem;
-      --fs-lg: 1.25rem; --fs-xl: 1.5rem; --fs-2xl: 2rem;
-      --lh-body: 1.5; --lh-tight: 1.15;
+      /* Extensions hors Modernist (le système n'a qu'un accent). */
+      --color-ok: #2f7d52;
+      --color-ok-100: #eaf4ee;
+      --color-warn: #8a6a10;
+      --color-warn-100: #fdf5e2;
 
-      --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px; --sp-8: 48px;
+      --font-heading: "Archivo", system-ui, sans-serif;
+      --font-heading-weight: 800;
+      --font-body: "Archivo", system-ui, sans-serif;
 
-      --radius-sm: 6px; --radius-md: 10px; --radius-lg: 16px;
-      --shadow-2: 0 8px 24px rgba(0,0,0,.45);
-      --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--primary);
+      --space-1: 4px; --space-2: 8px; --space-3: 12px;
+      --space-4: 16px; --space-6: 24px; --space-8: 32px;
+
+      --radius-sm: 0px; --radius-md: 0px; --radius-lg: 0px;
+
+      --shadow-sm: 0 1px 2px color-mix(in srgb, #2d2b2b 14%, transparent);
+      --shadow-md: 0 3px 10px color-mix(in srgb, #2d2b2b 16%, transparent);
+      --shadow-lg: 0 12px 32px color-mix(in srgb, #2d2b2b 22%, transparent);
     }
-    * { box-sizing: border-box; }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    /* `hidden` doit gagner sur un `display` inline (sinon les blocs masqués
+       par défaut, ex. #analyzing, s'affichent au chargement). */
+    [hidden] { display: none !important; }
     body {
-      margin: 0; font-family: var(--font-body); font-size: var(--fs-md);
-      background: var(--bg); color: var(--text); line-height: var(--lh-body);
+      margin: 0; font-size: 15px; line-height: 1.55; font-weight: 400;
+      font-family: var(--font-body); color: var(--color-text); background: #0b0d10;
     }
-    .wrap { max-width: 640px; margin: 0 auto; padding: var(--sp-6) var(--sp-4) var(--sp-8); }
-    h1 {
-      font-family: var(--font-display); font-weight: 600; line-height: var(--lh-tight);
-      font-size: var(--fs-xl); margin: 0 0 4px; letter-spacing: -0.01em;
+    h1, h2, h3, h4 {
+      font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+      line-height: 1.12; letter-spacing: -0.015em; margin: 0 0 var(--space-2);
     }
-    .sub { color: var(--text-muted); margin: 0 0 var(--sp-5); font-size: var(--fs-sm); }
+    h2 { font-size: 24px; }
+    p { margin: 0 0 var(--space-3); }
+    img { display: block; max-width: 100%; }
+    .text-muted { color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+    :focus { outline: none; }
+    :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+    ::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
+
+    /* ── Fond ambiant « réseau de neurones » (hors design system, créé pour
+          ce prototype — cf. handoff README §Design Tokens). ── */
+    @keyframes node-glow { 0%, 100% { opacity: .25; } 50% { opacity: .8; } }
+    @keyframes pulse-ring { 0% { transform: scale(.9); opacity: .9; } 70% { transform: scale(1.6); opacity: 0; } 100% { opacity: 0; } }
+    @keyframes scan-line { from { left: -30%; } to { left: 100%; } }
+    @keyframes mascot-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+    @keyframes mascot-blink { 0%, 92%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.1); } }
+
+    .ambient {
+      position: fixed; inset: 0; overflow: hidden; z-index: 0;
+      background:
+        radial-gradient(ellipse 80% 60% at 20% 15%, color-mix(in srgb, var(--color-accent) 22%, #0b0d10) 0%, #0b0d10 55%),
+        radial-gradient(ellipse 70% 60% at 85% 85%, color-mix(in srgb, var(--color-accent-2) 16%, #0b0d10) 0%, #0b0d10 60%),
+        #0b0d10;
+    }
+    .ambient-grid {
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(color-mix(in srgb, #fff 6%, transparent) 1px, transparent 1px),
+        linear-gradient(90deg, color-mix(in srgb, #fff 6%, transparent) 1px, transparent 1px);
+      background-size: 56px 56px;
+      -webkit-mask-image: radial-gradient(ellipse 70% 70% at 50% 40%, #000 0%, transparent 75%);
+      mask-image: radial-gradient(ellipse 70% 70% at 50% 40%, #000 0%, transparent 75%);
+    }
+    .node { position: absolute; border-radius: 50%; animation: node-glow 3.6s ease-in-out infinite; }
+    .ambient-lines { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .35; }
+
+    /* ── Scène + panneau applicatif ── */
+    .stage {
+      position: relative; z-index: 1; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center; padding: 32px 16px;
+    }
+    .panel {
+      width: 100%; max-width: 440px; background: var(--color-bg);
+      padding: 20px 20px 24px; box-shadow: var(--shadow-lg);
+      display: flex; flex-direction: column;
+    }
+    .panel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+    .brand { font-family: var(--font-heading); font-weight: 800; font-size: 20px; flex: 1; }
+    .hr { height: 2px; border: 0; margin: 12px 0 14px; background: var(--color-divider); }
+
+    .back-btn {
+      display: flex; align-items: center; justify-content: center;
+      width: 32px; height: 32px; flex: none;
+      border: 1px solid var(--color-divider); background: transparent;
+      color: inherit; cursor: pointer; text-decoration: none;
+    }
+    .back-btn:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+
+    /* ── Mascotte « Lumi » ── */
+    .mascot-row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 18px; }
+    .mascot { flex: none; animation: mascot-bob 3.2s ease-in-out infinite; }
+    .mascot .eyes { transform-origin: 21px 20px; animation: mascot-blink 4s ease-in-out infinite; }
+    .bubble { flex: 1; padding: 10px 12px; margin: 0; }
+    .bubble .card-body { opacity: 1; font-size: 13px; }
+
+    /* ── Composants Modernist ── */
     .card {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: var(--radius-lg); padding: var(--sp-5); margin-bottom: var(--sp-4);
-      box-shadow: var(--shadow-2);
+      display: flex; flex-direction: column; gap: var(--space-2);
+      padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-surface);
     }
-    .badge {
-      display: inline-block; font-family: var(--font-mono); font-size: var(--fs-xs);
-      padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border);
-      color: var(--text-muted); background: var(--surface-2);
+    .card-kicker { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--color-accent); }
+    .card-title { font-family: var(--font-heading); font-weight: 800; font-size: 17px; line-height: 1.2; }
+    .card-body { margin: 0; font-size: 13px; opacity: .8; flex: 1; }
+    .elev-sm { box-shadow: var(--shadow-sm); }
+
+    .tag {
+      display: inline-flex; align-items: center; font-size: 11px;
+      letter-spacing: .02em; padding: 3px 10px; border-radius: 0;
     }
-    .metric, code { font-family: var(--font-mono); }
-    a { color: var(--primary); }
-    a:hover { color: var(--primary-700); }
-    :focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .tag-outline { border: 1px solid var(--color-accent); color: var(--color-accent); }
+    .tag-neutral { background: var(--color-neutral-200); color: var(--color-neutral-800); }
 
-    .btn-primary {
-      background: var(--accent); color: #2A0F06; border: none;
-      padding: var(--sp-3) var(--sp-5); border-radius: var(--radius-md);
-      font-weight: 600; font-family: var(--font-body); font-size: var(--fs-md);
-      cursor: pointer; width: 100%;
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      cursor: pointer; text-decoration: none;
+      font-family: var(--font-heading); font-weight: 800; font-size: 14px; line-height: 1.2;
+      color: var(--color-text); background: transparent; border: 1px solid transparent;
+      padding: var(--space-2) calc(var(--space-3) * 1.2); border-radius: var(--radius-md);
     }
-    .btn-primary:hover { filter: brightness(1.08); }
+    .btn-primary { background: var(--color-accent); color: var(--color-bg); }
+    .btn-primary:hover { background: var(--color-accent-600); }
+    .btn-primary:active { background: var(--color-accent-700); }
+    .btn-secondary { border-color: var(--color-divider); }
+    .btn-secondary:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+    .btn-block { width: 100%; margin-top: var(--space-2); justify-content: center; }
 
-    .field-hint { color: var(--text-muted); font-size: var(--fs-xs); margin: var(--sp-3) 0 var(--sp-5); }
+    .table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .table td { padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
+    .table tr:last-child td { border-bottom: 0; }
+    .table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 
+    /* ── Bandeau conformité — obligatoire sur chaque écran ── */
     .ruo-banner {
-      background: color-mix(in srgb, var(--warning) 15%, var(--surface));
-      border: 1px solid var(--warning); color: var(--text);
-      font-size: var(--fs-xs); padding: var(--sp-3) var(--sp-4);
-      border-radius: var(--radius-sm); letter-spacing: .01em; margin-top: var(--sp-2);
+      margin: 16px 0 0; padding: var(--space-2) var(--space-3);
+      background: var(--color-warn-100); border: 1px solid var(--color-warn);
+      color: var(--color-neutral-900); font-size: 11px; line-height: 1.45;
     }
+    .ruo-banner strong { color: var(--color-warn); }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Détection de lésion par IRM</h1>
-    <p class="sub">Envoyez un examen pour obtenir une localisation.
-      Modèle actif : <span class="badge">{{ backend }}</span></p>
-    {% block content %}{% endblock %}
-    <p class="ruo-banner">
-      Research Use Only — Not for diagnostic use. Aucune décision clinique ne doit
-      reposer sur cet outil.
-      {% if backend == "mock" %}Le moteur <strong>mock</strong> génère des résultats
-      fictifs et ne lit pas l'image ; connectez le vrai modèle pour obtenir de véritables
-      prédictions.{% endif %}
-    </p>
+  <div class="ambient" aria-hidden="true">
+    <div class="ambient-grid"></div>
+    <div class="node" style="top:12%; left:10%; width:6px; height:6px; background:var(--color-accent-400); box-shadow:0 0 16px 4px var(--color-accent-400);"></div>
+    <div class="node" style="top:68%; left:18%; width:4px; height:4px; background:var(--color-accent-300); box-shadow:0 0 12px 3px var(--color-accent-300); animation-delay:.6s;"></div>
+    <div class="node" style="top:22%; right:12%; width:5px; height:5px; background:var(--color-accent-400); box-shadow:0 0 14px 4px var(--color-accent-400); animation-delay:1.1s;"></div>
+    <div class="node" style="top:80%; right:20%; width:5px; height:5px; background:var(--color-accent-300); box-shadow:0 0 12px 3px var(--color-accent-300); animation-delay:.3s;"></div>
+    <div class="node" style="top:45%; left:6%; width:4px; height:4px; background:var(--color-accent-400); box-shadow:0 0 10px 3px var(--color-accent-400); animation-delay:1.6s;"></div>
+    <div class="node" style="top:38%; right:7%; width:4px; height:4px; background:var(--color-accent-300); box-shadow:0 0 10px 3px var(--color-accent-300); animation-delay:.9s;"></div>
+    <svg class="ambient-lines" preserveAspectRatio="none">
+      <line x1="10%" y1="12%" x2="12%" y2="45%" stroke="var(--color-accent-400)" stroke-width="1"></line>
+      <line x1="12%" y1="45%" x2="18%" y2="68%" stroke="var(--color-accent-300)" stroke-width="1"></line>
+      <line x1="12%" y1="45%" x2="88%" y2="22%" stroke="var(--color-accent-400)" stroke-width="1"></line>
+      <line x1="88%" y1="22%" x2="93%" y2="38%" stroke="var(--color-accent-300)" stroke-width="1"></line>
+      <line x1="93%" y1="38%" x2="80%" y2="80%" stroke="var(--color-accent-400)" stroke-width="1"></line>
+      <line x1="18%" y1="68%" x2="80%" y2="80%" stroke="var(--color-accent-300)" stroke-width="1"></line>
+    </svg>
   </div>
+
+  <main class="stage">
+    <section class="panel">
+      <div class="panel-head">
+        {% block back %}{% endblock %}
+        <div class="brand">Écoute</div>
+        <span class="tag tag-outline">IA</span>
+        <span class="tag tag-neutral" title="Moteur de prédiction actif">{{ backend }}</span>
+      </div>
+      <hr class="hr">
+
+      <div class="mascot-row">
+        <svg class="mascot" width="42" height="42" viewBox="0 0 42 42" aria-hidden="true">
+          <circle cx="21" cy="22" r="17" fill="var(--color-accent-100)" stroke="var(--color-accent)" stroke-width="2"></circle>
+          <line x1="21" y1="5" x2="21" y2="10" stroke="var(--color-accent)" stroke-width="2"></line>
+          <circle cx="21" cy="4" r="2.5" fill="var(--color-accent)"></circle>
+          <g class="eyes">
+            <circle cx="14.5" cy="20" r="2.2" fill="var(--color-accent-700)"></circle>
+            <circle cx="27.5" cy="20" r="2.2" fill="var(--color-accent-700)"></circle>
+          </g>
+          <path d="M 14 27 Q 21 32 28 27" fill="none" stroke="var(--color-accent-700)" stroke-width="2" stroke-linecap="round"></path>
+        </svg>
+        <div class="card elev-sm bubble">
+          <p class="card-body">{% block mascot %}Bonjour, je suis Lumi.{% endblock %}</p>
+        </div>
+      </div>
+
+      {% block content %}{% endblock %}
+
+      <p class="ruo-banner">
+        <strong>Research Use Only — Not for diagnostic use.</strong>
+        Aucune décision clinique ne doit reposer sur cet outil.
+        {% if backend == "mock" %}Le moteur <strong>mock</strong> génère des résultats
+        fictifs et ne lit pas l'image ; connectez le vrai modèle pour obtenir de
+        véritables prédictions.{% endif %}
+      </p>
+    </section>
+  </main>
 </body>
 </html>

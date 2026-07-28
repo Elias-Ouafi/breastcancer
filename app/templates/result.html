@@ -1,53 +1,113 @@
 {% extends "base.html" %}
+{% set detected = result.lesion_detected %}
+{% set verdict_color = 'var(--color-accent)' if detected else 'var(--color-ok)' %}
+
+{% block back %}
+  <a href="{{ url_for('index') }}" class="back-btn" title="Nouvelle analyse" aria-label="Retour">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+  </a>
+{% endblock %}
+
+{% block mascot %}
+  {% if detected %}Voici ce que j'ai repéré. Parlons-en avec votre médecin.
+  {% else %}Je n'ai rien repéré de suspect sur cet examen.{% endif %}
+{% endblock %}
+
 {% block content %}
-  {% set detected = result.lesion_detected %}
-  <div class="card" style="border-color: {{ 'var(--danger)' if detected else 'var(--success)' }};">
-    <div style="font-size:var(--fs-sm); color:var(--text-muted);">Résultat pour {{ filename }}</div>
-    <div style="font-family:var(--font-display); font-size:var(--fs-2xl); font-weight:600; margin:6px 0;
-                color: {{ 'var(--danger)' if detected else 'var(--success)' }};">
-      {{ 'Lésion suspecte détectée' if detected else 'Aucune lésion détectée' }}
-    </div>
-    <div style="margin-top:var(--sp-2);">
-      Confiance :
-      <strong class="metric">{{ '%.1f'|format(result.confidence * 100) }}%</strong>
-    </div>
-    <div style="height:10px; background:var(--surface-2); border-radius:var(--radius-sm); overflow:hidden;
-                margin-top:var(--sp-2); border:1px solid var(--border);">
-      <div style="height:100%; width: {{ result.confidence * 100 }}%;
-                  background: {{ 'var(--danger)' if detected else 'var(--success)' }};"></div>
-    </div>
+  <div style="font-family: var(--font-heading); font-weight: 800; font-size: 17px; margin-bottom: 4px;">
+    Résultat de l'analyse
   </div>
+  <p class="text-muted" style="font-size: 12px; word-break: break-all; margin-bottom: 14px;">{{ filename }}</p>
 
   {% if overlay_data_uri %}
-  <div class="card">
-    <div style="font-weight:600; margin-bottom:var(--sp-3);">Coupe annotée</div>
-    <img src="{{ overlay_data_uri }}" alt="Coupe avec la zone détectée"
-         style="max-width:100%; display:block; border-radius:var(--radius-md); border:1px solid var(--border);">
-    <div style="color:var(--text-muted); font-size:var(--fs-xs); margin-top:var(--sp-3);">
+    <!-- Coupe annotée. Le marqueur pulsant est positionné à partir du vrai cadre
+         renvoyé par le modèle (overlay_box_pct), pas d'une position décorative. -->
+    <div style="position: relative; width: 100%; margin-bottom: 8px; border: 1px solid var(--color-divider);">
+      <img src="{{ overlay_data_uri }}" alt="Coupe IRM avec la zone détectée encadrée"
+           style="width: 100%; display: block;">
+      {% if overlay_box_pct %}
+        <div style="position: absolute; pointer-events: none;
+                    left: {{ overlay_box_pct.left }}%; top: {{ overlay_box_pct.top }}%;
+                    width: {{ overlay_box_pct.width }}%; height: {{ overlay_box_pct.height }}%;">
+          <div style="position: absolute; inset: -4px; border: 2px solid var(--color-accent);
+                      border-radius: 50%; animation: pulse-ring 2.2s ease-out infinite;"></div>
+        </div>
+      {% endif %}
+    </div>
+    <p class="text-muted" style="font-size: 11px; margin-bottom: 16px;">
       Cadre = zone de plus forte confiance détectée par le modèle. Image recadrée/agrandie
       pour la lisibilité, pas à l'échelle du volume complet.
-    </div>
-  </div>
+    </p>
   {% endif %}
+
+  <!-- Zone 1 : le verdict réel du modèle. -->
+  <div class="card elev-sm" style="background: {{ 'var(--color-accent-100)' if detected else 'var(--color-ok-100)' }};
+                                   border-left: 3px solid {{ verdict_color }}; margin-bottom: 12px;">
+    <div class="card-kicker" style="color: {{ verdict_color }};">
+      Zone 1 · confiance {{ '%.1f'|format(result.confidence * 100) }}%
+    </div>
+    <div class="card-title" style="color: {{ verdict_color }};">
+      {{ 'Zone de réhaussement suspecte' if detected else 'Aucune zone suspecte détectée' }}
+    </div>
+    <div style="height: 6px; background: var(--color-neutral-300); overflow: hidden;">
+      <div style="height: 100%; width: {{ result.confidence * 100 }}%; background: {{ verdict_color }};"></div>
+    </div>
+    <p class="card-body" style="opacity: 1;">
+      {% if detected %}
+        Le modèle a isolé une zone dont le signal se distingue du parenchyme environnant.
+      {% else %}
+        Aucune zone n'a dépassé le seuil de détection sur cet examen.
+      {% endif %}
+    </p>
+  </div>
+
+  <!-- Zone 2 : la localisation, quand le modèle l'a produite. -->
+  {% if result.best_slice is not none or result.box_xywh %}
+    <div class="card elev-sm" style="margin-bottom: 16px;">
+      <div class="card-kicker">Zone 2 · localisation</div>
+      <div class="card-title" style="font-size: 15px;">
+        {% if result.best_slice is not none %}Coupe {{ result.best_slice }}{% if result.n_slices %} sur {{ result.n_slices }}{% endif %}
+        {% else %}Cadre englobant{% endif %}
+      </div>
+      <p class="card-body" style="opacity: 1;">
+        Coordonnées du cadre et index de coupe repris dans le détail technique ci-dessous.
+      </p>
+    </div>
+  {% endif %}
+
+  <div class="card elev-sm" style="border: 1px solid var(--color-divider); margin-bottom: 16px;">
+    <div class="card-kicker">Recommandation</div>
+    <p class="card-body" style="opacity: 1;">
+      Partagez ce résultat avec votre médecin lors de votre prochain rendez-vous
+      pour interprétation.
+    </p>
+  </div>
 
   {% if result.best_slice is not none or result.box_xywh or result.n_slices %}
-  <div class="card">
-    <div style="font-weight:600; margin-bottom:var(--sp-3);">Détails</div>
-    <table style="width:100%; border-collapse:collapse; font-size:var(--fs-sm);">
-      {% if result.n_slices %}
-      <tr><td style="color:var(--text-muted); padding:4px 0;">Coupes</td>
-          <td class="metric" style="text-align:right;">{{ result.n_slices }}</td></tr>{% endif %}
-      {% if result.best_slice is not none %}
-      <tr><td style="color:var(--text-muted); padding:4px 0;">Anomalie à la coupe</td>
-          <td class="metric" style="text-align:right;">{{ result.best_slice }}</td></tr>{% endif %}
-      {% if result.box_xywh %}
-      <tr><td style="color:var(--text-muted); padding:4px 0;">Cadre englobant (x, y, l, h)</td>
-          <td class="metric" style="text-align:right;">{{ result.box_xywh|join(', ') }}</td></tr>{% endif %}
-      <tr><td style="color:var(--text-muted); padding:4px 0;">Moteur</td>
-          <td style="text-align:right;"><span class="badge">{{ result.backend }}</span></td></tr>
-    </table>
-  </div>
+    <details style="margin-bottom: 16px;">
+      <summary style="cursor: pointer; font-family: var(--font-heading); font-weight: 800;
+                      font-size: 13px; padding: var(--space-2) 0;">
+        Détail technique
+      </summary>
+      <table class="table">
+        {% if result.n_slices %}
+          <tr><td class="text-muted">Coupes</td><td>{{ result.n_slices }}</td></tr>
+        {% endif %}
+        {% if result.best_slice is not none %}
+          <tr><td class="text-muted">Anomalie à la coupe</td><td>{{ result.best_slice }}</td></tr>
+        {% endif %}
+        {% if result.box_xywh %}
+          <tr><td class="text-muted">Cadre englobant (x, y, l, h)</td><td>{{ result.box_xywh|join(', ') }}</td></tr>
+        {% endif %}
+        <tr><td class="text-muted">Moteur</td><td><span class="tag tag-neutral">{{ result.backend }}</span></td></tr>
+      </table>
+    </details>
   {% endif %}
 
-  <a href="{{ url_for('index') }}">&larr; Analyser un autre examen</a>
+  <p class="text-muted" style="font-size: 11px; margin-bottom: 16px;">
+    Cette analyse est une aide informative générée par IA — elle ne remplace pas
+    un diagnostic médical.
+  </p>
+
+  <a href="{{ url_for('index') }}" class="btn btn-secondary btn-block">Nouvelle analyse</a>
 {% endblock %}

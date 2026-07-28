@@ -1,23 +1,149 @@
 {% extends "base.html" %}
+
+{% block mascot %}Bonjour, je suis Lumi. Déposez votre examen et je vous guide, étape par étape.{% endblock %}
+
 {% block content %}
   {% if error %}
-    <div class="card" style="border-color: var(--danger); color: var(--danger);">
-      {{ error }}
+    <div class="card elev-sm" style="background: var(--color-accent-100); border-left: 3px solid var(--color-accent); margin-bottom: 16px;">
+      <div class="card-kicker">Erreur</div>
+      <p class="card-body" style="opacity: 1;">{{ error }}</p>
     </div>
   {% endif %}
-  <form class="card" action="{{ url_for('predict') }}" method="post"
-        enctype="multipart/form-data">
-    <label for="mri" style="display:block; margin-bottom:var(--sp-3); font-weight:600;">
-      Examen IRM / DBT
+
+  <!-- Illustration « réseau de neurones » de l'écran d'accueil (handoff §1). -->
+  <div style="position: relative; height: 92px; margin-bottom: 16px; background: var(--color-accent-100);
+              border: 1px solid var(--color-divider); overflow: hidden;" aria-hidden="true">
+    <svg width="100%" height="100%" viewBox="0 0 360 92" preserveAspectRatio="xMidYMid slice">
+      <circle cx="40" cy="46" r="3" fill="var(--color-accent)"></circle>
+      <circle cx="90" cy="20" r="2.5" fill="var(--color-accent-700)"></circle>
+      <circle cx="90" cy="70" r="2.5" fill="var(--color-accent-700)"></circle>
+      <circle cx="150" cy="46" r="3" fill="var(--color-accent)"></circle>
+      <circle cx="210" cy="18" r="2.5" fill="var(--color-accent-700)"></circle>
+      <circle cx="210" cy="74" r="2.5" fill="var(--color-accent-700)"></circle>
+      <circle cx="270" cy="46" r="3" fill="var(--color-accent)"></circle>
+      <circle cx="330" cy="46" r="2.5" fill="var(--color-accent-700)"></circle>
+      <line x1="40" y1="46" x2="90" y2="20" stroke="var(--color-accent-700)" stroke-width="1"></line>
+      <line x1="40" y1="46" x2="90" y2="70" stroke="var(--color-accent-700)" stroke-width="1"></line>
+      <line x1="90" y1="20" x2="150" y2="46" stroke="var(--color-accent-700)" stroke-width="1"></line>
+      <line x1="90" y1="70" x2="150" y2="46" stroke="var(--color-accent-700)" stroke-width="1"></line>
+      <line x1="150" y1="46" x2="210" y2="18" stroke="var(--color-accent-700)" stroke-width="1"></line>
+      <line x1="150" y1="46" x2="210" y2="74" stroke="var(--color-accent-700)" stroke-width="1"></line>
+      <line x1="210" y1="18" x2="270" y2="46" stroke="var(--color-accent-700)" stroke-width="1"></line>
+      <line x1="210" y1="74" x2="270" y2="46" stroke="var(--color-accent-700)" stroke-width="1"></line>
+      <line x1="270" y1="46" x2="330" y2="46" stroke="var(--color-accent-700)" stroke-width="1"></line>
+      <path d="M 0 46 Q 20 30, 40 46" fill="none" stroke="var(--color-accent)" stroke-width="1.5"></path>
+      <path d="M 330 46 Q 350 62, 360 46" fill="none" stroke="var(--color-accent)" stroke-width="1.5"></path>
+    </svg>
+  </div>
+
+  <h2>Analyse d'IRM</h2>
+  <p class="text-muted" style="margin-bottom: 18px;">
+    Déposez un examen IRM/DBT prétraité : le modèle repère la zone de réhaussement
+    la plus suspecte et l'affiche sur la coupe correspondante.
+  </p>
+
+  <form id="analysis-form" action="{{ url_for('predict') }}" method="post" enctype="multipart/form-data">
+    <!-- Zone de dépôt : le <label> couvre toute la zone, l'input reste un vrai
+         input[type=file] (accessible au clavier, pas de JS requis pour l'upload). -->
+    <label for="mri" id="dropzone"
+           style="display: flex; flex-direction: column; align-items: center; justify-content: center;
+                  gap: 10px; text-align: center; width: 100%; aspect-ratio: 1/1; margin-bottom: 16px;
+                  padding: 20px; cursor: pointer; background: var(--color-neutral-100);
+                  border: 1px solid var(--color-divider);">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)"
+           stroke-width="1.5" aria-hidden="true">
+        <path d="M12 16V4m0 0L7 9m5-5 5 5"/>
+        <path d="M3 15v3a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/>
+      </svg>
+      <span style="font-family: var(--font-heading); font-weight: 800; font-size: 15px;">
+        Déposez votre examen
+      </span>
+      <span id="dropzone-name" class="text-muted" style="font-size: 12px; word-break: break-all;">
+        .npz (volume prétraité), DICOM (.dcm), NIfTI (.nii/.nii.gz) ou une image
+      </span>
     </label>
+    <!-- Volontairement sans `required` : un input masqué et `required` bloque la
+         soumission sans message visible (contrôle non focusable). La validation
+         est faite en JS ci-dessous, avec le contrôle serveur comme filet. -->
     <input id="mri" name="mri" type="file"
            accept=".npz,.dcm,.dicom,.nii,.gz,.png,.jpg,.jpeg"
-           style="width:100%; padding:var(--sp-3); background:var(--surface-2); color:var(--text);
-                  font-family:var(--font-body); border:1px dashed var(--border); border-radius:var(--radius-md);"
-           required>
-    <p class="field-hint">
-      Formats acceptés : .npz (volume prétraité), DICOM (.dcm), NIfTI (.nii/.nii.gz) ou une image.
+           style="width: 1px; height: 1px; opacity: 0; overflow: hidden; position: absolute;">
+
+    <p id="mri-error" class="card-body" hidden
+       style="opacity: 1; color: var(--color-accent); margin-bottom: 12px;">
+      Veuillez d'abord sélectionner un fichier.
     </p>
-    <button type="submit" class="btn-primary">Analyser</button>
+
+    <div class="card elev-sm" style="margin-bottom: 18px;">
+      <div class="card-kicker">Confidentialité</div>
+      <p class="card-body" style="opacity: 1;">
+        L'analyse tourne en local (127.0.0.1) et votre fichier est supprimé du disque
+        immédiatement après le calcul. Rien n'est envoyé sur un serveur distant.
+      </p>
+    </div>
+
+    <button type="submit" class="btn btn-primary btn-block">Analyser l'examen</button>
   </form>
+
+  <!-- État « analyse en cours » (handoff §2). Enrichissement progressif : affiché
+       par JS pendant que le POST natif du formulaire est en vol. Sans JS, le
+       formulaire fonctionne exactement pareil, juste sans l'animation. -->
+  <div id="analyzing" hidden style="display: flex; flex-direction: column; align-items: center;
+                                    justify-content: center; gap: 14px; padding: 24px 0;">
+    <div style="position: relative; width: 100%; height: 3px; background: var(--color-neutral-300); overflow: hidden;">
+      <div style="position: absolute; width: 30%; top: 0; bottom: 0; background: var(--color-accent);
+                  animation: scan-line 1.2s ease-in-out infinite alternate;"></div>
+    </div>
+    <div style="font-family: var(--font-heading); font-weight: 800; font-size: 16px;">Analyse en cours…</div>
+    <p class="text-muted" style="text-align: center; font-size: 13px;">
+      Le modèle examine chaque coupe à la recherche d'un réhaussement anormal.
+    </p>
+  </div>
+
+  <script>
+    (function () {
+      var input = document.getElementById('mri');
+      var nameEl = document.getElementById('dropzone-name');
+      var form = document.getElementById('analysis-form');
+      var analyzing = document.getElementById('analyzing');
+      var dropzone = document.getElementById('dropzone');
+      var mriError = document.getElementById('mri-error');
+
+      input.addEventListener('change', function () {
+        if (input.files.length) {
+          nameEl.textContent = input.files[0].name;
+          dropzone.style.background = 'var(--color-accent-100)';
+          mriError.hidden = true;
+        }
+      });
+
+      // Glisser-déposer : équivalent visuel du <image-slot> du prototype.
+      ['dragover', 'dragenter'].forEach(function (evt) {
+        dropzone.addEventListener(evt, function (e) {
+          e.preventDefault();
+          dropzone.style.background = 'var(--color-accent-100)';
+        });
+      });
+      dropzone.addEventListener('dragleave', function () {
+        if (!input.files.length) dropzone.style.background = 'var(--color-neutral-100)';
+      });
+      dropzone.addEventListener('drop', function (e) {
+        e.preventDefault();
+        if (e.dataTransfer.files.length) {
+          input.files = e.dataTransfer.files;
+          input.dispatchEvent(new Event('change'));
+        }
+      });
+
+      form.addEventListener('submit', function (e) {
+        if (!input.files.length) {
+          e.preventDefault();
+          mriError.hidden = false;
+          return;
+        }
+        form.hidden = true;
+        analyzing.hidden = false;
+      });
+    })();
+  </script>
 {% endblock %}
