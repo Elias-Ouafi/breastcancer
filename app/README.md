@@ -6,6 +6,15 @@ model is connected.
 
 ## Run
 
+For the demo, use the launcher at the project root -- it preflights the checkpoint
+and the demo cases, then starts this app with the real DCE-MRI backend:
+
+```bash
+python run_demo.py
+```
+
+To run the app itself (mock backend, no model needed):
+
 ```bash
 pip install -r ../requirements.txt   # or: pip install "Flask>=3.0"
 python -m app.server                 # from the project root
@@ -43,13 +52,17 @@ $env:MRI_APP_BACKEND = "dce_mri"; python -m app.server   # DCE-MRI
 selection on a raw full-volume upload does not reliably find the lesion yet
 (verified 0/186 on held-out patients — the model segments well once shown the right
 slice, it just can't find that slice unassisted). For a demo that works every time,
-upload one of the curated cases in `demo_cases/` (regenerate with
-`TransformData.make_demo_case`, which pins a verified-good slice via a
-`forced_slice` key read automatically by `inference.predict_dce_mri`) rather than an
-arbitrary patient volume.
+upload one of the curated cases in `demo_cases/` (versioned in the repo; rebuild with
+`python scripts/make_demo_cases.py`) rather than an arbitrary patient volume. Those
+cases pin a verified-good slice via a `forced_slice` key read automatically by
+`inference.predict_dce_mri`, which reports `slice_preselected: true` so the UI can
+say the slice was *imposed* rather than found. Both screens carry a "Limites
+connues" panel stating this, the bounding-box training masks and the absence of
+clinical validation.
 
 Nothing else in the app changes — the result contract
-(`lesion_detected`, `confidence`, `best_slice`, `box_xywh`, `n_slices`) is identical.
+(`lesion_detected`, `slice_preselected`, `confidence`, `best_slice`, `box_xywh`,
+`n_slices`) is unchanged apart from that added flag.
 If a future model needs different preprocessing or a different signature, wrap it in a
 new `Predictor` subclass and add one branch in `get_predictor()`.
 

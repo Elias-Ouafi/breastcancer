@@ -13,6 +13,25 @@
   {% else %}Je n'ai rien repéré de suspect sur cet examen.{% endif %}
 {% endblock %}
 
+{# La première limite est reformulée au passé : sur un résultat, on sait si la
+   coupe a réellement été imposée (slice_preselected) ou balayée par le modèle. #}
+{% block limits_slice %}
+  {% if backend == "mock" %}
+    <li>Moteur <strong>mock</strong> : aucun pixel n'a été lu, la coupe et le cadre
+      affichés sont fabriqués. Lancer <code>python run_demo.py</code> pour brancher
+      le vrai modèle.</li>
+  {% elif result.slice_preselected %}
+    <li>La coupe analysée ci-dessus a été <strong>choisie à l'avance par un humain</strong>,
+      pas trouvée par le modèle : il segmente bien une lésion une fois la bonne coupe
+      montrée, il ne sait pas encore la localiser seul (vérifié 0/186 sur les patients
+      de test).</li>
+  {% else %}
+    <li>La coupe a été choisie par le modèle en balayant le volume. Cette sélection
+      automatique <strong>n'est pas fiable</strong> à ce stade (vérifié 0/186 sur les
+      patients de test) : la localisation affichée est à prendre avec prudence.</li>
+  {% endif %}
+{% endblock %}
+
 {% block content %}
   <div style="font-family: var(--font-heading); font-weight: 800; font-size: 17px; margin-bottom: 4px;">
     Résultat de l'analyse
@@ -95,6 +114,8 @@
         {% endif %}
         {% if result.best_slice is not none %}
           <tr><td class="text-muted">Anomalie à la coupe</td><td>{{ result.best_slice }}</td></tr>
+          <tr><td class="text-muted">Sélection de la coupe</td>
+              <td>{{ 'imposée (cas de démo)' if result.slice_preselected else 'balayage du volume' }}</td></tr>
         {% endif %}
         {% if result.box_xywh %}
           <tr><td class="text-muted">Cadre englobant (x, y, l, h)</td><td>{{ result.box_xywh|join(', ') }}</td></tr>

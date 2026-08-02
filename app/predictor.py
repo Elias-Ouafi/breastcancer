@@ -11,6 +11,7 @@ The result contract is aligned with ``inference.predict_dbt`` so the future
 
     {
         "lesion_detected": bool,      # cancer / lesion present?
+        "slice_preselected": bool,    # was the slice pinned by a human, not found?
         "confidence": float,          # 0..1 detection confidence
         "best_slice": int | None,     # slice index of the finding (imaging)
         "box_xywh": [x, y, w, h] | None,
@@ -56,6 +57,7 @@ class MockPredictor(Predictor):
         n_slices = rng.randint(40, 120)
         return {
             "lesion_detected": detected,
+            "slice_preselected": False,  # nothing is selected: no pixel is ever read
             "confidence": confidence,
             "best_slice": rng.randint(0, n_slices - 1) if detected else None,
             "box_xywh": [rng.randint(20, 120), rng.randint(20, 120), 48, 48]

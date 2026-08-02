@@ -843,8 +843,8 @@ def preprocess_dce_mri_with_boxes(root_dir, boxes_path, output_dir="preprocessed
     return saved, skipped
 
 
-def make_demo_case(source_npz, out_path, slice_index):
-    """Copy ``source_npz`` to ``out_path`` with a ``forced_slice`` key added.
+def make_demo_case(source_npz, out_path, slice_index, slim=True):
+    """Write ``source_npz`` to ``out_path`` with a ``forced_slice`` key added.
 
     ``inference._localize_lesion`` scores only ``forced_slice`` when present instead
     of scanning the whole volume for the highest-confidence slice. This exists
@@ -855,10 +855,42 @@ def make_demo_case(source_npz, out_path, slice_index):
     curated by hand (pick a real, verified-good slice) so the app has something
     trustworthy to show while that ranking problem is being worked on separately --
     this is a known, documented limitation, not a hidden shortcut.
+
+    ``slim`` (the default) keeps **only** that one slice instead of the whole volume.
+    Since ``forced_slice`` means the other ~175 slices are never scored nor drawn,
+    carrying them costs ~30 MB per case for nothing; a slim case is ~0.4 MB, small
+    enough to live in git so the demo works straight out of a clone. The dropped
+    depth is preserved in ``source_n_slices`` and the slice's original index is
+    folded into ``crop_offset[0]``, so the app still reports "slice 52 of 176" --
+    the same numbers a full-volume case produces. Pass ``slim=False`` to keep the
+    whole volume (e.g. to re-derive a different slice later).
     """
     with np.load(source_npz) as data:
         kwargs = {k: data[k] for k in data.files}
-    kwargs["forced_slice"] = np.asarray(int(slice_index))
+
+    slice_index = int(slice_index)
+    if not slim:
+        kwargs["forced_slice"] = np.asarray(slice_index)
+        np.savez_compressed(out_path, **kwargs)
+        return out_path
+
+    depth = int(kwargs["volume"].shape[0])
+    if not 0 <= slice_index < depth:
+        raise IndexError(f"slice_index {slice_index} out of range for depth {depth}.")
+
+    offset = kwargs.get("crop_offset")
+    offset = np.zeros(3, dtype=np.int32) if offset is None else np.asarray(offset, dtype=np.int32)
+
+    for key in ("volume", "mask"):
+        if key in kwargs:
+            kwargs[key] = kwargs[key][slice_index:slice_index + 1]
+
+    # The kept slice becomes index 0, so its original position moves into the z
+    # offset -- exactly the mechanism `save_preprocessed`'s crop already uses, which
+    # is what makes `best_slice` and `render_overlay_png` come out unchanged.
+    kwargs["crop_offset"] = np.asarray([offset[0] + slice_index, offset[1], offset[2]], dtype=np.int32)
+    kwargs["forced_slice"] = np.asarray(0)
+    kwargs["source_n_slices"] = np.asarray(offset[0] + depth, dtype=np.int32)
     np.savez_compressed(out_path, **kwargs)
     return out_path
 

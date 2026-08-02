@@ -1,34 +1,38 @@
-# Démo — 3 étapes
+# Démo — 3 commandes
 
 > **Research Use Only — Not for diagnostic use.** Outil de recherche, pas un
 > dispositif médical. Aucune décision clinique ne doit en dépendre.
 
-## 1. Lancer l'app
-
 ```bash
-.venv/Scripts/python.exe -m app.run_dce_mri
+git clone https://github.com/Elias-Ouafi/breastcancer && cd breastcancer
+pip install -r requirements.txt
+python run_demo.py
 ```
 
-Un seul processus, en local uniquement (`127.0.0.1:5000`) — rien n'est exposé sur
-le réseau.
+Puis ouvrir <http://127.0.0.1:5000>, déposer un fichier de `demo_cases/` et cliquer
+sur **Analyser l'examen**.
 
-## 2. Ouvrir
+Rien d'autre à télécharger : le modèle (`results_mri_p2_negfix/unet_best.pt`) et les
+trois cas de démo sont versionnés dans le dépôt. Le serveur écoute uniquement sur
+`127.0.0.1` — rien n'est exposé sur le réseau.
 
-<http://127.0.0.1:5000>
+`python run_demo.py --check` vérifie qu'une machine est prête sans occuper de port.
 
-## 3. Analyser un cas
-
-Glisser-déposer (ou cliquer sur la zone de dépôt) l'un des fichiers de
-`demo_cases/`, puis **Analyser l'examen** :
+## Les trois cas
 
 | Fichier | Patient | Coupe | IoU vérifié |
 |---------|---------|:-----:|:-----------:|
-| `demo_1_Breast_MRI_135.npz` | Breast_MRI_135 | 52 | 0,830 |
-| `demo_2_Breast_MRI_105.npz` | Breast_MRI_105 | 62 | 0,738 |
-| `demo_3_Breast_MRI_079.npz` | Breast_MRI_079 | 104 | 0,728 |
+| `demo_1_Breast_MRI_135.npz` | Breast_MRI_135 | 52 sur 176 | 0,830 |
+| `demo_2_Breast_MRI_105.npz` | Breast_MRI_105 | 62 sur 156 | 0,738 |
+| `demo_3_Breast_MRI_079.npz` | Breast_MRI_079 | 104 sur 154 | 0,728 |
 
-Résultat attendu : verdict + confiance, coupe annotée avec le cadre sur la zone
-de réhaussement, et le détail technique (coupe, cadre, moteur) dépliable.
+Résultat attendu : verdict + confiance, coupe annotée avec le cadre sur la zone de
+réhaussement, encart des limites connues, et le détail technique dépliable.
+
+Chaque fichier ne contient **que** la coupe indiquée (~0,2 Mo au lieu de 30 Mo) :
+c'est la seule que le modèle évalue, donc embarquer les 175 autres ne servait qu'à
+rendre le dépôt inclonable. Régénération : `python scripts/make_demo_cases.py`
+(nécessite les volumes complets, hors dépôt).
 
 ---
 
@@ -42,16 +46,19 @@ lésion **quand on lui montre la bonne coupe**, il ne sait pas encore la trouver
 seul. C'est un problème de *sélection*, pas de *segmentation* — détaillé dans
 [plan.md](plan.md) §4.2.
 
-Le Dice (~0,55) n'est pas comparable à la littérature (~0,80) : les masques
+Le Dice (~0,58) n'est pas comparable à la littérature (~0,80) : les masques
 d'entraînement sont des **boîtes englobantes** TCIA, pas des contours experts.
+
+C'est écrit noir sur blanc dans l'app (encart « Limites connues » sur les deux
+écrans) — autant l'assumer avant qu'on ne le demande.
 
 ## Si ça ne marche pas
 
 | Symptôme | Cause probable | Correctif |
 |----------|----------------|-----------|
-| `FileNotFoundError` sur le checkpoint | `results_mri_p2_negfix/unet_best.pt` absent | Ré-entraîner (`python -m imaging.train`) ou démarrer en mode mock : `.venv/Scripts/python.exe -m app.server` |
-| `demo_cases/` vide | Dossier non versionné (données patient) | Régénérer avec `TransformData.make_demo_case` |
-| Port déjà utilisé | Une instance tourne déjà | `$env:MRI_APP_PORT = "5001"` avant de relancer |
+| `run_demo.py` refuse de démarrer | Il dit lequel des trois prérequis manque | Suivre la ligne `->` qu'il affiche |
+| Port déjà utilisé | Une instance tourne déjà | `python run_demo.py --port 5001` |
 | Aucune coupe annotée affichée | Le fichier n'est pas un `.npz` prétraité | Utiliser un fichier de `demo_cases/` |
+| Moteur affiché = `mock` | `run_demo.py` contourné | Relancer via `python run_demo.py` |
 
 **Repli si le live échoue** : garder une capture d'écran d'un résultat réussi.

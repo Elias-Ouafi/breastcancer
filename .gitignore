@@ -91,7 +91,18 @@ wheels/
 
 results_ablation_*/
 results_mri_bankbench/
-results_mri_p2_negfix/
 results_mri_bankbench2/
 results_mri_p2_negfix_smoke/
-demo_cases/
+
+# The DCE-MRI run serving the demo is the exception to "no artefacts in git": its
+# checkpoint and metrics ARE versioned, so `git clone` + `pip install` is enough to
+# replay the demo on another machine. Everything else in the folder stays out.
+results_mri_p2_negfix/*
+!results_mri_p2_negfix/unet_best.pt
+!results_mri_p2_negfix/segmentation_metrics.csv
+!results_mri_p2_negfix/segmentation_test_metrics.csv
+
+# demo_cases/ is versioned too: since make_demo_case is slim by default, each case
+# is one slice (~0.2 MB), not a 30 MB volume. It carries a single pinned axial slice
+# of a public, already de-identified TCIA study (Duke-Breast-Cancer-MRI), so there
+# is no PHI to leak -- see scripts/make_demo_cases.py to rebuild them.
