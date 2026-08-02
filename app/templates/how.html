@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block back %}
+  <a href="{{ url_for('index') }}" class="back-btn" title="Retour" aria-label="Retour">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+  </a>
+{% endblock %}
+
+{% block mascot %}Voici ce qui se passe entre votre examen et le résultat.{% endblock %}
+
+{# Pas de lien « Comment ça marche » sur la page « Comment ça marche ». #}
+{% block how_link %}{% endblock %}
+
+{% block content %}
+  <div style="font-family: var(--font-heading); font-weight: 800; font-size: 17px; margin-bottom: 4px;">
+    Comment ça marche
+  </div>
+  <p class="text-muted" style="font-size: 12px; margin-bottom: 16px;">
+    Quatre étapes, de l'acquisition à la zone encadrée.
+  </p>
+
+  {# Le visuel montre la transformation réelle des données, pas une métaphore :
+     c'est la soustraction (étape 2) qui fait apparaître la lésion, et on le voit. #}
+  <svg viewBox="0 0 400 118" style="width: 100%; height: auto; margin-bottom: 16px;"
+       role="img" aria-label="Quatre vignettes : avant injection, après injection, soustraction, puis la zone encadrée.">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+        <path d="M0 0 L10 5 L0 10 z" fill="var(--color-neutral-500)"/>
+      </marker>
+    </defs>
+    {% for step in [
+      ('1', 'Avant', false, false, false),
+      ('2', 'Après', true, false, false),
+      ('3', 'Soustraction', true, true, false),
+      ('4', 'Localisation', true, true, true)
+    ] %}
+      {% set x = 8 + loop.index0 * 98 %}
+      <g>
+        <rect x="{{ x }}" y="8" width="76" height="76" fill="{{ '#14161a' if step[3] else '#2d2b2b' }}"
+              stroke="var(--color-neutral-500)" stroke-width="1"/>
+        {# Le sein : visible avant soustraction, effacé après (c'est tout l'intérêt). #}
+        {% if not step[3] %}
+          <ellipse cx="{{ x + 38 }}" cy="46" rx="26" ry="30" fill="#5e5a5a"/>
+          <ellipse cx="{{ x + 38 }}" cy="46" rx="17" ry="21" fill="#7d7979"/>
+        {% endif %}
+        {# La lésion : n'apparaît qu'après injection du produit de contraste. #}
+        {% if step[2] %}
+          <circle cx="{{ x + 46 }}" cy="38" r="7" fill="{{ '#fff' if step[3] else '#d7d3d3' }}"/>
+        {% endif %}
+        {% if step[4] %}
+          <rect x="{{ x + 35 }}" y="27" width="22" height="22" fill="none"
+                stroke="var(--color-accent)" stroke-width="2"/>
+        {% endif %}
+        <text x="{{ x + 38 }}" y="100" text-anchor="middle" font-size="10"
+              font-family="var(--font-body)" fill="var(--color-text)">{{ step[1] }}</text>
+        <text x="{{ x + 38 }}" y="112" text-anchor="middle" font-size="9"
+              font-family="var(--font-body)" fill="var(--color-accent)">{{ step[0] }}</text>
+      </g>
+      {% if not loop.last %}
+        <line x1="{{ x + 79 }}" y1="46" x2="{{ x + 93 }}" y2="46"
+              stroke="var(--color-neutral-500)" stroke-width="1.5" marker-end="url(#arrow)"/>
+      {% endif %}
+    {% endfor %}
+  </svg>
+
+  {% for kicker, title, body in [
+    ('Étape 1 · acquisition',
+     'Une IRM avant, plusieurs après injection',
+     "L'examen est une série d'IRM mammaires : une avant l'injection du produit de
+      contraste, plusieurs après. C'est le format DCE-MRI (Duke-Breast-Cancer-MRI)."),
+    ('Étape 2 · soustraction',
+     'On retire ce qui n\'a pas bougé',
+     "La 2ᵉ image post-injection moins l'image pré-injection. Les tissus normaux
+      s'annulent ; il ne reste que ce qui a capté le produit de contraste. Une lésion
+      se vascularise plus qu'un tissu sain, donc elle ressort."),
+    ('Étape 3 · segmentation',
+     'Un U-Net note chaque pixel',
+     "Un réseau de neurones convolutif (U-Net 2D, 7,7 M de paramètres, entraîné sur
+      186 patients) attribue à chaque pixel une probabilité d'appartenir à une lésion."),
+    ('Étape 4 · localisation',
+     'Seuil, puis cadre',
+     "Les pixels au-dessus de 0,5 sont regroupés et entourés d'un cadre englobant,
+      affiché sur la coupe. Environ 5 ms de calcul par coupe.")
+  ] %}
+    <div class="card elev-sm" style="margin-bottom: 10px;">
+      <div class="card-kicker">{{ kicker }}</div>
+      <div class="card-title" style="font-size: 15px;">{{ title }}</div>
+      <p class="card-body" style="opacity: 1;">{{ body }}</p>
+    </div>
+  {% endfor %}
+
+  <div class="card elev-sm" style="border: 1px solid var(--color-divider); margin-bottom: 16px;">
+    <div class="card-kicker">Ce que le modèle ne fait pas</div>
+    <p class="card-body" style="opacity: 1;">
+      Il ne choisit pas la coupe. Sur les 28 patients de test, il signale une zone sur
+      <strong>99,97 %</strong> des coupes sans lésion — il ne sait donc pas distinguer
+      la bonne. C'est pourquoi les cas de démonstration portent une coupe fixée à
+      l'avance. Chiffres complets dans <code>eval_report.json</code>.
+    </p>
+  </div>
+
+  <a href="{{ url_for('index') }}" class="btn btn-secondary btn-block">Retour à l'analyse</a>
+{% endblock %}

@@ -190,6 +190,31 @@
       letter-spacing: .1em; text-transform: uppercase; color: var(--color-neutral-700);
       margin-bottom: var(--space-2);
     }
+    /* ── Navigateur de coupes (page résultat) ── */
+    .strip-controls { margin: var(--space-2) 0 var(--space-2); }
+    .strip-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: var(--space-2); font-size: 11px; margin-top: var(--space-1);
+    }
+    #slice-range {
+      width: 100%; height: 20px; accent-color: var(--color-accent);
+      background: transparent; cursor: pointer;
+    }
+    .strip-btn {
+      font-family: var(--font-heading); font-weight: 800; font-size: 11px;
+      padding: 3px 10px; border: 1px solid var(--color-divider);
+      background: transparent; color: inherit; cursor: pointer; border-radius: 0;
+      flex: none;
+    }
+    .strip-btn:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+
+    .how-link {
+      display: inline-block; margin-top: var(--space-4); font-size: 12px;
+      font-family: var(--font-heading); font-weight: 800;
+      color: var(--color-accent); text-decoration: none;
+    }
+    .how-link:hover { text-decoration: underline; }
+
     .limits ul { margin: 0; padding-left: 16px; font-size: 11px; line-height: 1.5; }
     .limits li { margin-bottom: var(--space-1); }
     .limits li:last-child { margin-bottom: 0; }
@@ -250,6 +275,10 @@
 
       {% block content %}{% endblock %}
 
+      {% block how_link %}
+        <a href="{{ url_for('how_it_works') }}" class="how-link">Comment ça marche →</a>
+      {% endblock %}
+
       <div class="limits">
         <div class="limits-title">Limites connues</div>
         <ul>
@@ -260,10 +289,14 @@
               volume ne donnera pas un résultat fiable.</li>
           {% endblock %}
           <li>Entraîné sur des <strong>boîtes englobantes</strong> TCIA, pas des contours
-            d'expert : Dice 0,58 sur 186 patients, non comparable à la littérature
-            (~0,80), et sans intervalle de confiance.</li>
-          <li>Aucune validation clinique : ni sensibilité, ni spécificité, ni taux de
-            faux positifs établis.</li>
+            d'expert : Dice <strong>0,53</strong> [IC95 0,47–0,59] sur 28 patients de
+            test, non comparable à la littérature (~0,80) qui utilise des contours.</li>
+          <li>Une fois la bonne coupe montrée, la lésion est trouvée dans
+            <strong>88 %</strong> [IC95 82–93] des cas. Sur un volume entier, en
+            revanche, une alarme est levée sur <strong>99,97 %</strong> des coupes
+            saines (~222 fausses zones par examen).</li>
+          <li>Aucune validation clinique : chiffres de recherche sur un échantillon
+            limité, jamais une performance clinique.</li>
         </ul>
       </div>
 

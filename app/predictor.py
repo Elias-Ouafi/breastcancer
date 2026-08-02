@@ -12,10 +12,12 @@ The result contract is aligned with ``inference.predict_dbt`` so the future
     {
         "lesion_detected": bool,      # cancer / lesion present?
         "slice_preselected": bool,    # was the slice pinned by a human, not found?
+        "slice_selector": str,        # pinned | classifier | segmentation_confidence
         "confidence": float,          # 0..1 detection confidence
         "best_slice": int | None,     # slice index of the finding (imaging)
         "box_xywh": [x, y, w, h] | None,
         "n_slices": int | None,
+        "inference_ms": float | None, # scoring time, model load excluded
         "backend": str,               # which predictor answered
     }
 """
@@ -23,6 +25,7 @@ from __future__ import annotations
 
 import os
 import random
+import time
 from typing import Optional
 
 
@@ -58,17 +61,53 @@ class MockPredictor(Predictor):
         return {
             "lesion_detected": detected,
             "slice_preselected": False,  # nothing is selected: no pixel is ever read
+            "slice_selector": "mock",
             "confidence": confidence,
             "best_slice": rng.randint(0, n_slices - 1) if detected else None,
             "box_xywh": [rng.randint(20, 120), rng.randint(20, 120), 48, 48]
             if detected
             else None,
             "n_slices": n_slices,
+            "inference_ms": None,  # nothing was computed, so there is nothing to time
             "backend": self.name,
         }
 
 
-class DbtUNetPredictor(Predictor):
+class _CachedUNetPredictor(Predictor):
+    """Shared plumbing for the two U-Net backends: load the weights once, and time.
+
+    Without the cache every request paid a fresh ``load_unet`` -- reading a 31 MB
+    checkpoint off disk and pushing it to the GPU -- which dominated the response and
+    made any timing shown to the user meaningless. The model is stateless at
+    inference (``eval()``, no grad), so one instance can serve every request.
+
+    ``inference_ms`` deliberately covers scoring only, not the load: it is the number
+    that describes the product ("how long does an exam take"), whereas the one-off
+    load is a startup cost the first request happens to pay.
+    """
+
+    def __init__(self, checkpoint: Optional[str] = None):
+        self.checkpoint = checkpoint
+        self._model = None
+        self._device = None
+
+    def _ensure_model(self, default_checkpoint: str):
+        if self._model is None:
+            from inference import load_unet
+
+            self._model, self._device = load_unet(self.checkpoint or default_checkpoint)
+        return self._model, self._device
+
+    @staticmethod
+    def _timed(fn):
+        """Run ``fn`` and return its result with ``inference_ms`` filled in."""
+        start = time.perf_counter()
+        result = fn()
+        result["inference_ms"] = round(1000 * (time.perf_counter() - start), 1)
+        return result
+
+
+class DbtUNetPredictor(_CachedUNetPredictor):
     """Real backend: the trained 2D U-Net via ``inference.predict_dbt``.
 
     Left un-wired by default. To connect the AI, set ``MRI_APP_BACKEND=unet`` (the
@@ -78,18 +117,16 @@ class DbtUNetPredictor(Predictor):
 
     name = "unet"
 
-    def __init__(self, checkpoint: Optional[str] = None):
-        self.checkpoint = checkpoint
-
     def predict(self, file_path: str) -> dict:
         from inference import DEFAULT_UNET_CKPT, predict_dbt
 
-        result = predict_dbt(file_path, checkpoint=self.checkpoint or DEFAULT_UNET_CKPT)
+        model, device = self._ensure_model(DEFAULT_UNET_CKPT)
+        result = self._timed(lambda: predict_dbt(file_path, model=model, device=device))
         result.setdefault("backend", self.name)
         return result
 
 
-class DceMriUNetPredictor(Predictor):
+class DceMriUNetPredictor(_CachedUNetPredictor):
     """Real backend: the trained 2D U-Net via ``inference.predict_dce_mri``.
 
     Trained on Duke-Breast-Cancer-MRI subtraction volumes (post minus pre-contrast),
@@ -111,15 +148,16 @@ class DceMriUNetPredictor(Predictor):
 
     name = "dce_mri"
 
-    def __init__(self, checkpoint: Optional[str] = None):
-        self.checkpoint = checkpoint
-
     def predict(self, file_path: str) -> dict:
         from inference import DEFAULT_MRI_UNET_CKPT, predict_dce_mri
 
-        result = predict_dce_mri(file_path, checkpoint=self.checkpoint or DEFAULT_MRI_UNET_CKPT)
+        model, device = self._ensure_model(DEFAULT_MRI_UNET_CKPT)
+        result = self._timed(lambda: predict_dce_mri(file_path, model=model, device=device))
         result.setdefault("backend", self.name)
         return result
+
+
+_PREDICTORS: dict = {}
 
 
 def get_predictor() -> Predictor:
@@ -127,10 +165,18 @@ def get_predictor() -> Predictor:
 
     Selection is driven by the ``MRI_APP_BACKEND`` env var (``mock`` by default).
     THIS is the single place to change when connecting the real AI.
+
+    Instances are memoised per backend name. They are stateless apart from the
+    lazily-loaded weights, and the server calls this on every request (including
+    twice per ``/predict``), so returning a fresh object each time would throw the
+    model cache away and reload 31 MB of weights per page view.
     """
     backend = os.environ.get("MRI_APP_BACKEND", "mock").lower()
-    if backend == "unet":
-        return DbtUNetPredictor()
-    if backend == "dce_mri":
-        return DceMriUNetPredictor()
-    return MockPredictor()
+    if backend not in _PREDICTORS:
+        if backend == "unet":
+            _PREDICTORS[backend] = DbtUNetPredictor()
+        elif backend == "dce_mri":
+            _PREDICTORS[backend] = DceMriUNetPredictor()
+        else:
+            _PREDICTORS[backend] = MockPredictor()
+    return _PREDICTORS[backend]

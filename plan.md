@@ -567,3 +567,88 @@ script (vérifié : `InvalidStateError` levée). Vérifié à la place : la page
 présent), les routes `/predict` (HTML) et `/api/predict` (JSON) répondent correctement en conditions
 réelles avec les 3 cas de démo, et l'app ne contient **aucun JavaScript côté client** (HTML pur via
 Jinja) — donc pas de logique JS susceptible de casser silencieusement hors de portée de ces tests.
+
+---
+
+### 4.3 Évaluation chiffrée et intervalles de confiance (2026-08-02)
+
+`imaging/evaluate.py` remplace le chiffre unique de l'entraînement (une moyenne de Dice sur les
+coupes positives, sans incertitude) par ce qu'un lecteur sceptique demandera. Sur les **28 patients
+de test** (split par patient, seed 42 — le même qu'à l'entraînement), 4 782 coupes :
+
+| Mesure | Valeur | IC95 |
+|--------|:------:|:----:|
+| Dice, coupes avec lésion | 0,533 | 0,473 – 0,593 |
+| IoU, coupes avec lésion | 0,401 | 0,346 – 0,455 |
+| Sensibilité (IoU ≥ 0,1) | 88,0 % | 81,9 – 93,4 % |
+| Sensibilité (centre visé juste) | 81,1 % | 74,0 – 87,7 % |
+| Faux positifs par volume | 222,2 | 204,7 – 237,4 |
+| Coupes saines avec alarme | 99,97 % | 99,92 – 100 % |
+| Temps par volume (RTX 5060) | 0,76 s | médiane 0,75, max 1,29 |
+| Temps par coupe | 4,5 ms | — |
+
+**Sur le bootstrap.** Le rééchantillonnage porte sur les **patients**, pas sur les coupes : les
+coupes d'un même patient partagent l'anatomie, la lésion et l'acquisition, donc les traiter comme
+indépendantes produirait un intervalle artificiellement étroit. 10 000 rééchantillonnages,
+percentiles 2,5 / 97,5.
+
+**Écart avec le 0,580 annoncé.** Ce dernier est une moyenne **par coupe** (chaque coupe pèse pareil,
+donc un patient à 40 coupes lésionnelles pèse dix fois un patient à 4) ; 0,533 est une moyenne **par
+patient**. Les deux sont défendables ; la moyenne par patient est celle qui a un IC interprétable et
+c'est donc elle qui est citée désormais.
+
+**Le chiffre nouveau et important : 99,97 %.** Le modèle lève une alarme sur pratiquement *toutes*
+les coupes sans lésion, ~222 fausses zones par examen. C'est la formulation quantitative de l'échec
+0/186 de §4.2, et elle montre que le problème n'est pas un mauvais classement mais une **absence
+totale de signal discriminant** — la métrique d'entraînement (`positive_only=True`) ne pouvait
+structurellement pas le voir, puisqu'elle ne regarde jamais une coupe saine.
+
+**Le temps d'inférence est un non-sujet** : 0,76 s par volume complet contre les 10 s visées au
+Jalon 2. Le goulot n'est pas le calcul. À noter : l'app rechargeait le checkpoint (31 Mo) à chaque
+requête, ce qui dominait la réponse ; le prédicteur met désormais le modèle en cache
+(352 ms à la première requête, ~40 ms ensuite).
+
+#### Tête de classification de coupe — première mesure
+
+La piste annoncée en §4.2 est implémentée (`imaging/sliceclf.py`) : un petit CNN GroupNorm entraîné
+sur **toutes** les coupes (22 010 coupes d'entraînement, 15 % positives, `pos_weight` = 5,5) plutôt
+que sur un sous-échantillon de négatifs, et sélectionné sur le top-1 — « la coupe la mieux notée du
+volume contient-elle réellement une lésion ? », exactement la métrique qui valait 0/186.
+
+**Résultat, 25 époques, 28 patients de test :**
+
+| Mesure | Confiance de segmentation (avant) | Classifieur dédié |
+|--------|:---------------------------------:|:-----------------:|
+| Top-1 (la meilleure coupe contient la lésion) | **0,0 %** (0/186) | **42,9 %** [IC95 25,0 – 60,7] |
+| Top-3 | — | 50,0 % [IC95 32,1 – 67,9] |
+| Rang médian de la 1ʳᵉ coupe correcte | — | 3,5 |
+| AUC (par patient) | ~0,50 par construction (aucun signal) | 0,803 |
+| Lésion dans le top-5 | — | 16/28 patients |
+
+**Lecture.** Le problème est **tractable** : là où la confiance de segmentation n'avait aucun pouvoir
+discriminant (aire prédite identique sur coupes avec et sans lésion, §4.2), un modèle entraîné pour
+la tâche de tri atteint 0,80 d'AUC. Le passage de 0 % à 43 % est franc et ne tient pas à la chance —
+l'IC95 exclut largement zéro.
+
+**Mais ce n'est pas livrable comme chemin principal.** 43 % veut dire qu'un upload libre se trompe
+plus d'une fois sur deux, et l'IC est large (25–61 %) parce que 28 patients c'est peu. Écart val/test
+notable aussi (57 % contre 43 %), cohérent avec des échantillons de cette taille. Les cas de démo
+gardent donc leur coupe figée : une démo qui échoue une fois sur deux est pire qu'une coupe assumée
+comme choisie à l'avance.
+
+**Branché malgré tout pour l'upload libre** (`inference.load_slice_classifier`, consulté seulement
+quand aucune coupe n'est imposée) : dans ce cas précis l'alternative est 0 %, donc 43 % est un gain
+net. Le mécanisme utilisé remonte dans le résultat (`slice_selector` : `pinned` / `classifier` /
+`segmentation_confidence`) et l'app affiche lequel a servi avec son taux de réussite, plutôt que de
+laisser croire à une détection autonome.
+
+**Rang médian 3,5 contre rang moyen 19,7** : la distribution est bimodale — soit le modèle vise
+juste ou presque, soit il part complètement ailleurs. C'est ce qui suggère la piste suivante :
+présenter les **5 meilleures coupes candidates** à revoir plutôt qu'une seule (16/28 patients, 57 %,
+auraient leur lésion dans ce lot). Cadrage « candidats à examiner » plutôt que « voici la lésion » —
+honnête et utile, contrairement à un top-1 à 43 % présenté comme une réponse.
+
+**Pistes non explorées** (par ordre de rapport attendu) : entraîner sur plus de patients (186 reste
+faible pour une tâche de tri), exploiter le contexte 3D (une lésion s'étend sur plusieurs coupes
+consécutives — un modèle 2,5D avec ±2 coupes en entrée est peu coûteux), et calibrer sur la
+validation plutôt que de prendre l'arg-max brut.

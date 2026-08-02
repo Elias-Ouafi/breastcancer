@@ -23,12 +23,17 @@
   {% elif result.slice_preselected %}
     <li>La coupe analysée ci-dessus a été <strong>choisie à l'avance par un humain</strong>,
       pas trouvée par le modèle : il segmente bien une lésion une fois la bonne coupe
-      montrée, il ne sait pas encore la localiser seul (vérifié 0/186 sur les patients
-      de test).</li>
+      montrée, il ne sait pas encore la localiser seul de façon fiable.</li>
+  {% elif result.slice_selector == "classifier" %}
+    <li>La coupe a été choisie par un <strong>classifieur de coupe dédié</strong>, qui
+      tombe juste dans <strong>43 %</strong> des cas [IC95 25–61] sur les 28 patients
+      de test. Bien mieux que les 0 % de la méthode précédente, mais loin d'être
+      fiable : si rien n'apparaît sur cette coupe, la lésion est probablement ailleurs
+      dans le volume.</li>
   {% else %}
-    <li>La coupe a été choisie par le modèle en balayant le volume. Cette sélection
-      automatique <strong>n'est pas fiable</strong> à ce stade (vérifié 0/186 sur les
-      patients de test) : la localisation affichée est à prendre avec prudence.</li>
+    <li>La coupe a été choisie en balayant le volume avec la confiance du modèle de
+      segmentation. Cette méthode <strong>ne fonctionne pas</strong> (0/186 sur les
+      patients de test) : la localisation affichée n'a pas de valeur.</li>
   {% endif %}
 {% endblock %}
 
@@ -38,7 +43,46 @@
   </div>
   <p class="text-muted" style="font-size: 12px; word-break: break-all; margin-bottom: 14px;">{{ filename }}</p>
 
-  {% if overlay_data_uri %}
+  {% if strip %}
+    {# Navigateur de coupes. Toutes les images sont déjà dans la page (data URI) :
+       le fichier uploadé est supprimé juste après le calcul, donc on ne peut pas
+       le relire à la demande — et ça garantit une navigation sans latence. #}
+    <div style="position: relative; width: 100%; border: 1px solid var(--color-divider);">
+      {% for s in strip.slices %}
+        <img class="strip-slice" data-position="{{ loop.index0 }}" src="{{ s.uri }}"
+             alt="Coupe {{ s.index }}"
+             style="width: 100%; display: {{ 'block' if loop.index0 == strip.best_position else 'none' }};">
+      {% endfor %}
+      <img id="mip-view" src="{{ strip.mip }}" alt="Projection d'intensité maximale"
+           style="width: 100%; display: none;">
+      {% if overlay_box_pct %}
+        <div id="pulse-marker" style="position: absolute; pointer-events: none;
+                    left: {{ overlay_box_pct.left }}%; top: {{ overlay_box_pct.top }}%;
+                    width: {{ overlay_box_pct.width }}%; height: {{ overlay_box_pct.height }}%;">
+          <div style="position: absolute; inset: -4px; border: 2px solid var(--color-accent);
+                      border-radius: 50%; animation: pulse-ring 2.2s ease-out infinite;"></div>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="strip-controls">
+      <input type="range" id="slice-range" min="0" max="{{ strip.slices|length - 1 }}"
+             value="{{ strip.best_position }}" step="1" aria-label="Naviguer entre les coupes">
+      <div class="strip-row">
+        <span class="text-muted" id="slice-label">
+          Coupe {{ strip.slices[strip.best_position].index }}{% if result.n_slices %} sur {{ result.n_slices }}{% endif %}
+        </span>
+        <button type="button" id="mip-toggle" class="strip-btn">Vue MIP</button>
+      </div>
+    </div>
+
+    <p class="text-muted" style="font-size: 11px; margin-bottom: 16px;">
+      Cadre = zone détectée, tracée <strong>uniquement</strong> sur la coupe évaluée —
+      les voisines sont montrées telles quelles, le modèle ne les a pas analysées.
+      Extrait de {{ strip.slices|length }} coupes autour de la zone ; image agrandie
+      pour la lisibilité.
+    </p>
+  {% elif overlay_data_uri %}
     <!-- Coupe annotée. Le marqueur pulsant est positionné à partir du vrai cadre
          renvoyé par le modèle (overlay_box_pct), pas d'une position décorative. -->
     <div style="position: relative; width: 100%; margin-bottom: 8px; border: 1px solid var(--color-divider);">
@@ -64,6 +108,10 @@
                                    border-left: 3px solid {{ verdict_color }}; margin-bottom: 12px;">
     <div class="card-kicker" style="color: {{ verdict_color }};">
       Zone 1 · confiance {{ '%.1f'|format(result.confidence * 100) }}%
+      {%- if result.inference_ms %} · analysé en
+        {%- if result.inference_ms < 1000 %} {{ result.inference_ms|round|int }} ms
+        {%- else %} {{ '%.1f'|format(result.inference_ms / 1000) }} s{% endif %}
+      {%- endif %}
     </div>
     <div class="card-title" style="color: {{ verdict_color }};">
       {{ 'Zone de réhaussement suspecte' if detected else 'Aucune zone suspecte détectée' }}
@@ -115,10 +163,17 @@
         {% if result.best_slice is not none %}
           <tr><td class="text-muted">Anomalie à la coupe</td><td>{{ result.best_slice }}</td></tr>
           <tr><td class="text-muted">Sélection de la coupe</td>
-              <td>{{ 'imposée (cas de démo)' if result.slice_preselected else 'balayage du volume' }}</td></tr>
+              <td>{{ {'pinned': 'imposée (cas de démo)',
+                      'classifier': 'classifieur de coupe',
+                      'segmentation_confidence': 'confiance de segmentation'}
+                     .get(result.slice_selector,
+                          'imposée (cas de démo)' if result.slice_preselected else 'balayage du volume') }}</td></tr>
         {% endif %}
         {% if result.box_xywh %}
           <tr><td class="text-muted">Cadre englobant (x, y, l, h)</td><td>{{ result.box_xywh|join(', ') }}</td></tr>
+        {% endif %}
+        {% if result.inference_ms %}
+          <tr><td class="text-muted">Temps de calcul</td><td>{{ result.inference_ms }} ms</td></tr>
         {% endif %}
         <tr><td class="text-muted">Moteur</td><td><span class="tag tag-neutral">{{ result.backend }}</span></td></tr>
       </table>
@@ -131,4 +186,52 @@
   </p>
 
   <a href="{{ url_for('index') }}" class="btn btn-secondary btn-block">Nouvelle analyse</a>
+
+  {% if strip %}
+    <script>
+      // Toutes les coupes sont déjà décodées dans le DOM ; naviguer ne fait que
+      // basculer un `display`, donc aucun aller-retour réseau et aucune latence.
+      (function () {
+        var slices = Array.prototype.slice.call(document.querySelectorAll('.strip-slice'));
+        var range = document.getElementById('slice-range');
+        var label = document.getElementById('slice-label');
+        var mip = document.getElementById('mip-view');
+        var mipToggle = document.getElementById('mip-toggle');
+        var marker = document.getElementById('pulse-marker');
+        var indices = {{ strip.slices | map(attribute='index') | list | tojson }};
+        var best = {{ strip.best_position }};
+        var total = {{ result.n_slices or 0 }};
+        var mipOn = false;
+
+        function show(position) {
+          slices.forEach(function (img, i) { img.style.display = i === position ? 'block' : 'none'; });
+          label.textContent = 'Coupe ' + indices[position] + (total ? ' sur ' + total : '')
+            + (position === best ? ' — coupe évaluée' : '');
+          // Le marqueur ne vaut que pour la coupe évaluée : le modèle n'a rien
+          // détecté sur les autres, donc rien à y pointer.
+          if (marker) { marker.style.display = position === best ? 'block' : 'none'; }
+        }
+
+        range.addEventListener('input', function () {
+          if (mipOn) { setMip(false); }
+          show(parseInt(range.value, 10));
+        });
+
+        function setMip(on) {
+          mipOn = on;
+          mip.style.display = on ? 'block' : 'none';
+          slices.forEach(function (img) { if (on) { img.style.display = 'none'; } });
+          if (marker) { marker.style.display = on ? 'none' : (parseInt(range.value, 10) === best ? 'block' : 'none'); }
+          mipToggle.textContent = on ? 'Vue coupe' : 'Vue MIP';
+          label.textContent = on
+            ? 'Projection d\'intensité maximale sur ' + slices.length + ' coupes'
+            : label.textContent;
+          if (!on) { show(parseInt(range.value, 10)); }
+        }
+
+        mipToggle.addEventListener('click', function () { setMip(!mipOn); });
+        show(best);
+      })();
+    </script>
+  {% endif %}
 {% endblock %}

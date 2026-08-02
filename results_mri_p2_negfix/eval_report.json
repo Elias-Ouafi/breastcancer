@@ -1,0 +1,53 @@
+{
+  "checkpoint": "results_mri_p2_negfix\\unet_best.pt",
+  "data_dir": "preprocessed_data_mri_p2",
+  "split": "test",
+  "n_patients": 28,
+  "n_slices": 4782,
+  "threshold": 0.5,
+  "hit_iou": 0.1,
+  "device": "cuda",
+  "gpu": "NVIDIA GeForce RTX 5060 Laptop GPU",
+  "dice": {
+    "mean": 0.5334882130948101,
+    "lo": 0.47289171612767494,
+    "hi": 0.5929163754428071,
+    "n": 28
+  },
+  "iou": {
+    "mean": 0.40093934737885756,
+    "lo": 0.34623759145694666,
+    "hi": 0.45502220170802393,
+    "n": 28
+  },
+  "sensitivity_iou": {
+    "mean": 0.8801040929192191,
+    "lo": 0.8190467710248436,
+    "hi": 0.9336906843156842,
+    "n": 28
+  },
+  "sensitivity_centroid": {
+    "mean": 0.8113056416233938,
+    "lo": 0.7397278697318087,
+    "hi": 0.8773455682292343,
+    "n": 28
+  },
+  "fp_components_per_volume": {
+    "mean": 222.17857142857142,
+    "lo": 204.67857142857142,
+    "hi": 237.35714285714286,
+    "n": 28
+  },
+  "fp_slice_rate": {
+    "mean": 0.9997412008281573,
+    "lo": 0.9992236024844721,
+    "hi": 1.0,
+    "n": 28
+  },
+  "seconds_per_volume": {
+    "mean": 0.7631716071428595,
+    "median": 0.7536646999997174,
+    "max": 1.2884444000001167
+  },
+  "ms_per_slice": 4.468591593475547
+}

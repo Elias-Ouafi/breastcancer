@@ -141,6 +141,35 @@ targets lesion *localisation*, and the achievable Dice is inherently limited.
 Requires `torch` (install the wheel matching your platform/CUDA). Validate the whole
 loop without any data via `python -m imaging.train --smoke-test`.
 
+#### Evaluating a trained model
+
+`imaging.train` reports one number: mean Dice over lesion-bearing slices, with no
+uncertainty and no view of what happens on a healthy slice. `imaging.evaluate` adds
+what that leaves out — bootstrap confidence intervals (resampling *patients*, since
+slices within a patient are correlated), lesion-level sensitivity, false positives
+per whole volume, and measured inference time:
+
+```bash
+python -m imaging.evaluate --data-dir preprocessed_data_mri_p2 \
+    --checkpoint results_mri_p2_negfix/unet_best.pt
+```
+
+It writes `eval_report.json` (summary) and `eval_per_patient.csv` (one row per
+patient, so any figure can be traced back). Current results are in `plan.md` §4.3.
+
+#### Slice classifier
+
+The segmentation U-Net cannot pick a lesion's slice out of a full volume (see
+`plan.md` §4.2/§4.3). `imaging.sliceclf` trains a separate model for that ranking
+task alone, on *every* slice rather than a sampled subset of negatives:
+
+```bash
+python -m imaging.sliceclf --slice-bank slice_bank_p2 --epochs 25
+```
+
+It is selected on top-1 accuracy — "is the volume's highest-scoring slice really
+lesion-bearing?" — the metric the segmentation confidence scored 0 on.
+
 ### Histopathology (BreakHis)
 ```bash
 python ExtractBreakHis.py

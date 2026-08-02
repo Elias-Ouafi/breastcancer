@@ -101,6 +101,15 @@ results_mri_p2_negfix/*
 !results_mri_p2_negfix/unet_best.pt
 !results_mri_p2_negfix/segmentation_metrics.csv
 !results_mri_p2_negfix/segmentation_test_metrics.csv
+!results_mri_p2_negfix/eval_report.json
+!results_mri_p2_negfix/eval_per_patient.csv
+
+# Slice classifier (imaging.sliceclf): the checkpoint is 2.4 MB and its metrics are
+# the evidence behind the localisation claims, so both are versioned.
+results_sliceclf/*
+!results_sliceclf/sliceclf_best.pt
+!results_sliceclf/sliceclf_metrics.csv
+!results_sliceclf/sliceclf_test_metrics.json
 
 # demo_cases/ is versioned too: since make_demo_case is slim by default, each case
 # is one slice (~0.2 MB), not a 30 MB volume. It carries a single pinned axial slice

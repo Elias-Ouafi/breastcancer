@@ -9,8 +9,13 @@ pip install -r requirements.txt
 python run_demo.py
 ```
 
-Puis ouvrir <http://127.0.0.1:5000>, déposer un fichier de `demo_cases/` et cliquer
-sur **Analyser l'examen**.
+Puis ouvrir <http://127.0.0.1:5000> et cliquer sur **Cas 1**, **Cas 2** ou **Cas 3** —
+pas de sélecteur de fichier à manipuler en plein pitch. (Le dépôt de fichier reste
+disponible pour un examen à vous.)
+
+Sur la page de résultat : le **curseur** fait défiler les 25 coupes autour de la zone
+détectée, et **Vue MIP** affiche la projection d'intensité maximale. Le cadre n'est
+tracé que sur la coupe réellement évaluée.
 
 Rien d'autre à télécharger : le modèle (`results_mri_p2_negfix/unet_best.pt`) et les
 trois cas de démo sont versionnés dans le dépôt. Le serveur écoute uniquement sur
@@ -29,10 +34,10 @@ trois cas de démo sont versionnés dans le dépôt. Le serveur écoute uniqueme
 Résultat attendu : verdict + confiance, coupe annotée avec le cadre sur la zone de
 réhaussement, encart des limites connues, et le détail technique dépliable.
 
-Chaque fichier ne contient **que** la coupe indiquée (~0,2 Mo au lieu de 30 Mo) :
-c'est la seule que le modèle évalue, donc embarquer les 175 autres ne servait qu'à
-rendre le dépôt inclonable. Régénération : `python scripts/make_demo_cases.py`
-(nécessite les volumes complets, hors dépôt).
+Chaque fichier contient un **pavé de 25 coupes** centré sur celle indiquée (~4,5 Mo
+au lieu de 30 Mo pour le volume entier) : le modèle n'en évalue qu'une, les 24 autres
+servent uniquement au curseur et au MIP. Régénération :
+`python scripts/make_demo_cases.py` (nécessite les volumes complets, hors dépôt).
 
 ---
 
@@ -46,8 +51,22 @@ lésion **quand on lui montre la bonne coupe**, il ne sait pas encore la trouver
 seul. C'est un problème de *sélection*, pas de *segmentation* — détaillé dans
 [plan.md](plan.md) §4.2.
 
-Le Dice (~0,58) n'est pas comparable à la littérature (~0,80) : les masques
-d'entraînement sont des **boîtes englobantes** TCIA, pas des contours experts.
+Les chiffres à citer, mesurés sur les 28 patients de test (`imaging.evaluate`,
+détail dans `results_mri_p2_negfix/eval_report.json`) :
+
+| Mesure | Valeur | IC95 |
+|--------|:------:|:----:|
+| Dice (coupes avec lésion) | 0,53 | 0,47 – 0,59 |
+| Sensibilité, lésion trouvée (IoU ≥ 0,1) | 88 % | 82 – 93 % |
+| Sensibilité, centre visé juste | 81 % | 74 – 88 % |
+| Faux positifs par examen | 222 | 205 – 237 |
+| Coupes saines déclenchant une alarme | 99,97 % | 99,92 – 100 % |
+| Temps de calcul par volume (RTX 5060) | 0,76 s | — |
+
+Le Dice n'est pas comparable à la littérature (~0,80) : les masques d'entraînement
+sont des **boîtes englobantes** TCIA, pas des contours experts, ce qui plafonne
+mécaniquement le Dice atteignable. Les deux dernières lignes sont la formulation
+chiffrée du problème de sélection de coupe — c'est la limite, autant la donner soi-même.
 
 C'est écrit noir sur blanc dans l'app (encart « Limites connues » sur les deux
 écrans) — autant l'assumer avant qu'on ne le demande.
