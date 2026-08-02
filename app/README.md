@@ -68,8 +68,14 @@ new `Predictor` subclass and add one branch in `get_predictor()`.
 
 ## Endpoints
 
-- `GET /` — upload form
-- `POST /predict` — HTML result page
+- `GET /` — upload form, plus one-click buttons for the bundled demo cases
+- `GET /comment-ca-marche` — the four pipeline steps, and what the model does not do
+- `POST /predict` — HTML result page (field name `mri`)
+- `POST /demo/<n>` — same page for bundled case `n` (1-based), no upload needed
 - `POST /api/predict` — JSON result (field name `mri`)
+
+The HTML result page embeds every slice of the uploaded slab as a data URI so the
+slice slider and the MIP toggle work with no round-trip — which matters because the
+upload is deleted right after scoring and cannot be re-read.
 
 > Research/demo tool only — not a medical device, not for clinical use.

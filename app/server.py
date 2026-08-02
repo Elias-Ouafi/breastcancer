@@ -53,6 +53,31 @@ def _overlay_data_uri(file_path: str, result: dict) -> str | None:
         return None
 
 
+def _slice_strip(file_path: str, result: dict) -> dict | None:
+    """Data URIs for the slice navigator, or None when there is nothing to navigate.
+
+    Best-effort like `_overlay_data_uri`: the page falls back to the single annotated
+    slice whenever this returns None (mock backend, non-`.npz` upload, one-slice file,
+    or a volume too large to embed).
+    """
+    if result.get("best_slice") is None or not file_path.lower().endswith(".npz"):
+        return None
+    try:
+        from inference import render_slice_strip
+
+        strip = render_slice_strip(file_path, result["best_slice"], result.get("box_xywh"))
+        if strip is None:
+            return None
+        encode = lambda png: "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+        return {
+            "slices": [{"index": s["index"], "uri": encode(s["png"])} for s in strip["slices"]],
+            "best_position": strip["best_position"],
+            "mip": encode(strip["mip"]),
+        }
+    except Exception:
+        return None
+
+
 def _overlay_box_pct(file_path: str, result: dict) -> dict | None:
     """Express `box_xywh` as percentages of the rendered slice, for the CSS marker.
 
@@ -84,7 +109,33 @@ def _overlay_box_pct(file_path: str, result: dict) -> dict | None:
 @app.route("/", methods=["GET"])
 def index():
     predictor = get_predictor()
-    return render_template("index.html", backend=predictor.name)
+    return render_template("index.html", backend=predictor.name, demo_cases=_demo_cases())
+
+
+DEMO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "demo_cases")
+
+
+def _demo_cases():
+    """The bundled demo cases, sorted. Empty list when the folder is missing."""
+    if not os.path.isdir(DEMO_DIR):
+        return []
+    return sorted(f for f in os.listdir(DEMO_DIR) if f.endswith(".npz"))
+
+
+@app.route("/demo/<int:case_number>", methods=["POST"])
+def predict_demo(case_number: int):
+    """Score a bundled demo case, so a pitch does not go through a file picker.
+
+    The case is chosen by position in `_demo_cases()`, never by a client-supplied
+    path, so there is nothing to traverse. The file is read in place and not deleted:
+    it ships with the repo and contains no patient-identifying data (a slab of an
+    already de-identified public TCIA study), unlike an upload.
+    """
+    cases = _demo_cases()
+    if not 1 <= case_number <= len(cases):
+        return redirect(url_for("index"))
+    return _render_prediction(os.path.join(DEMO_DIR, cases[case_number - 1]),
+                              cases[case_number - 1], cleanup=False)
 
 
 @app.route("/comment-ca-marche", methods=["GET"])
@@ -98,10 +149,12 @@ def predict():
     file = request.files.get("mri")
     if file is None or file.filename == "":
         return render_template("index.html", backend=get_predictor().name,
+                               demo_cases=_demo_cases(),
                                error="Veuillez sélectionner un fichier IRM à envoyer."), 400
     if not _allowed(file.filename):
         allowed = ", ".join(sorted(ALLOWED_EXTENSIONS))
         return render_template("index.html", backend=get_predictor().name,
+                               demo_cases=_demo_cases(),
                                error=f"Type de fichier non pris en charge. Formats acceptés : {allowed}"), 400
 
     # Persist to a unique temp path (avoids collisions and path-traversal via filename).
@@ -109,25 +162,38 @@ def predict():
     safe_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex}{ext.lower()}")
     file.save(safe_path)
 
+    return _render_prediction(safe_path, file.filename)
+
+
+def _render_prediction(path: str, display_name: str, cleanup: bool = True):
+    """Score ``path`` and render the result page. Shared by /predict and /demo/<n>.
+
+    ``cleanup`` deletes the file afterwards -- required for uploads (the privacy
+    promise the UI makes), wrong for the bundled demo cases.
+    """
     predictor = get_predictor()
     overlay_data_uri = None
     overlay_box_pct = None
+    strip = None
     try:
-        result = predictor.predict(safe_path)
-        overlay_data_uri = _overlay_data_uri(safe_path, result)
-        overlay_box_pct = _overlay_box_pct(safe_path, result)
+        result = predictor.predict(path)
+        overlay_data_uri = _overlay_data_uri(path, result)
+        overlay_box_pct = _overlay_box_pct(path, result)
+        strip = _slice_strip(path, result)
     except Exception as exc:  # surface backend errors in the UI instead of a 500 page
         return render_template("index.html", backend=predictor.name,
+                               demo_cases=_demo_cases(),
                                error=f"Échec de la prédiction : {exc}"), 500
     finally:
-        try:
-            os.remove(safe_path)
-        except OSError:
-            pass
+        if cleanup:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     return render_template("result.html", result=result, overlay_data_uri=overlay_data_uri,
-                           overlay_box_pct=overlay_box_pct,
-                           filename=file.filename, backend=predictor.name)
+                           overlay_box_pct=overlay_box_pct, strip=strip,
+                           filename=display_name, backend=predictor.name)
 
 
 @app.route("/api/predict", methods=["POST"])

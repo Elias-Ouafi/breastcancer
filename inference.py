@@ -385,6 +385,127 @@ def predict_dce_mri(volume: Union[str, np.ndarray],
                             forced_slice, source_n_slices)
 
 
+def _to_display_image(slice_array, window, rgb=True):
+    """Percentile-stretch a z-normalised slice to an 8-bit PIL image.
+
+    ``window`` is the ``(lo, hi)`` intensity pair to map onto 0..255. Passing the
+    same window for every slice of a stack is what keeps brightness stable while
+    scrolling; a per-slice window makes the whole image pulse and would let a lesion
+    look like it is appearing when only the contrast changed.
+
+    ``rgb=False`` keeps the image 8-bit grayscale, which encodes to roughly a third
+    of the PNG bytes. Only the slice that carries the coloured lesion box needs the
+    extra channels.
+    """
+    from PIL import Image
+
+    lo, hi = window
+    img = np.clip((slice_array - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
+    out = Image.fromarray((img * 255).astype(np.uint8), mode="L")
+    return out.convert("RGB") if rgb else out
+
+
+def _draw_box(pil_img, box_xywh):
+    """Draw the lesion box in the brand accent (plan.md Partie 3), in place."""
+    from PIL import ImageDraw
+
+    x, y, w, h = box_xywh
+    ImageDraw.Draw(pil_img).rectangle([x, y, x + w, y + h], outline=(255, 122, 89), width=2)
+
+
+def _upscale(pil_img, target=320):
+    """Enlarge small crops so the box is legible.
+
+    Nearest-neighbour on purpose: it keeps the pixelation visible rather than
+    implying a resolution the scan does not have.
+    """
+    from PIL import Image
+
+    scale = max(1, target // max(pil_img.size))
+    if scale > 1:
+        pil_img = pil_img.resize((pil_img.width * scale, pil_img.height * scale), Image.NEAREST)
+    return pil_img
+
+
+def _fit_for_display(pil_img, max_side=384, target=320):
+    """Scale a slice to a sensible on-screen size, both directions.
+
+    Small crops are enlarged by :func:`_upscale`; native 512x512 slices are reduced.
+    The reduction matters because the navigator embeds every slice in the page as a
+    data URI: at 512x512 RGB a 25-slice strip is ~6.5 MB of HTML, which is exactly
+    the lag the slice navigator is supposed not to have. The app panel is 440 px
+    wide, so nothing visible is lost. Downscaling uses LANCZOS (proper resampling);
+    the nearest-neighbour rule applies only to *upscaling*, where it is what keeps
+    the pixelation honest.
+    """
+    from PIL import Image
+
+    longest = max(pil_img.size)
+    if longest > max_side:
+        scale = max_side / longest
+        return pil_img.resize((round(pil_img.width * scale), round(pil_img.height * scale)),
+                              Image.LANCZOS)
+    return _upscale(pil_img, target)
+
+
+def _png_bytes(pil_img):
+    buf = io.BytesIO()
+    pil_img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def render_slice_strip(volume: Union[str, np.ndarray], best_slice: int, box_xywh=None,
+                       max_slices: int = 41):
+    """Render each slice of a small volume as a PNG, plus a MIP over the stack.
+
+    Backs the results page's slice navigator. Scrolling through neighbouring slices
+    is what makes a lesion read as a real three-dimensional finding -- it grows,
+    peaks and fades -- instead of one frame the viewer has to take on trust.
+
+    Returns ``{"slices": [{"index", "png"}...], "best_position": int, "mip": bytes}``,
+    where ``index`` is the full-frame slice number (offset by the stored
+    ``crop_offset``) and ``best_position`` is the scored slice's position in the list.
+    ``None`` is returned when there is nothing to navigate (a single slice, or more
+    than ``max_slices``: embedding a whole 176-slice volume as data URIs would add
+    tens of megabytes to the page for no benefit).
+
+    The box is drawn **only** on the scored slice, since that is the only slice the
+    model actually looked at -- repeating it across the stack would imply a 3D
+    detection that was never computed.
+    """
+    crop_offset = (0, 0, 0)
+    if isinstance(volume, str):
+        with np.load(volume) as data:
+            vol = data["volume"].astype(np.float32)
+            if "crop_offset" in data.files:
+                crop_offset = tuple(int(v) for v in data["crop_offset"])
+    else:
+        vol = np.asarray(volume, dtype=np.float32)
+    if vol.ndim == 2:
+        vol = vol[None]
+
+    depth = vol.shape[0]
+    if depth < 2 or depth > max_slices:
+        return None
+
+    window = tuple(np.percentile(vol, [1, 99]))
+    local_best = max(0, min(best_slice - crop_offset[0], depth - 1))
+
+    slices = []
+    for z in range(depth):
+        img = _to_display_image(vol[z], window, rgb=(z == local_best and box_xywh is not None))
+        if z == local_best and box_xywh is not None:
+            _draw_box(img, box_xywh)
+        slices.append({"index": z + crop_offset[0], "png": _png_bytes(_fit_for_display(img))})
+
+    # Maximum-intensity projection: the brightest value each pixel reaches anywhere in
+    # the slab. Standard DCE-MRI reading practice -- an enhancing lesion survives the
+    # projection while slice-level noise does not.
+    mip = _to_display_image(vol.max(axis=0), window, rgb=False)
+    return {"slices": slices, "best_position": local_best,
+            "mip": _png_bytes(_fit_for_display(mip))}
+
+
 def render_overlay_png(volume: Union[str, np.ndarray], best_slice: int, box_xywh=None):
     """Render the scored slice with the detected lesion box drawn on top, as PNG bytes.
 

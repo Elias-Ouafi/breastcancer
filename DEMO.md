@@ -9,8 +9,13 @@ pip install -r requirements.txt
 python run_demo.py
 ```
 
-Puis ouvrir <http://127.0.0.1:5000>, déposer un fichier de `demo_cases/` et cliquer
-sur **Analyser l'examen**.
+Puis ouvrir <http://127.0.0.1:5000> et cliquer sur **Cas 1**, **Cas 2** ou **Cas 3** —
+pas de sélecteur de fichier à manipuler en plein pitch. (Le dépôt de fichier reste
+disponible pour un examen à vous.)
+
+Sur la page de résultat : le **curseur** fait défiler les 25 coupes autour de la zone
+détectée, et **Vue MIP** affiche la projection d'intensité maximale. Le cadre n'est
+tracé que sur la coupe réellement évaluée.
 
 Rien d'autre à télécharger : le modèle (`results_mri_p2_negfix/unet_best.pt`) et les
 trois cas de démo sont versionnés dans le dépôt. Le serveur écoute uniquement sur
@@ -29,10 +34,10 @@ trois cas de démo sont versionnés dans le dépôt. Le serveur écoute uniqueme
 Résultat attendu : verdict + confiance, coupe annotée avec le cadre sur la zone de
 réhaussement, encart des limites connues, et le détail technique dépliable.
 
-Chaque fichier ne contient **que** la coupe indiquée (~0,2 Mo au lieu de 30 Mo) :
-c'est la seule que le modèle évalue, donc embarquer les 175 autres ne servait qu'à
-rendre le dépôt inclonable. Régénération : `python scripts/make_demo_cases.py`
-(nécessite les volumes complets, hors dépôt).
+Chaque fichier contient un **pavé de 25 coupes** centré sur celle indiquée (~4,5 Mo
+au lieu de 30 Mo pour le volume entier) : le modèle n'en évalue qu'une, les 24 autres
+servent uniquement au curseur et au MIP. Régénération :
+`python scripts/make_demo_cases.py` (nécessite les volumes complets, hors dépôt).
 
 ---
 

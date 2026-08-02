@@ -85,6 +85,28 @@
     <button type="submit" class="btn btn-primary btn-block">Analyser l'examen</button>
   </form>
 
+  {% if demo_cases %}
+    {# Raccourci de démonstration : évite le sélecteur de fichier en plein pitch, et
+       garantit qu'on tombe sur un cas dont la coupe est vérifiée. Chaque bouton est
+       son propre formulaire pour rester fonctionnel sans JavaScript. #}
+    <div id="demo-shortcuts" style="margin-top: 18px;">
+      <div class="limits-title" style="margin-bottom: 6px;">Ou essayer un cas de démonstration</div>
+      <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+        {% for case in demo_cases %}
+          <form action="{{ url_for('predict_demo', case_number=loop.index) }}" method="post"
+                style="flex: 1 1 30%;">
+            <button type="submit" class="btn btn-secondary btn-block" style="margin-top: 0;">
+              Cas {{ loop.index }}
+            </button>
+          </form>
+        {% endfor %}
+      </div>
+      <p class="text-muted" style="font-size: 11px; margin-top: 6px;">
+        Coupe vérifiée à l'avance — voir « Limites connues » ci-dessous.
+      </p>
+    </div>
+  {% endif %}
+
   <!-- État « analyse en cours » (handoff §2). Enrichissement progressif : affiché
        par JS pendant que le POST natif du formulaire est en vol. Sans JS, le
        formulaire fonctionne exactement pareil, juste sans l'animation. -->
@@ -135,15 +157,30 @@
         }
       });
 
+      var shortcuts = document.getElementById('demo-shortcuts');
+
+      function startAnalyzing() {
+        form.hidden = true;
+        if (shortcuts) { shortcuts.hidden = true; }
+        analyzing.hidden = false;
+      }
+
       form.addEventListener('submit', function (e) {
         if (!input.files.length) {
           e.preventDefault();
           mriError.hidden = false;
           return;
         }
-        form.hidden = true;
-        analyzing.hidden = false;
+        startAnalyzing();
       });
+
+      // Les raccourcis de démonstration postent nativement ; on leur donne le même
+      // retour visuel qu'à l'upload.
+      if (shortcuts) {
+        Array.prototype.forEach.call(shortcuts.querySelectorAll('form'), function (f) {
+          f.addEventListener('submit', startAnalyzing);
+        });
+      }
     })();
   </script>
 {% endblock %}
