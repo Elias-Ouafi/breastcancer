@@ -87,6 +87,12 @@ def index():
     return render_template("index.html", backend=predictor.name)
 
 
+@app.route("/comment-ca-marche", methods=["GET"])
+def how_it_works():
+    """Static explainer: the four pipeline steps, and what the model does not do."""
+    return render_template("how.html", backend=get_predictor().name)
+
+
 @app.route("/predict", methods=["POST"])
 def predict():
     file = request.files.get("mri")

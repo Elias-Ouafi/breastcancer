@@ -64,6 +64,10 @@
                                    border-left: 3px solid {{ verdict_color }}; margin-bottom: 12px;">
     <div class="card-kicker" style="color: {{ verdict_color }};">
       Zone 1 · confiance {{ '%.1f'|format(result.confidence * 100) }}%
+      {%- if result.inference_ms %} · analysé en
+        {%- if result.inference_ms < 1000 %} {{ result.inference_ms|round|int }} ms
+        {%- else %} {{ '%.1f'|format(result.inference_ms / 1000) }} s{% endif %}
+      {%- endif %}
     </div>
     <div class="card-title" style="color: {{ verdict_color }};">
       {{ 'Zone de réhaussement suspecte' if detected else 'Aucune zone suspecte détectée' }}
@@ -119,6 +123,9 @@
         {% endif %}
         {% if result.box_xywh %}
           <tr><td class="text-muted">Cadre englobant (x, y, l, h)</td><td>{{ result.box_xywh|join(', ') }}</td></tr>
+        {% endif %}
+        {% if result.inference_ms %}
+          <tr><td class="text-muted">Temps de calcul</td><td>{{ result.inference_ms }} ms</td></tr>
         {% endif %}
         <tr><td class="text-muted">Moteur</td><td><span class="tag tag-neutral">{{ result.backend }}</span></td></tr>
       </table>

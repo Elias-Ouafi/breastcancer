@@ -46,8 +46,22 @@ lésion **quand on lui montre la bonne coupe**, il ne sait pas encore la trouver
 seul. C'est un problème de *sélection*, pas de *segmentation* — détaillé dans
 [plan.md](plan.md) §4.2.
 
-Le Dice (~0,58) n'est pas comparable à la littérature (~0,80) : les masques
-d'entraînement sont des **boîtes englobantes** TCIA, pas des contours experts.
+Les chiffres à citer, mesurés sur les 28 patients de test (`imaging.evaluate`,
+détail dans `results_mri_p2_negfix/eval_report.json`) :
+
+| Mesure | Valeur | IC95 |
+|--------|:------:|:----:|
+| Dice (coupes avec lésion) | 0,53 | 0,47 – 0,59 |
+| Sensibilité, lésion trouvée (IoU ≥ 0,1) | 88 % | 82 – 93 % |
+| Sensibilité, centre visé juste | 81 % | 74 – 88 % |
+| Faux positifs par examen | 222 | 205 – 237 |
+| Coupes saines déclenchant une alarme | 99,97 % | 99,92 – 100 % |
+| Temps de calcul par volume (RTX 5060) | 0,76 s | — |
+
+Le Dice n'est pas comparable à la littérature (~0,80) : les masques d'entraînement
+sont des **boîtes englobantes** TCIA, pas des contours experts, ce qui plafonne
+mécaniquement le Dice atteignable. Les deux dernières lignes sont la formulation
+chiffrée du problème de sélection de coupe — c'est la limite, autant la donner soi-même.
 
 C'est écrit noir sur blanc dans l'app (encart « Limites connues » sur les deux
 écrans) — autant l'assumer avant qu'on ne le demande.
