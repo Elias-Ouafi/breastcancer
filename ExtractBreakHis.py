@@ -1,11 +1,9 @@
 import os
 import kaggle
 import pandas as pd
-import shutil
 from tqdm import tqdm
 import logging
 from PIL import Image
-import numpy as np
 import time
 
 

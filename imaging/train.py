@@ -164,8 +164,7 @@ def train(args):
     else:
         train_loader, val_loader, test_loader, n_train = _make_loaders(args)
 
-    model = build_model(architecture=args.architecture, base_channels=args.base_channels,
-                       encoder_name=args.encoder_name, encoder_weights=args.encoder_weights).to(device)
+    model = build_model(base_channels=args.base_channels).to(device)
     if args.loss == "focal_tversky":
         criterion = FocalTverskyLoss(alpha=args.tversky_alpha, beta=args.tversky_beta,
                                      gamma=args.tversky_gamma)
@@ -272,17 +271,8 @@ def build_arg_parser():
                         "BatchNorm artifact (unstable running stats on the tiny lesion "
                         "fraction), which forced a low 2e-4. GroupNorm removed it.")
     p.add_argument("--image-size", type=int, default=256, help="Square slice size (must be divisible by 16).")
-    p.add_argument("--architecture", choices=["scratch", "pretrained"], default="scratch",
-                   help="'scratch' trains UNet2D from random init. 'pretrained' uses "
-                        "segmentation_models_pytorch's U-Net with an ImageNet-pretrained "
-                        "encoder (see --encoder-name), which data-efficient DBT literature "
-                        "reports as a strong lever when annotated patients are scarce.")
-    p.add_argument("--encoder-name", default="resnet34",
-                   help="Encoder backbone for --architecture pretrained (any timm/smp encoder id).")
-    p.add_argument("--encoder-weights", default="imagenet",
-                   help="Pretrained weights for the encoder, or 'none' for random init.")
     p.add_argument("--base-channels", type=int, default=32,
-                   help="U-Net width at the first level (--architecture scratch only).")
+                   help="U-Net width at the first level.")
     p.add_argument("--loss", choices=["focal_tversky", "dice_bce"], default="focal_tversky",
                    help="focal_tversky (default) weights false negatives more than false "
                         "positives and focuses on hard slices -- suited to the tiny "

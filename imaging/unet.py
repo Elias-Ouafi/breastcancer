@@ -78,32 +78,20 @@ class UNet2D(nn.Module):
         return self.head(d1)  # logits, shape (N, out_channels, H, W)
 
 
-def build_model(architecture="scratch", base_channels=32,
-                encoder_name="resnet34", encoder_weights="imagenet"):
+def build_model(base_channels=32):
     """Build the segmentation model used by ``imaging.train``.
 
-    ``architecture="scratch"`` (default) is the from-scratch ``UNet2D`` above.
-    ``architecture="pretrained"`` uses ``segmentation_models_pytorch``'s U-Net with
-    an ImageNet-pretrained encoder (``encoder_name``): with only ~100-150 annotated
-    DBT patients, transfer learning from a large natural-image encoder gives the
-    network a useful low/mid-level feature prior (edges, textures) that would
-    otherwise have to be learned from a dataset far too small for it, which recent
-    data-efficient DBT literature (see project README roadmap) reports as the
-    single most effective lever for this data regime. The encoder's first conv is
-    adapted to 1 input channel (grayscale MRI/DBT) internally by ``smp``, which
-    keeps the pretrained weights for every deeper layer.
+    There used to be a second option here, an ImageNet-pretrained
+    ``segmentation_models_pytorch`` encoder, on the standard argument that transfer
+    learning is the strongest lever when annotated patients are scarce. It was
+    removed after being measured (plan.md §4.1): validation Dice sat at 0.000 from
+    epoch 10 to 30 with no recovery, because that U-Net carries 46 BatchNorm layers
+    and hits exactly the failure ``DoubleConv`` above documents. Test Dice 0.414
+    against 0.467 from scratch.
+
+    Keeping a CLI option that silently produces a broken model is worse than not
+    having it. The idea worth reviving is narrower and is recorded in plan.md §4.1:
+    port the pretrained *convolutional* weights onto GroupNorm blocks, so the
+    ImageNet prior comes without the normalisation that breaks it.
     """
-    if architecture == "scratch":
-        return UNet2D(base=base_channels)
-    if architecture == "pretrained":
-        try:
-            import segmentation_models_pytorch as smp
-        except ImportError as e:  # pragma: no cover - optional dependency
-            raise ImportError(
-                "architecture='pretrained' requires segmentation-models-pytorch "
-                "(pip install segmentation-models-pytorch)."
-            ) from e
-        weights = None if encoder_weights in (None, "none", "None") else encoder_weights
-        return smp.Unet(encoder_name=encoder_name, encoder_weights=weights,
-                        in_channels=1, classes=1)
-    raise ValueError(f"Unknown architecture {architecture!r} (expected 'scratch' or 'pretrained').")
+    return UNet2D(base=base_channels)
