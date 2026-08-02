@@ -458,6 +458,12 @@ d'un checkpoint précoce sauvé avant l'effondrement) contre 0,467 pour le from-
 > **Piste restante si besoin** : convertir les BatchNorm en GroupNorm tout en gardant les poids
 > convolutifs pré-entraînés — récupère le prior ImageNet sans l'instabilité. Non testé.
 
+> **Code supprimé le 2026-08-02.** L'option `--architecture pretrained`, ses arguments
+> (`--encoder-name`, `--encoder-weights`) et la dépendance `segmentation-models-pytorch` ont été
+> retirés du dépôt. Garder une option de ligne de commande qui produit silencieusement un modèle
+> effondré coûte plus qu'elle ne rapporte. Le raisonnement, les chiffres et la piste ci-dessus
+> restent ici ; le code est dans l'historique git si besoin de repartir de là.
+
 #### Non appliqué (coût > bénéfice attendu à ce stade)
 
 Correction de champ N4 et recadrage sur la **région mammaire** (à ne pas confondre avec le recadrage

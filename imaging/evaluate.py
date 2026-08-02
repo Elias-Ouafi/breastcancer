@@ -206,8 +206,7 @@ def run(args):
     from inference import load_unet
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, _ = load_unet(args.checkpoint, base=args.base_channels, device=device,
-                         architecture=args.architecture)
+    model, _ = load_unet(args.checkpoint, base=args.base_channels, device=device)
     print(f"Device: {device}"
           + (f" ({torch.cuda.get_device_name(0)})" if device.type == "cuda" else ""))
 
@@ -304,7 +303,6 @@ def build_arg_parser():
     p.add_argument("--split", choices=["test", "val", "train"], default="test")
     p.add_argument("--image-size", type=int, default=256)
     p.add_argument("--base-channels", type=int, default=32)
-    p.add_argument("--architecture", choices=["scratch", "pretrained"], default="scratch")
     p.add_argument("--threshold", type=float, default=0.5)
     p.add_argument("--hit-iou", type=float, default=0.1,
                    help="IoU above which a lesion slice counts as detected. 0.1 is the "

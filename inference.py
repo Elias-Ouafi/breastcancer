@@ -121,15 +121,12 @@ def predict_tabular(features: Union[Mapping[str, float], Sequence[float]],
 DEFAULT_UNET_CKPT = os.path.join("results", "unet_best.pt")
 
 
-def load_unet(checkpoint: str = DEFAULT_UNET_CKPT, base: int = 32, device=None,
-             architecture: str = "scratch", encoder_name: str = "resnet34"):
+def load_unet(checkpoint: str = DEFAULT_UNET_CKPT, base: int = 32, device=None):
     """Load the trained U-Net in eval mode. Returns ``(model, device)``.
 
-    ``architecture``/``base``/``encoder_name`` must match what the checkpoint was
-    trained with (``imaging.train``'s ``--architecture``, ``--base-channels``,
-    ``--encoder-name``) since they determine the state_dict's layer shapes/keys.
-    ``encoder_weights`` is not needed here: the checkpoint overwrites whatever the
-    encoder was initialised with.
+    ``base`` must match what the checkpoint was trained with
+    (``imaging.train --base-channels``) since it determines the state_dict's layer
+    shapes.
     """
     import torch
 
@@ -141,8 +138,7 @@ def load_unet(checkpoint: str = DEFAULT_UNET_CKPT, base: int = 32, device=None,
             "python -m imaging.train --data-dir preprocessed_data"
         )
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    model = build_model(architecture=architecture, base_channels=base,
-                        encoder_name=encoder_name, encoder_weights=None)
+    model = build_model(base_channels=base)
     model.load_state_dict(torch.load(checkpoint, map_location=device))
     model.to(device).eval()
     return model, device
@@ -347,9 +343,7 @@ def predict_dbt(volume: Union[str, np.ndarray],
                 image_size: int = 256,
                 threshold: float = 0.5,
                 model=None,
-                device=None,
-                architecture: str = "scratch",
-                encoder_name: str = "resnet34"):
+                device=None):
     """Localise a lesion in a preprocessed DBT volume with the trained U-Net.
 
     Parameters
@@ -378,8 +372,7 @@ def predict_dbt(volume: Union[str, np.ndarray],
         volume, load_dbt_dicom, (".dcm", ".dicom"))
 
     if model is None:
-        model, device = load_unet(checkpoint, device=device,
-                                  architecture=architecture, encoder_name=encoder_name)
+        model, device = load_unet(checkpoint, device=device)
     elif device is None:
         device = next(model.parameters()).device
 
@@ -396,8 +389,6 @@ def predict_dce_mri(volume: Union[str, np.ndarray],
                     threshold: float = 0.5,
                     model=None,
                     device=None,
-                    architecture: str = "scratch",
-                    encoder_name: str = "resnet34",
                     classifier=None,
                     use_classifier: bool = True):
     """Localise a lesion in a preprocessed DCE-MRI subtraction volume with the
@@ -438,8 +429,7 @@ def predict_dce_mri(volume: Union[str, np.ndarray],
         volume, raw_loader=None, raw_extensions=())
 
     if model is None:
-        model, device = load_unet(checkpoint, device=device,
-                                  architecture=architecture, encoder_name=encoder_name)
+        model, device = load_unet(checkpoint, device=device)
     elif device is None:
         device = next(model.parameters()).device
 
