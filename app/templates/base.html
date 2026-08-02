@@ -177,6 +177,23 @@
     .table tr:last-child td { border-bottom: 0; }
     .table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 
+    /* ── Encart « limites connues » — obligatoire sur chaque écran, au même
+          titre que le bandeau RUO. Ces limites sont documentées (plan.md §4.2) ;
+          elles doivent donc aussi être lisibles par qui utilise l'app, pas
+          seulement par qui lit le dépôt. ── */
+    .limits {
+      margin-top: var(--space-4); padding: var(--space-3);
+      background: var(--color-neutral-100); border-left: 3px solid var(--color-neutral-500);
+    }
+    .limits-title {
+      font-family: var(--font-heading); font-weight: 800; font-size: 11px;
+      letter-spacing: .1em; text-transform: uppercase; color: var(--color-neutral-700);
+      margin-bottom: var(--space-2);
+    }
+    .limits ul { margin: 0; padding-left: 16px; font-size: 11px; line-height: 1.5; }
+    .limits li { margin-bottom: var(--space-1); }
+    .limits li:last-child { margin-bottom: 0; }
+
     /* ── Bandeau conformité — obligatoire sur chaque écran ── */
     .ruo-banner {
       margin: 16px 0 0; padding: var(--space-2) var(--space-3);
@@ -232,6 +249,23 @@
       </div>
 
       {% block content %}{% endblock %}
+
+      <div class="limits">
+        <div class="limits-title">Limites connues</div>
+        <ul>
+          {% block limits_slice %}
+            <li>Le modèle ne sait pas encore <strong>trouver seul</strong> la bonne coupe
+              dans un volume complet (vérifié 0/186 sur les patients de test). Les cas
+              de <code>demo_cases/</code> portent une coupe fixée à l'avance ; un autre
+              volume ne donnera pas un résultat fiable.</li>
+          {% endblock %}
+          <li>Entraîné sur des <strong>boîtes englobantes</strong> TCIA, pas des contours
+            d'expert : Dice 0,58 sur 186 patients, non comparable à la littérature
+            (~0,80), et sans intervalle de confiance.</li>
+          <li>Aucune validation clinique : ni sensibilité, ni spécificité, ni taux de
+            faux positifs établis.</li>
+        </ul>
+      </div>
 
       <p class="ruo-banner">
         <strong>Research Use Only — Not for diagnostic use.</strong>

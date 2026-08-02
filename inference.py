@@ -181,7 +181,7 @@ def _bounding_box(binary_mask):
 
 
 def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_offset=(0, 0, 0),
-                     forced_slice=None):
+                     forced_slice=None, source_n_slices=None):
     """Shared slice-scan loop behind :func:`predict_dbt` and :func:`predict_dce_mri`.
 
     Scores every axial slice of ``vol`` (a ``(depth, H, W)`` z-normalised array) with
@@ -199,6 +199,11 @@ def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_off
     right slice* (~0.58 Dice on ground-truth-positive slices). Root-causing that
     confidence collapse is tracked separately; ``forced_slice`` sidesteps it for
     known-good cases without touching the scan path everyone else still uses.
+
+    ``source_n_slices`` overrides the reported ``n_slices``. It exists for slim demo
+    cases (``TransformData.make_demo_case``), which store only the forced slice: the
+    array's own depth is then 1, but the study it was taken from had ~176 slices, and
+    that is the number the UI should show.
     """
     import torch
     import torch.nn.functional as F
@@ -234,24 +239,30 @@ def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_off
 
     return {
         "lesion_detected": lesion_detected,
+        # True when the slice was pinned rather than found by the model. The UI
+        # states this outright instead of letting a curated case read as autonomous
+        # detection -- the limitation is documented, so it should also be visible.
+        "slice_preselected": forced_slice is not None,
         "confidence": best_conf,
         "best_slice": best_slice + crop_offset[0],
         "box_xywh": box,
         "box_full_frame_xywh": box_full,
-        "n_slices": depth,
+        "n_slices": int(source_n_slices) if source_n_slices is not None else depth,
     }
 
 
 def _load_volume_and_offset(volume, raw_loader, raw_extensions):
-    """Resolve ``volume`` (path or array) to a ``(vol, crop_offset, forced_slice)`` triple.
+    """Resolve ``volume`` to a ``(vol, crop_offset, forced_slice, source_n_slices)`` tuple.
 
     ``.npz`` paths use their ``volume``/``crop_offset`` keys (as written by
-    ``TransformData.save_preprocessed``) plus ``forced_slice`` if present (as written
-    by ``TransformData.make_demo_case``); paths ending in ``raw_extensions`` go
+    ``TransformData.save_preprocessed``) plus ``forced_slice`` and
+    ``source_n_slices`` if present (as written by
+    ``TransformData.make_demo_case``); paths ending in ``raw_extensions`` go
     through ``raw_loader``; anything else is treated as an already-loaded array.
     """
     crop_offset = (0, 0, 0)
     forced_slice = None
+    source_n_slices = None
     if isinstance(volume, str):
         lower = volume.lower()
         if lower.endswith(".npz"):
@@ -261,6 +272,8 @@ def _load_volume_and_offset(volume, raw_loader, raw_extensions):
                     crop_offset = tuple(int(v) for v in data["crop_offset"])
                 if "forced_slice" in data.files:
                     forced_slice = int(data["forced_slice"])
+                if "source_n_slices" in data.files:
+                    source_n_slices = int(data["source_n_slices"])
         elif lower.endswith(raw_extensions):
             vol = raw_loader(volume)
         else:
@@ -274,7 +287,7 @@ def _load_volume_and_offset(volume, raw_loader, raw_extensions):
         vol = vol[None]
     if vol.ndim != 3:
         raise ValueError(f"Expected a (depth, H, W) volume, got shape {vol.shape}.")
-    return vol, crop_offset, forced_slice
+    return vol, crop_offset, forced_slice, source_n_slices
 
 
 def predict_dbt(volume: Union[str, np.ndarray],
@@ -302,13 +315,15 @@ def predict_dbt(volume: Union[str, np.ndarray],
     Returns
     -------
     dict
-        ``{"lesion_detected": bool, "confidence": float, "best_slice": int,
-        "box_xywh": (x, y, w, h) | None, "box_full_frame_xywh": ... | None,
+        ``{"lesion_detected": bool, "slice_preselected": bool, "confidence": float,
+        "best_slice": int, "box_xywh": (x, y, w, h) | None,
+        "box_full_frame_xywh": ... | None,
         "n_slices": int}``. ``confidence`` is the max lesion-probability over the
         volume; ``best_slice`` is the slice achieving it (in the given volume's
         indexing). Boxes are on the best slice at the original slice resolution.
     """
-    vol, crop_offset, forced_slice = _load_volume_and_offset(volume, load_dbt_dicom, (".dcm", ".dicom"))
+    vol, crop_offset, forced_slice, source_n_slices = _load_volume_and_offset(
+        volume, load_dbt_dicom, (".dcm", ".dicom"))
 
     if model is None:
         model, device = load_unet(checkpoint, device=device,
@@ -316,7 +331,8 @@ def predict_dbt(volume: Union[str, np.ndarray],
     elif device is None:
         device = next(model.parameters()).device
 
-    return _localize_lesion(vol, model, device, image_size, threshold, crop_offset, forced_slice)
+    return _localize_lesion(vol, model, device, image_size, threshold, crop_offset,
+                            forced_slice, source_n_slices)
 
 
 DEFAULT_MRI_UNET_CKPT = os.path.join("results_mri_p2_negfix", "unet_best.pt")
@@ -356,7 +372,8 @@ def predict_dce_mri(volume: Union[str, np.ndarray],
         Same contract as :func:`predict_dbt` (``lesion_detected``, ``confidence``,
         ``best_slice``, ``box_xywh``, ``box_full_frame_xywh``, ``n_slices``).
     """
-    vol, crop_offset, forced_slice = _load_volume_and_offset(volume, raw_loader=None, raw_extensions=())
+    vol, crop_offset, forced_slice, source_n_slices = _load_volume_and_offset(
+        volume, raw_loader=None, raw_extensions=())
 
     if model is None:
         model, device = load_unet(checkpoint, device=device,
@@ -364,7 +381,8 @@ def predict_dce_mri(volume: Union[str, np.ndarray],
     elif device is None:
         device = next(model.parameters()).device
 
-    return _localize_lesion(vol, model, device, image_size, threshold, crop_offset, forced_slice)
+    return _localize_lesion(vol, model, device, image_size, threshold, crop_offset,
+                            forced_slice, source_n_slices)
 
 
 def render_overlay_png(volume: Union[str, np.ndarray], best_slice: int, box_xywh=None):

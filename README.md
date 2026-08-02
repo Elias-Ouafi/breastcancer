@@ -19,6 +19,20 @@ It uses two complementary angles:
 The long-term goal (see `Main.py`) is to combine the strongest features from both
 the quantitative and imaging pipelines into a single model.
 
+## Quick start — the demo
+
+The DCE-MRI lesion-localisation demo runs from a fresh clone, with no dataset
+download: the checkpoint and three curated cases are versioned.
+
+```bash
+pip install -r requirements.txt
+python run_demo.py
+```
+
+Then open <http://127.0.0.1:5000> and drop a file from `demo_cases/`. See
+[DEMO.md](DEMO.md) for the walkthrough and the limitations to state out loud.
+Everything below is the *training* side, which does need the datasets.
+
 ## Prerequisites
 
 - Python 3.12 or higher
