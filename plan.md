@@ -615,4 +615,40 @@ sur **toutes** les coupes (22 010 coupes d'entraînement, 15 % positives, `pos_w
 que sur un sous-échantillon de négatifs, et sélectionné sur le top-1 — « la coupe la mieux notée du
 volume contient-elle réellement une lésion ? », exactement la métrique qui valait 0/186.
 
-Résultat à documenter à la fin de l'entraînement ci-dessous.
+**Résultat, 25 époques, 28 patients de test :**
+
+| Mesure | Confiance de segmentation (avant) | Classifieur dédié |
+|--------|:---------------------------------:|:-----------------:|
+| Top-1 (la meilleure coupe contient la lésion) | **0,0 %** (0/186) | **42,9 %** [IC95 25,0 – 60,7] |
+| Top-3 | — | 50,0 % [IC95 32,1 – 67,9] |
+| Rang médian de la 1ʳᵉ coupe correcte | — | 3,5 |
+| AUC (par patient) | ~0,50 par construction (aucun signal) | 0,803 |
+| Lésion dans le top-5 | — | 16/28 patients |
+
+**Lecture.** Le problème est **tractable** : là où la confiance de segmentation n'avait aucun pouvoir
+discriminant (aire prédite identique sur coupes avec et sans lésion, §4.2), un modèle entraîné pour
+la tâche de tri atteint 0,80 d'AUC. Le passage de 0 % à 43 % est franc et ne tient pas à la chance —
+l'IC95 exclut largement zéro.
+
+**Mais ce n'est pas livrable comme chemin principal.** 43 % veut dire qu'un upload libre se trompe
+plus d'une fois sur deux, et l'IC est large (25–61 %) parce que 28 patients c'est peu. Écart val/test
+notable aussi (57 % contre 43 %), cohérent avec des échantillons de cette taille. Les cas de démo
+gardent donc leur coupe figée : une démo qui échoue une fois sur deux est pire qu'une coupe assumée
+comme choisie à l'avance.
+
+**Branché malgré tout pour l'upload libre** (`inference.load_slice_classifier`, consulté seulement
+quand aucune coupe n'est imposée) : dans ce cas précis l'alternative est 0 %, donc 43 % est un gain
+net. Le mécanisme utilisé remonte dans le résultat (`slice_selector` : `pinned` / `classifier` /
+`segmentation_confidence`) et l'app affiche lequel a servi avec son taux de réussite, plutôt que de
+laisser croire à une détection autonome.
+
+**Rang médian 3,5 contre rang moyen 19,7** : la distribution est bimodale — soit le modèle vise
+juste ou presque, soit il part complètement ailleurs. C'est ce qui suggère la piste suivante :
+présenter les **5 meilleures coupes candidates** à revoir plutôt qu'une seule (16/28 patients, 57 %,
+auraient leur lésion dans ce lot). Cadrage « candidats à examiner » plutôt que « voici la lésion » —
+honnête et utile, contrairement à un top-1 à 43 % présenté comme une réponse.
+
+**Pistes non explorées** (par ordre de rapport attendu) : entraîner sur plus de patients (186 reste
+faible pour une tâche de tri), exploiter le contexte 3D (une lésion s'étend sur plusieurs coupes
+consécutives — un modèle 2,5D avec ±2 coupes en entrée est peu coûteux), et calibrer sur la
+validation plutôt que de prendre l'arg-max brut.

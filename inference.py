@@ -180,8 +180,45 @@ def _bounding_box(binary_mask):
     return (x0, y0, x1 - x0 + 1, y1 - y0 + 1)
 
 
+DEFAULT_SLICE_CLF_CKPT = os.path.join("results_sliceclf", "sliceclf_best.pt")
+
+
+def load_slice_classifier(checkpoint: str = DEFAULT_SLICE_CLF_CKPT, base: int = 16, device=None):
+    """Load the slice-ranking classifier, or return ``(None, None)`` if absent.
+
+    Missing weights are not an error: the classifier is an optional improvement over
+    ranking by segmentation confidence, and every caller falls back to that.
+    """
+    if not os.path.exists(checkpoint):
+        return None, None
+    import torch
+
+    from imaging.sliceclf import SliceClassifier
+
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    model = SliceClassifier(base=base)
+    model.load_state_dict(torch.load(checkpoint, map_location=device))
+    model.to(device).eval()
+    return model, device
+
+
+def _rank_slices(vol, classifier, device, image_size=256, batch_size=32):
+    """Lesion probability per slice, from the slice classifier."""
+    import torch
+    import torch.nn.functional as F
+
+    scores = np.zeros(vol.shape[0], dtype=np.float32)
+    with torch.no_grad():
+        for lo in range(0, vol.shape[0], batch_size):
+            chunk = torch.from_numpy(vol[lo:lo + batch_size]).to(device)[:, None]
+            chunk = F.interpolate(chunk, size=(image_size, image_size),
+                                  mode="bilinear", align_corners=False)
+            scores[lo:lo + batch_size] = torch.sigmoid(classifier(chunk))[:, 0].cpu().numpy()
+    return scores
+
+
 def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_offset=(0, 0, 0),
-                     forced_slice=None, source_n_slices=None):
+                     forced_slice=None, source_n_slices=None, classifier=None):
     """Shared slice-scan loop behind :func:`predict_dbt` and :func:`predict_dce_mri`.
 
     Scores every axial slice of ``vol`` (a ``(depth, H, W)`` z-normalised array) with
@@ -204,13 +241,27 @@ def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_off
     cases (``TransformData.make_demo_case``), which store only the forced slice: the
     array's own depth is then 1, but the study it was taken from had ~176 slices, and
     that is the number the UI should show.
+
+    ``classifier``, when given and no slice is forced, picks the slice to segment
+    instead of the segmentation confidence. It is a genuine improvement on a real
+    upload -- 42.9 % top-1 [CI95 25.0-60.7] against 0.0 % -- but nowhere near
+    reliable, which is why curated demo cases still pin their slice. The chosen
+    mechanism is reported back as ``slice_selector`` so the UI never has to guess how
+    the slice was obtained.
     """
     import torch
     import torch.nn.functional as F
 
     depth, orig_h, orig_w = vol.shape
     best_conf, best_slice, best_prob_small = -1.0, (forced_slice or 0), None
-    z_range = [int(forced_slice)] if forced_slice is not None else range(depth)
+
+    if forced_slice is not None:
+        selector, z_range = "pinned", [int(forced_slice)]
+    elif classifier is not None:
+        selector = "classifier"
+        z_range = [int(np.argmax(_rank_slices(vol, classifier, device, image_size)))]
+    else:
+        selector, z_range = "segmentation_confidence", range(depth)
 
     with torch.no_grad():
         for z in z_range:
@@ -243,6 +294,7 @@ def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_off
         # states this outright instead of letting a curated case read as autonomous
         # detection -- the limitation is documented, so it should also be visible.
         "slice_preselected": forced_slice is not None,
+        "slice_selector": selector,
         "confidence": best_conf,
         "best_slice": best_slice + crop_offset[0],
         "box_xywh": box,
@@ -345,7 +397,9 @@ def predict_dce_mri(volume: Union[str, np.ndarray],
                     model=None,
                     device=None,
                     architecture: str = "scratch",
-                    encoder_name: str = "resnet34"):
+                    encoder_name: str = "resnet34",
+                    classifier=None,
+                    use_classifier: bool = True):
     """Localise a lesion in a preprocessed DCE-MRI subtraction volume with the
     trained U-Net (see ``TransformData.preprocess_dce_mri_with_boxes``).
 
@@ -365,12 +419,20 @@ def predict_dce_mri(volume: Union[str, np.ndarray],
         from the DBT one, since the two are trained on different modalities.
     model, device : optional preloaded ``load_unet(...)`` result, to score many
         volumes without reloading the weights.
+    classifier, use_classifier : the slice-ranking model (see
+        :func:`load_slice_classifier`). When the volume does not pin a slice, it
+        chooses which slice to segment -- 42.9 % top-1 against 0.0 % for the
+        segmentation confidence it replaces, still far from reliable. Loaded on
+        demand if not supplied; set ``use_classifier=False`` to force the old
+        confidence scan (useful for reproducing earlier numbers).
 
     Returns
     -------
     dict
         Same contract as :func:`predict_dbt` (``lesion_detected``, ``confidence``,
-        ``best_slice``, ``box_xywh``, ``box_full_frame_xywh``, ``n_slices``).
+        ``best_slice``, ``box_xywh``, ``box_full_frame_xywh``, ``n_slices``), plus
+        ``slice_selector`` -- ``"pinned"``, ``"classifier"`` or
+        ``"segmentation_confidence"``.
     """
     vol, crop_offset, forced_slice, source_n_slices = _load_volume_and_offset(
         volume, raw_loader=None, raw_extensions=())
@@ -381,8 +443,13 @@ def predict_dce_mri(volume: Union[str, np.ndarray],
     elif device is None:
         device = next(model.parameters()).device
 
+    # Only worth loading when it will actually be consulted: a pinned slice makes the
+    # ranking irrelevant, and that is the path every demo case takes.
+    if classifier is None and use_classifier and forced_slice is None:
+        classifier, _ = load_slice_classifier(device=device)
+
     return _localize_lesion(vol, model, device, image_size, threshold, crop_offset,
-                            forced_slice, source_n_slices)
+                            forced_slice, source_n_slices, classifier)
 
 
 def _to_display_image(slice_array, window, rgb=True):

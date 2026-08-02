@@ -23,12 +23,17 @@
   {% elif result.slice_preselected %}
     <li>La coupe analysée ci-dessus a été <strong>choisie à l'avance par un humain</strong>,
       pas trouvée par le modèle : il segmente bien une lésion une fois la bonne coupe
-      montrée, il ne sait pas encore la localiser seul (vérifié 0/186 sur les patients
-      de test).</li>
+      montrée, il ne sait pas encore la localiser seul de façon fiable.</li>
+  {% elif result.slice_selector == "classifier" %}
+    <li>La coupe a été choisie par un <strong>classifieur de coupe dédié</strong>, qui
+      tombe juste dans <strong>43 %</strong> des cas [IC95 25–61] sur les 28 patients
+      de test. Bien mieux que les 0 % de la méthode précédente, mais loin d'être
+      fiable : si rien n'apparaît sur cette coupe, la lésion est probablement ailleurs
+      dans le volume.</li>
   {% else %}
-    <li>La coupe a été choisie par le modèle en balayant le volume. Cette sélection
-      automatique <strong>n'est pas fiable</strong> à ce stade (vérifié 0/186 sur les
-      patients de test) : la localisation affichée est à prendre avec prudence.</li>
+    <li>La coupe a été choisie en balayant le volume avec la confiance du modèle de
+      segmentation. Cette méthode <strong>ne fonctionne pas</strong> (0/186 sur les
+      patients de test) : la localisation affichée n'a pas de valeur.</li>
   {% endif %}
 {% endblock %}
 
@@ -158,7 +163,11 @@
         {% if result.best_slice is not none %}
           <tr><td class="text-muted">Anomalie à la coupe</td><td>{{ result.best_slice }}</td></tr>
           <tr><td class="text-muted">Sélection de la coupe</td>
-              <td>{{ 'imposée (cas de démo)' if result.slice_preselected else 'balayage du volume' }}</td></tr>
+              <td>{{ {'pinned': 'imposée (cas de démo)',
+                      'classifier': 'classifieur de coupe',
+                      'segmentation_confidence': 'confiance de segmentation'}
+                     .get(result.slice_selector,
+                          'imposée (cas de démo)' if result.slice_preselected else 'balayage du volume') }}</td></tr>
         {% endif %}
         {% if result.box_xywh %}
           <tr><td class="text-muted">Cadre englobant (x, y, l, h)</td><td>{{ result.box_xywh|join(', ') }}</td></tr>
