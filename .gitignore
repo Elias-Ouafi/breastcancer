@@ -43,22 +43,26 @@ venv.bak/
 
 # Project specific
 .kaggle/
-data/
-tciaDownload/
-preprocessed_data/
-preprocessed_data_full/
-preprocessed_data_mri/
-preprocessed_data_mri_full/
-preprocessed_data_mri_p2/
-slice_bank*/
-results/*.pt
-results/segmentation_*.csv
-results/smoke_test/
-results/tabular_model/
-results_full/
-results_mri/
-results_mri_full/
-results_mri_p2/
+
+# The data tree stays out of git: raw DICOM (~80 GB), preprocessed volumes and the
+# slice banks derived from them. One rule covers every layer and every future dataset
+# -- the previous list of per-experiment folder names had to be edited each time a run
+# produced a new directory. Layout and rebuild commands: config.py.
+#
+# `data/*` rather than `data/`, because git cannot re-include a file whose parent
+# directory is excluded, and the demo cases below have to stay versioned.
+data/*
+!data/curated_data/
+data/curated_data/*
+!data/curated_data/demo_cases/
+data/curated_data/demo_cases/*
+# The three curated cases are the exception. Each is a 25-slice slab around one pinned
+# axial slice (4-5 MB, against ~30 MB for the full volume) taken from a public, already
+# de-identified TCIA study (Duke-Breast-Cancer-MRI), so there is no PHI to leak, and
+# shipping them is what makes `git clone` + `pip install` enough to replay the demo.
+# The slab, rather than the single slice, is what the slider and the MIP view need.
+# Rebuild: scripts/make_demo_cases.py.
+!data/curated_data/demo_cases/*.npz
 
 # Logs
 *.log
@@ -89,29 +93,25 @@ wheels/
 .installed.cfg
 *.egg
 
-results_ablation_*/
-results_mri_bankbench/
-results_mri_bankbench2/
-results_mri_p2_negfix_smoke/
+# Trained artefacts. Checkpoints are large and most are throwaway, so the tree is
+# excluded and the two runs the demo and the README depend on are re-included by name.
+models/*
 
 # The DCE-MRI run serving the demo is the exception to "no artefacts in git": its
 # checkpoint and metrics ARE versioned, so `git clone` + `pip install` is enough to
 # replay the demo on another machine. Everything else in the folder stays out.
-results_mri_p2_negfix/*
-!results_mri_p2_negfix/unet_best.pt
-!results_mri_p2_negfix/segmentation_metrics.csv
-!results_mri_p2_negfix/segmentation_test_metrics.csv
-!results_mri_p2_negfix/eval_report.json
-!results_mri_p2_negfix/eval_per_patient.csv
+!models/dce_mri_p2_negfix/
+models/dce_mri_p2_negfix/*
+!models/dce_mri_p2_negfix/unet_best.pt
+!models/dce_mri_p2_negfix/segmentation_metrics.csv
+!models/dce_mri_p2_negfix/segmentation_test_metrics.csv
+!models/dce_mri_p2_negfix/eval_report.json
+!models/dce_mri_p2_negfix/eval_per_patient.csv
 
 # Slice classifier (imaging.sliceclf): the checkpoint is 2.4 MB and its metrics are
 # the evidence behind the localisation claims, so both are versioned.
-results_sliceclf/*
-!results_sliceclf/sliceclf_best.pt
-!results_sliceclf/sliceclf_metrics.csv
-!results_sliceclf/sliceclf_test_metrics.json
-
-# demo_cases/ is versioned too: since make_demo_case is slim by default, each case
-# is one slice (~0.2 MB), not a 30 MB volume. It carries a single pinned axial slice
-# of a public, already de-identified TCIA study (Duke-Breast-Cancer-MRI), so there
-# is no PHI to leak -- see scripts/make_demo_cases.py to rebuild them.
+!models/sliceclf/
+models/sliceclf/*
+!models/sliceclf/sliceclf_best.pt
+!models/sliceclf/sliceclf_metrics.csv
+!models/sliceclf/sliceclf_test_metrics.json

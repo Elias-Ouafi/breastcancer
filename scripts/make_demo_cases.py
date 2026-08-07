@@ -1,6 +1,6 @@
-"""Regenerate the three curated demo cases shipped in ``demo_cases/``.
+"""Regenerate the three curated demo cases shipped in ``data/curated_data/demo_cases/``.
 
-The cases in git are slim (one slice, ~0.4 MB each) so the demo works straight out
+The cases in git are slim (a 25-slice slab, 4-5 MB each) so the demo works straight out
 of a clone. This script rebuilds them from the full preprocessed DCE-MRI volumes,
 which is what you need when the pinned slices change, when the preprocessing is
 redone, or to verify that what is committed matches what the pipeline produces.
@@ -9,7 +9,7 @@ redone, or to verify that what is committed matches what the pipeline produces.
     python scripts/make_demo_cases.py --verify              # rebuild + score them
     python scripts/make_demo_cases.py --source-dir <dir>    # other volume source
 
-Requires the full volumes (``preprocessed_data_mri_p2/``, produced by
+Requires the full volumes (``data/preprocessed_data/dce_mri_p2/``, produced by
 ``TransformData.preprocess_dce_mri_with_boxes`` with ``post_phase_rank=2`` and
 ``crop=False``). Those are patient data and stay out of git -- which is exactly why
 the *outputs* are committed instead.
@@ -29,6 +29,7 @@ import sys
 # Importable as `python scripts/make_demo_cases.py` from anywhere in the repo.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import config  # noqa: E402
 from TransformData import make_demo_case  # noqa: E402
 
 # (output name, patient id, pinned slice, IoU verified on that slice -- plan.md §4.2)
@@ -38,8 +39,8 @@ DEMO_CASES = [
     ("demo_3_Breast_MRI_079.npz", "Breast_MRI_079", 104, 0.728),
 ]
 
-DEFAULT_SOURCE_DIR = "preprocessed_data_mri_p2"
-DEFAULT_OUT_DIR = "demo_cases"
+DEFAULT_SOURCE_DIR = config.DCE_MRI_PREPROCESSED_DIR
+DEFAULT_OUT_DIR = config.DEMO_CASES_DIR
 
 
 def build(source_dir=DEFAULT_SOURCE_DIR, out_dir=DEFAULT_OUT_DIR, slim=True):

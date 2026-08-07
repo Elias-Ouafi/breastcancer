@@ -1,23 +1,28 @@
-import os
-import kaggle
-import pandas as pd
-from tqdm import tqdm
 import logging
-from PIL import Image
+import os
 import time
 
+import kaggle
+import pandas as pd
+from PIL import Image
+from tqdm import tqdm
 
-# Set up logging
+import config
+
+# Set up logging. The log is an artefact of the run, not data, so it lives outside
+# the data tree -- which also keeps this import from failing on a fresh clone.
+_LOG_DIR = os.path.join(config.ROOT, 'logs')
+os.makedirs(_LOG_DIR, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('data/breakhis_download.log'),
+        logging.FileHandler(os.path.join(_LOG_DIR, 'breakhis_download.log')),
         logging.StreamHandler()
     ]
 )
 
-def download_breakhis(output_dir="data/BreakHis"):
+def download_breakhis(output_dir=config.BREAKHIS_DIR):
     """
     Download BreakHis dataset from Kaggle.
     Note: This requires a Kaggle account and API credentials.
@@ -133,7 +138,7 @@ def process_images(base_dir):
     metadata_df.to_csv(metadata_path, index=False)
     
     # Print summary statistics
-    logging.info(f"\nProcessing complete!")
+    logging.info("\nProcessing complete!")
     logging.info(f"Total images processed: {len(metadata)}")
     logging.info(f"Benign images: {len(metadata_df[metadata_df['is_benign']])}")
     logging.info(f"Malignant images: {len(metadata_df[~metadata_df['is_benign']])}")

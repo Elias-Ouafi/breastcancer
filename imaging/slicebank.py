@@ -29,12 +29,15 @@ Layout written to ``out_dir``:
 """
 from __future__ import annotations
 
+import logging
 import os
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
+
+log = logging.getLogger(__name__)
 
 try:  # allow both "python -m imaging.train" and direct script execution
     from .dataset import _gamma_jitter, _random_affine, default_patient_key
@@ -107,7 +110,7 @@ def build_slice_bank(npz_paths, out_dir, image_size=256, force=False):
         masks[offset:offset + depth] = msk_r
         offset += depth
         if i % 20 == 0 or i == len(paths):
-            print(f"  slice bank: {i}/{len(paths)} volumes -> {offset}/{total} slices")
+            log.info(f"  slice bank: {i}/{len(paths)} volumes -> {offset}/{total} slices")
 
     volumes.flush()
     masks.flush()

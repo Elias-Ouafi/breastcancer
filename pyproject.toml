@@ -1,0 +1,90 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "breastcancer"
+version = "0.1.0"
+description = "Breast lesion localisation on DCE-MRI/DBT, with a tabular Spark MLlib baseline"
+readme = "README.md"
+requires-python = ">=3.12"
+
+# Kept in sync with requirements.txt, which now installs this project rather than
+# duplicating the list.
+dependencies = [
+    "pyspark>=4.0,<5",
+    "pandas>=2.2,<2.3",
+    "matplotlib>=3.8.2,<3.9",
+    "seaborn>=0.13,<0.14",
+    "ucimlrepo>=0.0.7",
+    "requests==2.31.0",
+    "pydicom==2.4.3",
+    "tcia-utils>=3.3",
+    "Pillow>=10.2,<11",
+    "tqdm==4.66.1",
+    "kaggle==1.5.16",
+    "numpy>=1.26,<2",
+    "openpyxl==3.1.2",
+    "SimpleITK>=2.3.1",
+    "itk>=5.4",
+    "itkwidgets==0.32.6",
+    "torch>=2.2",
+    "python-gdcm>=3.0",
+    "Flask>=3.0",
+]
+
+[project.optional-dependencies]
+# What CI needs, and nothing else. The full dependency set pulls a JVM-backed Spark,
+# ITK and the TCIA client; none of that is exercised by the test suite, and installing
+# it would turn a 90-second check into a five-minute one.
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+# Only `pipelines/` needs this. Kept out of the base install so the demo -- the thing
+# people actually run from a clone -- does not pull an orchestrator it never calls.
+orchestration = [
+    "prefect>=3.0",
+]
+
+[tool.setuptools]
+# Flat layout: modules live at the repository root rather than under src/.
+py-modules = [
+    "config",
+    "inference",
+    "Main",
+    "ExtractData",
+    "ExtractBreakHis",
+    "TransformData",
+    "AnalyzeData",
+    "train_tabular_model",
+    "run_demo",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*", "imaging*", "pipelines*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "imaging"]
+python_files = ["test_*.py"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".venv", "data", "models", "__pycache__"]
+
+[tool.ruff.lint]
+# E/F are the errors worth failing a build over; I keeps imports ordered. The rest of
+# the rulebook is deliberately left off: this is a working research codebase, and a
+# gate that flags hundreds of stylistic nits is a gate everyone learns to ignore.
+select = ["E", "F", "I"]
+ignore = [
+    "E501",  # line length: prose-heavy docstrings are the point, not a defect
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The imaging modules import their siblings twice on purpose, so both
+# "python -m imaging.X" and a direct run work; ruff reads the fallback as a redefinition.
+"imaging/*.py" = ["F811", "E402"]

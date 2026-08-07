@@ -26,15 +26,16 @@ import json
 import os
 
 import numpy as np
-
 from pyspark.ml import Pipeline
 from pyspark.ml.classification import LinearSVC, LogisticRegression
-from pyspark.ml.feature import Imputer, PCA, StandardScaler, StringIndexer, VectorAssembler
+from pyspark.ml.feature import PCA, Imputer, StandardScaler, StringIndexer, VectorAssembler
 
-from TransformData import _get_spark, _pandas_to_spark
+import config
 from ExtractData import extract_breast_cancer_wisconsin_diagnostic_data
+from logging_setup import setup_logging
+from TransformData import _get_spark, _pandas_to_spark
 
-DEFAULT_MODEL_DIR = os.path.join("results", "tabular_model")
+DEFAULT_MODEL_DIR = config.TABULAR_MODEL_DIR
 # 'B' < 'M' under alphabetAsc, so benign -> 0.0 and malignant -> 1.0 (positive class).
 LABEL_MAP = {0.0: "Benign", 1.0: "Malignant"}
 
@@ -119,6 +120,8 @@ def train_and_save(model_dir=DEFAULT_MODEL_DIR, served_model="logistic",
 
 
 if __name__ == "__main__":
+    setup_logging(logfile="tabular_model.log")
+
     import argparse
 
     p = argparse.ArgumentParser(description="Fit and persist the tabular pipeline.")

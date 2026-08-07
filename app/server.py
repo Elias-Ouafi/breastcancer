@@ -17,6 +17,7 @@ import uuid
 
 from flask import Flask, redirect, render_template, request, url_for
 
+import config
 from app.predictor import get_predictor
 
 # Accepted upload extensions. .npz is what the U-Net backend expects; the others are
@@ -68,7 +69,9 @@ def _slice_strip(file_path: str, result: dict) -> dict | None:
         strip = render_slice_strip(file_path, result["best_slice"], result.get("box_xywh"))
         if strip is None:
             return None
-        encode = lambda png: "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+        def encode(png):
+            return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
         return {
             "slices": [{"index": s["index"], "uri": encode(s["png"])} for s in strip["slices"]],
             "best_position": strip["best_position"],
@@ -112,7 +115,7 @@ def index():
     return render_template("index.html", backend=predictor.name, demo_cases=_demo_cases())
 
 
-DEMO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "demo_cases")
+DEMO_DIR = config.DEMO_CASES_DIR
 
 
 def _demo_cases():

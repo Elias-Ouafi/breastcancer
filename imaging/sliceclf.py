@@ -1,6 +1,6 @@
 """Slice-level lesion classifier: "does this slice contain a lesion?".
 
-    python -m imaging.sliceclf --slice-bank slice_bank_p2 --epochs 20
+    python -m imaging.sliceclf --slice-bank data/curated_data/slice_bank_p2 --epochs 20
 
 Why a separate model
 --------------------
@@ -33,7 +33,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import os
+import sys
 
 import numpy as np
 import torch
@@ -42,13 +44,18 @@ from torch.utils.data import DataLoader, Dataset
 
 try:  # allow both "python -m imaging.sliceclf" and direct execution
     from .dataset import split_npz_by_patient
-    from .slicebank import (INDEX_FILE, SliceBankDataset, build_slice_bank,
-                            case_ids_for_paths)
+    from .slicebank import INDEX_FILE, SliceBankDataset, build_slice_bank, case_ids_for_paths
     from .unet import DoubleConv
 except ImportError:  # pragma: no cover
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from dataset import split_npz_by_patient
     from slicebank import INDEX_FILE, SliceBankDataset, build_slice_bank, case_ids_for_paths
     from unet import DoubleConv
+
+import config  # noqa: E402 - repo root, importable under both invocations
+from logging_setup import setup_logging
+
+log = logging.getLogger(__name__)
 
 
 class SliceClassifier(nn.Module):
@@ -178,11 +185,11 @@ def evaluate_ranking(model, device, bank_dir, case_ids, topk=3):
 
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    log.info(f"Device: {device}")
 
     train_paths, val_paths, test_paths = split_npz_by_patient(
         args.data_dir, val_frac=args.val_frac, test_frac=args.test_frac, seed=args.seed)
-    print(f"Patients -> train {len(train_paths)}, val {len(val_paths)}, test {len(test_paths)}")
+    log.info(f"Patients -> train {len(train_paths)}, val {len(val_paths)}, test {len(test_paths)}")
 
     build_slice_bank(list(train_paths) + list(val_paths) + list(test_paths),
                      args.slice_bank, image_size=args.image_size)
@@ -198,14 +205,14 @@ def train(args):
     train_ds = SliceLabelDataset(bank)
     n_pos = int(bank.all_has_lesion[bank.index].sum())
     n_neg = len(bank) - n_pos
-    print(f"Training slices: {len(bank)} ({n_pos} avec lésion, {n_neg} sans)")
+    log.info(f"Training slices: {len(bank)} ({n_pos} avec lésion, {n_neg} sans)")
 
     loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
                         num_workers=args.num_workers)
 
     model = SliceClassifier(base=args.base_channels, dropout=args.dropout).to(device)
     pos_weight = torch.tensor([n_neg / max(1, n_pos)], device=device)
-    print(f"pos_weight = {pos_weight.item():.2f}")
+    log.info(f"pos_weight = {pos_weight.item():.2f}")
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -240,7 +247,7 @@ def train(args):
 
             val = evaluate_ranking(model, device, args.slice_bank, val_cases)
             scheduler.step(val["top1"])
-            print(f"Epoch {epoch:3d} | loss {running / max(1, seen):.4f} | "
+            log.info(f"Epoch {epoch:3d} | loss {running / max(1, seen):.4f} | "
                   f"val top1 {val['top1']:.3f} | top3 {val['top3']:.3f} | "
                   f"AUC {val['auc']:.3f} | rang médian {val['median_rank']:.0f} | "
                   f"lr {optimizer.param_groups[0]['lr']:.2e}")
@@ -255,21 +262,21 @@ def train(args):
     if os.path.exists(ckpt_path):
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
     test = evaluate_ranking(model, device, args.slice_bank, test_cases)
-    print(f"\nTest | top1 {test['top1']:.3f} | top3 {test['top3']:.3f} | "
+    log.info(f"Test | top1 {test['top1']:.3f} | top3 {test['top3']:.3f} | "
           f"AUC {test['auc']:.3f} | rang médian {test['median_rank']:.0f} "
           f"({test['n_patients']} patients)")
     with open(os.path.join(args.output_dir, "sliceclf_test_metrics.json"), "w") as f:
         json.dump({"val_best_top1": best_top1, "test": test,
                    "base_channels": args.base_channels}, f, indent=2)
-    print(f"Checkpoint: {ckpt_path}")
+    log.info(f"Checkpoint: {ckpt_path}")
     return test
 
 
 def build_arg_parser():
     p = argparse.ArgumentParser(description="Train a slice-level lesion classifier.")
-    p.add_argument("--data-dir", default="preprocessed_data_mri_p2")
-    p.add_argument("--slice-bank", default="slice_bank_p2")
-    p.add_argument("--output-dir", default="results_sliceclf")
+    p.add_argument("--data-dir", default=config.DCE_MRI_PREPROCESSED_DIR)
+    p.add_argument("--slice-bank", default=config.SLICE_BANK_DIR)
+    p.add_argument("--output-dir", default=config.SLICE_CLF_DIR)
     p.add_argument("--epochs", type=int, default=20)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--lr", type=float, default=3e-4)
@@ -291,4 +298,5 @@ def build_arg_parser():
 
 
 if __name__ == "__main__":
+    setup_logging(logfile="sliceclf.log")
     train(build_arg_parser().parse_args())

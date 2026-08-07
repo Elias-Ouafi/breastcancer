@@ -2,12 +2,12 @@
 
 Run from the repository root:
 
-    python -m imaging.train --data-dir preprocessed_data --epochs 30
+    python -m imaging.train --data-dir data/preprocessed_data/dbt --epochs 30
 
 The target masks come from the annotation bounding boxes, so this learns lesion
 *localisation* (Dice/IoU against the box), the objective chosen for the first
-imaging brick. Metrics are written to ``results/segmentation_metrics.csv`` and the
-best checkpoint to ``results/unet_best.pt``.
+imaging brick. Metrics are written to ``models/dbt/segmentation_metrics.csv`` and
+the best checkpoint to ``models/dbt/unet_best.pt``.
 
 Use ``--smoke-test`` to validate the full forward/backward/eval loop on random
 tensors, without any real data (handy right after installing PyTorch).
@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import logging
 import math
 import os
+import sys
 
 import torch
 from torch.utils.data import DataLoader, TensorDataset
@@ -27,12 +29,19 @@ try:  # allow both "python -m imaging.train" and "python imaging/train.py"
     from .metrics import DiceBCELoss, FocalTverskyLoss, segmentation_scores
     from .unet import build_model
 except ImportError:  # pragma: no cover - fallback for direct script execution
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from dataset import MRISliceDataset, split_npz_by_patient
     from metrics import DiceBCELoss, FocalTverskyLoss, segmentation_scores
     from unet import build_model
 
+# The repo root is importable under both invocations: as cwd for ``-m``, and via the
+# fallback above for a direct run.
+import config  # noqa: E402
+from logging_setup import setup_logging
 
-_DEFAULT_OUTPUT_DIR = "results"
+log = logging.getLogger(__name__)
+
+_DEFAULT_OUTPUT_DIR = config.DBT_MODEL_DIR
 
 
 def evaluate(model, loader, device, threshold=0.5):
@@ -71,7 +80,7 @@ def _make_bank_loaders(args, train_paths, val_paths, test_paths):
     from .slicebank import SliceBankDataset, build_slice_bank, case_ids_for_paths
 
     all_paths = list(train_paths) + list(val_paths) + list(test_paths)
-    print(f"Building/reusing slice bank at {args.slice_bank} ...")
+    log.info(f"Building/reusing slice bank at {args.slice_bank} ...")
     build_slice_bank(all_paths, args.slice_bank, image_size=args.image_size)
 
     train_ds = SliceBankDataset(args.slice_bank, case_ids=case_ids_for_paths(train_paths),
@@ -80,7 +89,7 @@ def _make_bank_loaders(args, train_paths, val_paths, test_paths):
                                 augment=not args.no_augment)
     if not len(train_ds):
         raise RuntimeError("No training slices found in the slice bank.")
-    print(f"Training slices: {len(train_ds)} "
+    log.info(f"Training slices: {len(train_ds)} "
           f"(neg_per_pos={args.neg_per_pos}, positive_only={args.positive_only})")
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
                               num_workers=args.num_workers)
@@ -105,7 +114,7 @@ def _make_loaders(args):
     train_paths, val_paths, test_paths = split_npz_by_patient(
         args.data_dir, val_frac=args.val_frac, test_frac=args.test_frac, seed=args.seed
     )
-    print(f"Cases -> train: {len(train_paths)}, val: {len(val_paths)}, test: {len(test_paths)}")
+    log.info(f"Cases -> train: {len(train_paths)}, val: {len(val_paths)}, test: {len(test_paths)}")
 
     if args.slice_bank:
         return _make_bank_loaders(args, train_paths, val_paths, test_paths)
@@ -116,7 +125,7 @@ def _make_loaders(args):
                                augment=not args.no_augment, cache_size=args.cache_size)
     if not len(train_ds):
         raise RuntimeError("No training slices found. Check the data or --positive-only.")
-    print(f"Training slices: {len(train_ds)} "
+    log.info(f"Training slices: {len(train_ds)} "
           f"(neg_per_pos={args.neg_per_pos}, positive_only={args.positive_only})")
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
 
@@ -150,17 +159,17 @@ def _make_smoke_loaders(args):
 
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    log.info(f"Using device: {device}")
 
     if args.smoke_test:
         train_loader, val_loader, test_loader, n_train = _make_smoke_loaders(args)
         # A smoke run trains on random tensors, so its checkpoint is garbage. Keep it
         # out of the default --output-dir: writing there silently destroyed a real
-        # trained checkpoint (results/unet_best.pt, the DBT model the demo app serves)
-        # simply by running --smoke-test with no other flags.
+        # trained checkpoint (models/dbt/unet_best.pt, the DBT model the demo app
+        # serves) simply by running --smoke-test with no other flags.
         if args.output_dir == _DEFAULT_OUTPUT_DIR:
             args.output_dir = os.path.join(_DEFAULT_OUTPUT_DIR, "smoke_test")
-            print(f"Smoke test: writing throwaway artefacts to {args.output_dir}")
+            log.info(f"Smoke test: writing throwaway artefacts to {args.output_dir}")
     else:
         train_loader, val_loader, test_loader, n_train = _make_loaders(args)
 
@@ -186,7 +195,7 @@ def train(args):
     use_amp = args.amp and device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     if use_amp:
-        print("Mixed precision (AMP): enabled")
+        log.info("Mixed precision (AMP): enabled")
 
     os.makedirs(args.output_dir, exist_ok=True)
     metrics_path = os.path.join(args.output_dir, "segmentation_metrics.csv")
@@ -221,7 +230,7 @@ def train(args):
             train_loss = running / max(1, n_train)
             val_metrics = evaluate(model, val_loader, device, threshold=args.threshold)
             lr = optimizer.param_groups[0]["lr"]
-            print(f"Epoch {epoch:3d} | loss {train_loss:.4f} | "
+            log.info(f"Epoch {epoch:3d} | loss {train_loss:.4f} | "
                   f"val Dice {val_metrics['dice']:.4f} | val IoU {val_metrics['iou']:.4f} | lr {lr:.2e}")
             writer.writerow([epoch, f"{train_loss:.6f}",
                              f"{val_metrics['dice']:.6f}", f"{val_metrics['iou']:.6f}"])
@@ -247,20 +256,21 @@ def train(args):
         if os.path.exists(ckpt_path):
             model.load_state_dict(torch.load(ckpt_path, map_location=device))
         test_metrics = evaluate(model, test_loader, device, threshold=args.threshold)
-        print(f"Test  | Dice {test_metrics['dice']:.4f} | IoU {test_metrics['iou']:.4f}")
+        log.info(f"Test  | Dice {test_metrics['dice']:.4f} | IoU {test_metrics['iou']:.4f}")
         with open(os.path.join(args.output_dir, "segmentation_test_metrics.csv"), "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["dice", "iou"])
             writer.writerow([f"{test_metrics['dice']:.6f}", f"{test_metrics['iou']:.6f}"])
 
-    print(f"\nMetrics written to {metrics_path}")
+    log.info(f"Metrics written to {metrics_path}")
     if os.path.exists(ckpt_path):
-        print(f"Best checkpoint saved to {ckpt_path}")
+        log.info(f"Best checkpoint saved to {ckpt_path}")
 
 
 def build_arg_parser():
     p = argparse.ArgumentParser(description="Train a 2D U-Net for MRI lesion localisation.")
-    p.add_argument("--data-dir", default="preprocessed_data", help="Folder of preprocessed .npz volumes.")
+    p.add_argument("--data-dir", default=config.DBT_PREPROCESSED_DIR,
+                   help="Folder of preprocessed .npz volumes.")
     p.add_argument("--output-dir", default=_DEFAULT_OUTPUT_DIR,
                    help="Where to write metrics and checkpoints.")
     p.add_argument("--epochs", type=int, default=30)
@@ -335,4 +345,5 @@ def build_arg_parser():
 
 
 if __name__ == "__main__":
+    setup_logging(logfile="train.log")
     train(build_arg_parser().parse_args())

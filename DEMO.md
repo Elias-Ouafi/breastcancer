@@ -9,7 +9,7 @@ pip install -r requirements.txt
 python run_demo.py
 ```
 
-Rien d'autre à télécharger : le modèle (`results_mri_p2_negfix/unet_best.pt`) et les
+Rien d'autre à télécharger : le modèle (`models/dce_mri_p2_negfix/unet_best.pt`) et les
 trois cas de démo sont versionnés dans le dépôt. Le serveur écoute uniquement sur
 `127.0.0.1` — rien n'est exposé sur le réseau.
 
@@ -79,7 +79,7 @@ C'est un problème de *sélection*, pas de *segmentation* — détaillé dans
 [plan.md](plan.md) §4.2 et §4.3.
 
 Les chiffres à citer, mesurés sur les 28 patients de test (`imaging.evaluate`,
-détail dans `results_mri_p2_negfix/eval_report.json`) :
+détail dans `models/dce_mri_p2_negfix/eval_report.json`) :
 
 | Mesure | Valeur | IC95 |
 |--------|:------:|:----:|
@@ -104,7 +104,7 @@ C'est écrit noir sur blanc dans l'app (encart « Limites connues » sur les deu
 |----------|----------------|-----------|
 | `run_demo.py` refuse de démarrer | Il dit lequel des trois prérequis manque | Suivre la ligne `->` qu'il affiche |
 | Port déjà utilisé | Une instance tourne déjà | `python run_demo.py --port 5001` |
-| Aucune coupe annotée affichée | Le fichier n'est pas un `.npz` prétraité | Utiliser un fichier de `demo_cases/` |
+| Aucune coupe annotée affichée | Le fichier n'est pas un `.npz` prétraité | Utiliser un fichier de `data/curated_data/demo_cases/` |
 | Moteur affiché = `mock` | `run_demo.py` contourné | Relancer via `python run_demo.py` |
 
 **Repli si le live échoue** : garder une capture d'écran d'un résultat réussi.

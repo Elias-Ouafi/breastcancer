@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Deliberately NOT `pip install -r requirements.txt`. The full dependency set
+      # pulls PySpark (and a JVM), ITK, SimpleITK and the TCIA client -- none of which
+      # the test suite exercises, and which would turn a ~1 minute check into several.
+      # torch comes from the CPU index: the default wheel ships CUDA and is ~2.5 GB.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy pytest ruff
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        # Tests import `config` and the `imaging` package from the repo root, and the
+        # demo-asset tests shell out to git, so they run from the checkout as-is
+        # rather than against an installed copy.
+        run: python -m pytest
