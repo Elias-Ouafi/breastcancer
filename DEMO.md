@@ -1,4 +1,4 @@
-# Démo — 3 commandes
+# Démo
 
 > **Research Use Only — Not for diagnostic use.** Outil de recherche, pas un
 > dispositif médical. Aucune décision clinique ne doit en dépendre.
@@ -9,19 +9,36 @@ pip install -r requirements.txt
 python run_demo.py
 ```
 
-Puis ouvrir <http://127.0.0.1:5000> et cliquer sur **Cas 1**, **Cas 2** ou **Cas 3** —
-pas de sélecteur de fichier à manipuler en plein pitch. (Le dépôt de fichier reste
-disponible pour un examen à vous.)
-
-Sur la page de résultat : le **curseur** fait défiler les 25 coupes autour de la zone
-détectée, et **Vue MIP** affiche la projection d'intensité maximale. Le cadre n'est
-tracé que sur la coupe réellement évaluée.
-
 Rien d'autre à télécharger : le modèle (`results_mri_p2_negfix/unet_best.pt`) et les
 trois cas de démo sont versionnés dans le dépôt. Le serveur écoute uniquement sur
 `127.0.0.1` — rien n'est exposé sur le réseau.
 
-`python run_demo.py --check` vérifie qu'une machine est prête sans occuper de port.
+## Le déroulé
+
+**La veille**, vérifier que la machine est prête sans occuper de port :
+
+```bash
+python run_demo.py --check
+```
+
+**Le jour J :**
+
+1. `python run_demo.py`
+2. Ouvrir <http://127.0.0.1:5000>
+3. Cliquer sur **Cas 1** — pas de sélecteur de fichier à manipuler en plein pitch.
+   (Le dépôt de fichier reste disponible pour un examen à vous.)
+4. Dérouler le résultat, dans cet ordre :
+   - le verdict et la confiance, avec le temps de calcul (~110 ms)
+   - la coupe annotée, cadre orange sur la zone de réhaussement
+   - **faire glisser le curseur** — la lésion apparaît, culmine, disparaît sur les
+     25 coupes. C'est le moment qui convainc.
+   - **Vue MIP** — la projection d'intensité maximale, comme lit un radiologue
+   - déplier *Détail technique* si on vous pose des questions
+5. Enchaîner sur **Comment ça marche** (lien en bas) si votre interlocuteur veut le
+   pipeline.
+
+Le cadre n'est tracé que sur la coupe réellement évaluée : les voisines sont montrées
+telles quelles, le modèle ne les a pas analysées.
 
 ## Les trois cas
 
@@ -43,13 +60,23 @@ servent uniquement au curseur et au MIP. Régénération :
 
 ## À dire pendant la démo
 
-Ces trois cas fonctionnent parce que **la coupe a été choisie à l'avance par un
-humain**, pas par le modèle (clé `forced_slice` dans le `.npz`). Sur un volume
-complet uploadé librement, la sélection automatique de coupe échoue encore
-(vérifié 0/186 sur les patients de test) : le modèle segmente correctement une
-lésion **quand on lui montre la bonne coupe**, il ne sait pas encore la trouver
-seul. C'est un problème de *sélection*, pas de *segmentation* — détaillé dans
-[plan.md](plan.md) §4.2.
+Trois phrases, avant qu'on ne vous les demande :
+
+> « La coupe a été choisie à l'avance par un humain. Le modèle segmente très bien une
+> lésion **quand on lui montre la bonne coupe** — 88 % de sensibilité. Il ne sait pas
+> encore la trouver seul : on est passé de 0 % à 43 % avec un classifieur dédié,
+> c'est en cours. »
+
+> « Le Dice de 0,53 n'est pas comparable au 0,80 de la littérature : nos masques
+> d'entraînement sont des boîtes englobantes, pas des contours d'expert. »
+
+> « Rien n'est validé cliniquement. C'est de la recherche sur un échantillon de
+> 186 patients. »
+
+Le détail : les trois cas fonctionnent grâce à la clé `forced_slice` dans le `.npz`.
+Sur un volume complet uploadé librement, la sélection automatique reste peu fiable.
+C'est un problème de *sélection*, pas de *segmentation* — détaillé dans
+[plan.md](plan.md) §4.2 et §4.3.
 
 Les chiffres à citer, mesurés sur les 28 patients de test (`imaging.evaluate`,
 détail dans `results_mri_p2_negfix/eval_report.json`) :
