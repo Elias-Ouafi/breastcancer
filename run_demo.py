@@ -18,9 +18,11 @@ import argparse
 import os
 import sys
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-CHECKPOINT = os.path.join("results_mri_p2_negfix", "unet_best.pt")
-DEMO_DIR = "demo_cases"
+import config
+
+ROOT = config.ROOT
+CHECKPOINT = os.path.relpath(config.DCE_MRI_UNET_CKPT, ROOT)
+DEMO_DIR = os.path.relpath(config.DEMO_CASES_DIR, ROOT)
 
 
 def _preflight():

@@ -35,8 +35,8 @@ Three backends exist:
 | Backend | Selected by | What it does |
 |---------|-------------|--------------|
 | `mock` (default) | — | Fabricates a plausible result; ignores pixels. |
-| `unet` | `MRI_APP_BACKEND=unet` | DBT lesion localisation via `inference.predict_dbt` (checkpoint `results/unet_best.pt`). |
-| `dce_mri` | `MRI_APP_BACKEND=dce_mri` | DCE-MRI lesion localisation via `inference.predict_dce_mri` (checkpoint `results_mri_p2_negfix/unet_best.pt` -- 2nd post-contrast pass, scratch GroupNorm U-Net, 186-patient sample; see `plan.md` §4.1), scored on the post-minus-pre subtraction volume. |
+| `unet` | `MRI_APP_BACKEND=unet` | DBT lesion localisation via `inference.predict_dbt` (checkpoint `models/dbt/unet_best.pt`). |
+| `dce_mri` | `MRI_APP_BACKEND=dce_mri` | DCE-MRI lesion localisation via `inference.predict_dce_mri` (checkpoint `models/dce_mri_p2_negfix/unet_best.pt` -- 2nd post-contrast pass, scratch GroupNorm U-Net, 186-patient sample; see `plan.md` §4.1), scored on the post-minus-pre subtraction volume. |
 
 To go live, set one env var (the matching checkpoint must exist and the upload must
 be a preprocessed `.npz` volume -- for `dce_mri`, produced by
@@ -52,13 +52,15 @@ $env:MRI_APP_BACKEND = "dce_mri"; python -m app.server   # DCE-MRI
 selection on a raw full-volume upload does not reliably find the lesion yet
 (verified 0/186 on held-out patients — the model segments well once shown the right
 slice, it just can't find that slice unassisted). For a demo that works every time,
-upload one of the curated cases in `demo_cases/` (versioned in the repo; rebuild with
+upload one of the curated cases in `data/curated_data/demo_cases/` (versioned in the repo; rebuild with
 `python scripts/make_demo_cases.py`) rather than an arbitrary patient volume. Those
 cases pin a verified-good slice via a `forced_slice` key read automatically by
 `inference.predict_dce_mri`, which reports `slice_preselected: true` so the UI can
-say the slice was *imposed* rather than found. Both screens carry a "Limites
-connues" panel stating this, the bounding-box training masks and the absence of
-clinical validation.
+say the slice was *imposed* rather than found. Every screen carries a "Limites
+connues" panel: the limitation that changes how the result should be read stays in
+plain sight, with the three headline figures as chips beside it; the paragraphs that
+qualify them sit behind a disclosure, because four dense paragraphs repeated on every
+screen stop being read at all. The Research-Use-Only banner is never collapsible.
 
 Nothing else in the app changes — the result contract
 (`lesion_detected`, `slice_preselected`, `confidence`, `best_slice`, `box_xywh`,

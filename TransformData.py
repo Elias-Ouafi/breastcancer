@@ -1,12 +1,17 @@
+import logging
 import os
 import re
 import shutil
-import logging
 import tempfile
 
 import numpy as np
 import pandas as pd
 import pydicom
+
+import config
+from logging_setup import setup_logging
+
+log = logging.getLogger(__name__)
 
 # Optional heavy dependencies. Each is only needed by a specific pipeline (tabular
 # PCA, MRI SEG resampling, 3D viewing...). They are imported lazily so the module —
@@ -18,9 +23,10 @@ except ImportError:
     fetch_ucirepo = None
 try:
     # Tabular pipeline now runs on Spark MLlib instead of scikit-learn.
-    from pyspark.sql import DataFrame as SparkDataFrame, SparkSession
-    from pyspark.ml.feature import Imputer, PCA, StandardScaler, VectorAssembler
+    from pyspark.ml.feature import PCA, Imputer, StandardScaler, VectorAssembler
     from pyspark.ml.functions import vector_to_array
+    from pyspark.sql import DataFrame as SparkDataFrame
+    from pyspark.sql import SparkSession
     from pyspark.sql import functions as F
 except ImportError:
     SparkDataFrame = SparkSession = None
@@ -121,12 +127,14 @@ def analyze_feature_contributions(pca_model, feature_names):
 
     return feature_contributions, top_features
 
-def create_scree_plot(explained_variance, save_path='data/scree_plot.png'):
+def create_scree_plot(explained_variance, save_path=None):
     """Create and save a scree plot of explained variance.
 
     ``explained_variance`` is the array of per-component variance ratios
-    (``PCAModel.explainedVariance`` as a numpy array).
+    (``PCAModel.explainedVariance`` as a numpy array). It is a figure, so it lands
+    in ``plots/`` rather than beside the data it describes.
     """
+    save_path = save_path or config.SCREE_PLOT_PNG
     n_components = len(explained_variance)
     plt.figure(figsize=(10, 6))
 
@@ -175,27 +183,27 @@ def apply_pca(scaled_df, feature_names, variance=0.95):
     explained_variance = pca_model.explainedVariance.toArray()
 
     # Analyze PCA results
-    print("\nPCA Analysis:")
-    print(f"Number of components: {k}")
-    print("\nExplained variance ratio:")
+    log.info("PCA Analysis:")
+    log.info(f"Number of components: {k}")
+    log.info("Explained variance ratio:")
     for i, ratio in enumerate(explained_variance):
-        print(f"Component {i+1}: {ratio:.4f}")
+        log.info(f"Component {i+1}: {ratio:.4f}")
 
     # Calculate cumulative explained variance
     cumulative_variance = np.cumsum(explained_variance)
-    print("\nCumulative explained variance:")
+    log.info("Cumulative explained variance:")
     for i, var in enumerate(cumulative_variance):
-        print(f"Components 1-{i+1}: {var:.4f}")
+        log.info(f"Components 1-{i+1}: {var:.4f}")
 
     # Analyze feature contributions
     feature_contributions, top_features = analyze_feature_contributions(pca_model, feature_names)
 
     # Print top contributing features for each component
-    print("\nTop contributing features for each principal component:")
+    log.info("Top contributing features for each principal component:")
     for pc, features in top_features.items():
-        print(f"\n{pc}:")
+        log.info(f"{pc}:")
         for feature, contribution in features.items():
-            print(f"  {feature}: {contribution:.4f}")
+            log.info(f"  {feature}: {contribution:.4f}")
 
     # Create scree plot
     create_scree_plot(explained_variance)
@@ -209,7 +217,7 @@ def save_transformed_data(transformed_df, pca_model, feature_contributions):
     keeps ``Diagnosis``, and returns the resulting Spark DataFrame (which feeds
     the analysis step). CSVs are written for downstream/manual inspection.
     """
-    os.makedirs('data', exist_ok=True)
+    config.ensure_dirs(config.WISCONSIN_PREPROCESSED_DIR, config.REPORTS_DIR)
     k = pca_model.getK()
 
     # Explode the PCA vector into one column per component.
@@ -219,7 +227,8 @@ def save_transformed_data(transformed_df, pca_model, feature_contributions):
 
     # The Wisconsin set is tiny (569 rows); collect to a single CSV for parity
     # with the previous output rather than a Spark part-file directory.
-    transformed_df.toPandas().to_csv('data/transformed_data.csv', index=False)
+    transformed_df.toPandas().to_csv(
+        os.path.join(config.WISCONSIN_PREPROCESSED_DIR, 'transformed_data.csv'), index=False)
 
     # Save PCA information
     explained_variance = pca_model.explainedVariance.toArray()
@@ -228,10 +237,10 @@ def save_transformed_data(transformed_df, pca_model, feature_contributions):
         'explained_variance': explained_variance,
         'cumulative_variance': np.cumsum(explained_variance)
     })
-    pca_info.to_csv('data/pca_info.csv', index=False)
+    pca_info.to_csv(config.PCA_INFO_CSV, index=False)
 
     # Save feature contributions
-    feature_contributions.to_csv('data/feature_contributions.csv')
+    feature_contributions.to_csv(config.FEATURE_CONTRIBUTIONS_CSV)
 
     return transformed_df
 
@@ -265,13 +274,13 @@ def transform_data(data):
     # Save transformed data
     transformed_df = save_transformed_data(transformed_df, pca_model, feature_contributions)
 
-    print("\nData transformation complete!")
-    print(f"Original number of features: {n_original}")
-    print(f"Number of features after PCA: {pca_model.getK()}")
-    print("\nTransformed data saved to 'data/transformed_data.csv'")
-    print("PCA information saved to 'data/pca_info.csv'")
-    print("Feature contributions saved to 'data/feature_contributions.csv'")
-    print("Scree plot saved to 'data/scree_plot.png'")
+    log.info("Data transformation complete!")
+    log.info(f"Original number of features: {n_original}")
+    log.info(f"Number of features after PCA: {pca_model.getK()}")
+    log.info("Transformed data saved to 'data/transformed_data.csv'")
+    log.info("PCA information saved to 'data/pca_info.csv'")
+    log.info("Feature contributions saved to 'data/feature_contributions.csv'")
+    log.info("Scree plot saved to 'data/scree_plot.png'")
 
     return transformed_df, pca_model, feature_contributions, top_features
 
@@ -381,17 +390,17 @@ def delete_dicom_source(dicom_dir, npz_path):
     Returns True if the folder was removed.
     """
     if not npz_path or not os.path.exists(npz_path) or os.path.getsize(npz_path) == 0:
-        logging.warning(
+        log.warning(
             f"Skipping deletion of {dicom_dir}: preprocessed file "
             f"{npz_path} is missing or empty."
         )
         return False
     try:
         shutil.rmtree(dicom_dir)
-        logging.info(f"🗑️  Removed raw DICOM source {dicom_dir} (kept {npz_path}).")
+        log.info(f"🗑️  Removed raw DICOM source {dicom_dir} (kept {npz_path}).")
         return True
     except OSError as e:
-        logging.error(f"Failed to remove {dicom_dir}: {e}")
+        log.error(f"Failed to remove {dicom_dir}: {e}")
         return False
 
 
@@ -435,9 +444,9 @@ def _read_boxes(boxes_csv):
     return pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
 
 
-def preprocess_dbt_with_boxes(root_dir="tciaDownload",
-                              boxes_csv="tciaDownload/BCS-DBT-boxes-train.csv",
-                              output_dir="preprocessed_data",
+def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
+                              boxes_csv=config.DBT_BOXES_TRAIN,
+                              output_dir=config.DBT_PREPROCESSED_DIR,
                               skip_empty=True,
                               slice_margin=2,
                               crop=True):
@@ -509,14 +518,14 @@ def preprocess_dbt_with_boxes(root_dir="tciaDownload",
         save_preprocessed(name, volume, mask, output_dir, crop=crop,
                           case_id=getattr(ds, "PatientID", name))
         saved += 1
-        logging.info(f"[DBT] {name}: {len(rows)} box(es), "
+        log.info(f"[DBT] {name}: {len(rows)} box(es), "
                      f"{int(mask.sum())} lesion voxels -> saved.")
 
-    logging.info(f"[DBT] Saved {saved} series, skipped {skipped} without annotations.")
+    log.info(f"[DBT] Saved {saved} series, skipped {skipped} without annotations.")
     return saved, skipped
 
 
-def extract_patient_ids(root_dir="tciaDownload"):
+def extract_patient_ids(root_dir=config.TCIA_DIR):
     """Walk `root_dir` and return the set of PatientIDs found in the DICOM files."""
     patient_ids = set()
     for dirpath, dirnames, filenames in os.walk(root_dir):
@@ -527,11 +536,12 @@ def extract_patient_ids(root_dir="tciaDownload"):
                     ds = pydicom.dcmread(filepath, stop_before_pixels=True)
                     patient_ids.add(ds.PatientID)
                 except Exception as e:
-                    print(f"Error reading {filepath}: {e}")
+                    log.info(f"Error reading {filepath}: {e}")
     return patient_ids
 
 
-def process_all_mri_data(root_dir="tciaDownload", output_dir="preprocessed_data", delete_source=False):
+def process_all_mri_data(root_dir=config.TCIA_DIR, output_dir=config.DBT_PREPROCESSED_DIR,
+                         delete_source=False):
     """
     Loop through all MRI data to preprocess them.
 
@@ -539,9 +549,11 @@ def process_all_mri_data(root_dir="tciaDownload", output_dir="preprocessed_data"
     successfully preprocessed into a compressed .npz (reclaims most of the disk
     space). It is off by default because it is destructive.
     """
+    # No logging.basicConfig here: this is a library function, and configuring the
+    # root logger from one would hijack logging for every caller. Entry points call
+    # logging_setup.setup_logging() instead.
     os.makedirs(output_dir, exist_ok=True)
-    logging.basicConfig(level=logging.INFO)
-    
+
     # Store all subdirectories in a list to loop through
     mri_dirs = [d for d in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, d))]
     
@@ -550,7 +562,7 @@ def process_all_mri_data(root_dir="tciaDownload", output_dir="preprocessed_data"
     
     for mri_dir in mri_dirs:
         try:
-            logging.info(f"Processing MRI directory: {mri_dir}")
+            log.info(f"Processing MRI directory: {mri_dir}")
             local_dicom_path = os.path.join(root_dir, mri_dir)
             
             # Process the MRI data
@@ -567,15 +579,16 @@ def process_all_mri_data(root_dir="tciaDownload", output_dir="preprocessed_data"
                 failed_count += 1
                 
         except Exception as e:
-            logging.error(f"Failed to process {mri_dir}: {str(e)}")
+            log.error(f"Failed to process {mri_dir}: {str(e)}")
             failed_count += 1
             continue
     
-    logging.info(f"Successfully processed: {processed_count}")
-    logging.info(f"Failed to process: {failed_count}")
+    log.info(f"Successfully processed: {processed_count}")
+    log.info(f"Failed to process: {failed_count}")
     return processed_count, failed_count
 
-def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="preprocessed_data", delete_source=False):
+def preprocess_mri_data(series_instance_uid, local_dicom_path,
+                        output_dir=config.DBT_PREPROCESSED_DIR, delete_source=False):
     """
     Preprocess MRI data to add its segmentations.
 
@@ -584,17 +597,17 @@ def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="prepr
     """
     try:
         # STEP 1 - Load the MRI series
-        logging.info(f"\n Loading MRI series...")
+        log.info(" Loading MRI series...")
         dicom_files = [f for f in os.listdir(local_dicom_path) if f.endswith('.dcm')]
         if not dicom_files:
             raise ValueError(f"No DICOM files found in {local_dicom_path}")
             
         # STEP 2 -Read DICOM images with single or multiple files
         if len(dicom_files) == 1:
-            logging.info("Single DICOM file.")
+            log.info("Single DICOM file.")
             image = sitk.ReadImage(os.path.join(local_dicom_path, dicom_files[0]))
         else:
-            logging.info("Multiple DICOM files.")
+            log.info("Multiple DICOM files.")
             reader = sitk.ImageSeriesReader()
             dicom_names = reader.GetGDCMSeriesFileNames(local_dicom_path)
             reader.SetFileNames(dicom_names)
@@ -631,7 +644,7 @@ def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="prepr
                 
                 # Check if it's a segmentation file
                 if ds.SOPClassUID == '1.2.840.10008.5.1.4.1.1.66.4':
-                    logging.info(f"Processing SEG file: {seg_file}")
+                    log.info(f"Processing SEG file: {seg_file}")
                     seg_image = sitk.ReadImage(seg_path)
                     # Convert to numpy array first, then to float32
                     seg_array = sitk.GetArrayFromImage(seg_image)
@@ -642,7 +655,7 @@ def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="prepr
                     mask = np.logical_or(mask, seg_array > 0).astype(np.uint8)
                     
                 elif ds.SOPClassUID == '1.2.840.10008.5.1.4.1.1.481.3':  # RTSTRUCT
-                    logging.info(f"Processing RTSTRUCT file: {seg_file}")
+                    log.info(f"Processing RTSTRUCT file: {seg_file}")
                     # Convert RTSTRUCT to binary mask
                     rtstruct = itk.imread(seg_path)
                     rtstruct_resampled = itk.resample_image_filter(
@@ -654,7 +667,7 @@ def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="prepr
                     mask = np.logical_or(mask, rtstruct_array > 0).astype(np.uint8)
                     
             except Exception as e:
-                logging.warning(f"Could not process segmentation file {seg_file}: {str(e)}")
+                log.warning(f"Could not process segmentation file {seg_file}: {str(e)}")
                 continue
         
         # STEP 7 - Save preprocessed data (compressed to keep files small)
@@ -668,11 +681,11 @@ def preprocess_mri_data(series_instance_uid, local_dicom_path, output_dir="prepr
             delete_dicom_source(local_dicom_path, npz_path)
 
         # The end
-        logging.info(f"✅ Successfully processed {patient_id}")
+        log.info(f"✅ Successfully processed {patient_id}")
         return normalized_array, mask
         
     except Exception as e:
-        logging.error(f"❌ Failed to process series {series_instance_uid}: {str(e)}")
+        log.error(f"❌ Failed to process series {series_instance_uid}: {str(e)}")
         return None, None
 
 # --------------------------------------------------------------------------- #
@@ -765,7 +778,8 @@ def _read_mri_boxes(boxes_path):
     return df
 
 
-def preprocess_dce_mri_with_boxes(root_dir, boxes_path, output_dir="preprocessed_data_mri",
+def preprocess_dce_mri_with_boxes(root_dir, boxes_path,
+                                  output_dir=config.DCE_MRI_PREPROCESSED_DIR,
                                   post_phase_rank=2, crop=True):
     """Preprocess Duke-Breast-Cancer-MRI series into subtraction volumes + box masks.
 
@@ -804,7 +818,7 @@ def preprocess_dce_mri_with_boxes(root_dir, boxes_path, output_dir="preprocessed
     saved, skipped = 0, 0
     for pid, phases in groups.items():
         if 0 not in phases or post_phase_rank not in phases:
-            logging.warning(f"[MRI] {pid}: missing pre or post-phase {post_phase_rank} series, skipping.")
+            log.warning(f"[MRI] {pid}: missing pre or post-phase {post_phase_rank} series, skipping.")
             skipped += 1
             continue
 
@@ -816,7 +830,7 @@ def preprocess_dce_mri_with_boxes(root_dir, boxes_path, output_dir="preprocessed
         pre = _load_series_volume(phases[0])
         post = _load_series_volume(phases[post_phase_rank])
         if pre.shape != post.shape:
-            logging.warning(f"[MRI] {pid}: phase shape mismatch {pre.shape} vs {post.shape}, skipping.")
+            log.warning(f"[MRI] {pid}: phase shape mismatch {pre.shape} vs {post.shape}, skipping.")
             skipped += 1
             continue
 
@@ -836,9 +850,9 @@ def preprocess_dce_mri_with_boxes(root_dir, boxes_path, output_dir="preprocessed
         subtraction = normalize_intensity(subtraction)
         save_preprocessed(pid, subtraction, mask, output_dir, crop=crop, case_id=pid)
         saved += 1
-        logging.info(f"[MRI] {pid}: {len(rows)} box(es), {int(mask.sum())} lesion voxels -> saved.")
+        log.info(f"[MRI] {pid}: {len(rows)} box(es), {int(mask.sum())} lesion voxels -> saved.")
 
-    logging.info(f"[MRI] Saved {saved} patients, skipped {skipped}.")
+    log.info(f"[MRI] Saved {saved} patients, skipped {skipped}.")
     return saved, skipped
 
 
@@ -903,11 +917,12 @@ def make_demo_case(source_npz, out_path, slice_index, slim=True, slab=12):
 
 # Example usage
 if __name__ == "__main__":
+    setup_logging(logfile="preprocess.log")
     # delete_source=True also removes each raw DICOM folder after it is safely
     # preprocessed. It is destructive, so keep it False until you have verified the
     # compressed .npz outputs are correct.
     processed_count, failed_count = process_all_mri_data(
-        root_dir="tciaDownload",
-        output_dir="preprocessed_data",
+        root_dir=config.TCIA_DIR,
+        output_dir=config.DBT_PREPROCESSED_DIR,
         delete_source=False
     )

@@ -79,10 +79,72 @@ they read it buys credibility rather than costing it.
 | `run_demo.py` refuses to start | It names the missing prerequisite; follow the `->` line it prints |
 | Port already in use | `python run_demo.py --port 5001` |
 | Engine badge reads `mock` | The launcher was bypassed — start again with `run_demo.py` |
-| No annotated slice shown | The upload is not a preprocessed `.npz`; use a `demo_cases/` file |
+| No annotated slice shown | The upload is not a preprocessed `.npz`; use a `data/curated_data/demo_cases/` file |
 
 **Safety net:** screenshot a successful result the day before. If the live run fails,
 you carry on without a gap.
+
+## Where things live
+
+Data flows through three layers, and trained artefacts are kept apart from it:
+
+```
+data/
+├── raw_data/          exactly what the source published, never written to again
+│   ├── tcia/          DICOM series + annotation tables (~80 GB)
+│   ├── wisconsin/     the UCI CSV
+│   └── breakhis/      the Kaggle archive
+├── preprocessed_data/ z-normalised volumes + masks, one .npz per series
+│   ├── dbt/           from preprocess_dbt_with_boxes
+│   └── dce_mri_p2/    from preprocess_dce_mri_with_boxes (the model in the demo)
+└── curated_data/      derived and rebuildable: slice banks, the three demo cases
+models/                checkpoints + the metrics that justify them
+reports/               metric tables meant to be read
+plots/                 figures
+```
+
+Every one of those paths is defined once, in [config.py](config.py) — no folder name
+is spelled out in a pipeline script, so moving a dataset is a one-line change. `data/`
+and `models/` are gitignored apart from the demo cases and the two checkpoints the
+demo needs, which is what lets `git clone` + `pip install` replay it.
+
+## Running the imaging pipeline as one flow
+
+The four DCE-MRI stages — download, preprocess, train, evaluate — are wired together
+as a [Prefect](https://www.prefect.io) flow in [pipelines/dce_mri.py](pipelines/dce_mri.py):
+
+```bash
+pip install -e ".[orchestration]"
+python -m pipelines.dce_mri --dry-run          # print the plan, run nothing
+python -m pipelines.dce_mri                    # run it
+python -m pipelines.dce_mri --from preprocess  # resume, skipping the 60 GB download
+```
+
+Each stage checks its own output and skips when it is already there, so a run that
+died in training resumes instead of redoing the two days before it; `--force` re-runs
+anyway. Only the download retries — a TCIA fetch fails on timeouts, whereas re-running
+a crashed training run would just burn another hour reaching the same exception.
+
+The stages call the same functions as the manual commands documented below, so the two
+cannot drift apart.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+ruff check .        # lint
+pytest              # 68 tests, ~6 s, no GPU or dataset needed
+```
+
+[CI](.github/workflows/ci.yml) runs both on every push and pull request. The suite
+covers the metric definitions, the storage-layout contract, the orchestration logic,
+and the assets the demo needs — including whether git actually *tracks* the checkpoint
+and the demo cases, which is the failure that would otherwise surface five minutes
+before a pitch.
+
+Pipelines log through `logging` (see [logging_setup.py](logging_setup.py)), with a
+timestamp per line and a copy under `logs/`. Turn the volume up with
+`BREASTCANCER_LOG_LEVEL=DEBUG`.
 
 ## Prerequisites
 
@@ -100,8 +162,8 @@ you carry on without a gap.
 
 ### TCIA (for MRI/DBT)
 The MRI download uses `tcia_utils.nbia`; public collections such as
-`Breast-Cancer-Screening-DBT` require no API key. Set the download location by
-editing `DOWNLOAD_DIR` in `ExtractData.py`.
+`Breast-Cancer-Screening-DBT` require no API key. Series land in `data/raw_data/tcia/`;
+change `TCIA_DIR` in `config.py` to put them elsewhere.
 
 ## Usage
 
@@ -114,8 +176,8 @@ This downloads the Wisconsin dataset, lifts it into a **Spark DataFrame** (via a
 JVM-native `spark.read` of the fetched table), then uses **Spark MLlib** to
 impute/standardize it, apply PCA (smallest number of components retaining 95% of the
 variance), and train several classifiers (Logistic Regression, Random Forest, Linear
-SVM, Gradient-Boosted Trees, and a Multilayer Perceptron). It writes results to
-`results/` and figures to `plots/`. Requires a JVM (see Prerequisites). See
+SVM, Gradient-Boosted Trees, and a Multilayer Perceptron). It writes metric tables to
+`reports/` and figures to `plots/`. Requires a JVM (see Prerequisites). See
 `Final_Report.md` for a summary of the outcomes.
 
 > **Migration note:** the quantitative pipeline was moved from scikit-learn/XGBoost
@@ -150,32 +212,32 @@ then turn each box into a mask.
 from ExtractData import download_annotated_dbt_series
 from TransformData import preprocess_dbt_with_boxes
 
-# 0. Get the boxes CSV(s) once into tciaDownload/ from TCIA. The training set
+# 0. Get the boxes CSV(s) once into data/raw_data/tcia/ from TCIA. The training set
 #    (BCS-DBT-boxes-train.csv, 101 patients) can be grown with the validation set
 #    (BCS-DBT-boxes-validation.csv, 40 disjoint patients) — same schema. Both
 #    functions accept a single path or a list of paths and pool them.
 BOXES = [
-    "tciaDownload/BCS-DBT-boxes-train.csv",
-    "tciaDownload/BCS-DBT-boxes-validation.csv",
+    "data/raw_data/tcia/BCS-DBT-boxes-train.csv",
+    "data/raw_data/tcia/BCS-DBT-boxes-validation.csv",
 ]
 
 # 1. Download the DBT series of the annotated patients (cap the volume with max_gb).
 #    max_patients=None fetches every annotated patient in the pooled CSVs.
 download_annotated_dbt_series(
     BOXES, max_patients=None,
-    download_dir="tciaDownload", max_gb=25,
+    download_dir="data/raw_data/tcia", max_gb=25,
 )
 
 # 2. Build a box mask per series and save compressed .npz (skips views with no box).
 preprocess_dbt_with_boxes(
-    root_dir="tciaDownload",
+    root_dir="data/raw_data/tcia",
     boxes_csv=BOXES,
-    output_dir="preprocessed_data",
+    output_dir="data/preprocessed_data/dbt",
 )
 ```
 ```bash
 # 3. Train the lesion-localisation U-Net on the preprocessed .npz volumes.
-python -m imaging.train --data-dir preprocessed_data --epochs 25
+python -m imaging.train --data-dir data/preprocessed_data/dbt --epochs 25
 ```
 
 Step 2 matches each downloaded series to its boxes by **PatientID + view**
@@ -186,8 +248,8 @@ region of interest, and stores the real `PatientID` inside the `.npz` (as `case_
 The `imaging/` package then trains the U-Net: it reads the `.npz` volumes, splits
 them **by patient** (`case_id`) so no patient straddles train/val/test, serves axial
 slices, and optimises a combined BCE + soft-Dice loss. Metrics (**Dice**, **IoU**)
-go to `results/segmentation_metrics.csv` and the best checkpoint to
-`results/unet_best.pt`. Because the masks are boxes rather than fine contours, this
+go to `models/dbt/segmentation_metrics.csv` and the best checkpoint to
+`models/dbt/unet_best.pt`. Because the masks are boxes rather than fine contours, this
 targets lesion *localisation*, and the achievable Dice is inherently limited.
 Requires `torch` (install the wheel matching your platform/CUDA). Validate the whole
 loop without any data via `python -m imaging.train --smoke-test`.
@@ -201,8 +263,8 @@ slices within a patient are correlated), lesion-level sensitivity, false positiv
 per whole volume, and measured inference time:
 
 ```bash
-python -m imaging.evaluate --data-dir preprocessed_data_mri_p2 \
-    --checkpoint results_mri_p2_negfix/unet_best.pt
+python -m imaging.evaluate --data-dir data/preprocessed_data/dce_mri_p2 \
+    --checkpoint models/dce_mri_p2_negfix/unet_best.pt
 ```
 
 It writes `eval_report.json` (summary) and `eval_per_patient.csv` (one row per
@@ -215,7 +277,7 @@ The segmentation U-Net cannot pick a lesion's slice out of a full volume (see
 task alone, on *every* slice rather than a sampled subset of negatives:
 
 ```bash
-python -m imaging.sliceclf --slice-bank slice_bank_p2 --epochs 25
+python -m imaging.sliceclf --slice-bank data/curated_data/slice_bank_p2 --epochs 25
 ```
 
 It is selected on top-1 accuracy — "is the volume's highest-scoring slice really

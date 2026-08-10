@@ -63,6 +63,8 @@
       --shadow-sm: 0 1px 2px color-mix(in srgb, #2d2b2b 14%, transparent);
       --shadow-md: 0 3px 10px color-mix(in srgb, #2d2b2b 16%, transparent);
       --shadow-lg: 0 12px 32px color-mix(in srgb, #2d2b2b 22%, transparent);
+
+      --side-width: 320px;
     }
 
     *, *::before, *::after { box-sizing: border-box; }
@@ -90,8 +92,6 @@
     @keyframes node-glow { 0%, 100% { opacity: .25; } 50% { opacity: .8; } }
     @keyframes pulse-ring { 0% { transform: scale(.9); opacity: .9; } 70% { transform: scale(1.6); opacity: 0; } 100% { opacity: 0; } }
     @keyframes scan-line { from { left: -30%; } to { left: 100%; } }
-    @keyframes mascot-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
-    @keyframes mascot-blink { 0%, 92%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.1); } }
 
     .ambient {
       position: fixed; inset: 0; overflow: hidden; z-index: 0;
@@ -112,19 +112,35 @@
     .node { position: absolute; border-radius: 50%; animation: node-glow 3.6s ease-in-out infinite; }
     .ambient-lines { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .35; }
 
-    /* ── Scène + panneau applicatif ── */
+    /* ── Scène + panneau applicatif ──
+          Le panneau était plafonné à 440 px : sur un écran d'ordinateur cela
+          donnait une colonne de largeur téléphone perdue au milieu du vide. Il
+          s'élargit maintenant jusqu'à 1080 px et répartit son contenu en deux
+          colonnes (voir .layout) ; en dessous de 900 px il retombe sur
+          l'empilement d'origine, qui reste le bon format sur mobile. ── */
     .stage {
       position: relative; z-index: 1; min-height: 100vh;
-      display: flex; align-items: center; justify-content: center; padding: 32px 16px;
+      display: flex; align-items: center; justify-content: center;
+      padding: var(--space-8) var(--space-4);
     }
     .panel {
-      width: 100%; max-width: 440px; background: var(--color-bg);
-      padding: 20px 20px 24px; box-shadow: var(--shadow-lg);
-      display: flex; flex-direction: column;
+      width: 100%; max-width: 1080px; background: var(--color-bg);
+      padding: var(--space-6) var(--space-6) var(--space-8);
+      box-shadow: var(--shadow-lg);
     }
-    .panel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+    .panel-head { display: flex; align-items: center; gap: 10px; }
     .brand { font-family: var(--font-heading); font-weight: 800; font-size: 20px; flex: 1; }
-    .hr { height: 2px; border: 0; margin: 12px 0 14px; background: var(--color-divider); }
+    .hr { height: 2px; border: 0; margin: var(--space-3) 0 var(--space-6); background: var(--color-divider); }
+
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr) var(--side-width); gap: var(--space-8); }
+    .layout-main { min-width: 0; }
+    .layout-side { min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
+
+    @media (max-width: 900px) {
+      .stage { padding: var(--space-4) var(--space-3); align-items: flex-start; }
+      .panel { max-width: 480px; padding: var(--space-4) var(--space-4) var(--space-6); }
+      .layout { grid-template-columns: 1fr; gap: var(--space-6); }
+    }
 
     .back-btn {
       display: flex; align-items: center; justify-content: center;
@@ -134,12 +150,47 @@
     }
     .back-btn:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
 
-    /* ── Mascotte « Lumi » ── */
-    .mascot-row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 18px; }
-    .mascot { flex: none; animation: mascot-bob 3.2s ease-in-out infinite; }
-    .mascot .eyes { transform-origin: 21px 20px; animation: mascot-blink 4s ease-in-out infinite; }
-    .bubble { flex: 1; padding: 10px 12px; margin: 0; }
-    .bubble .card-body { opacity: 1; font-size: 13px; }
+    /* ── Assistant « Lumi » ──
+          Le visuel précédent était un rond plat avec deux points et un sourire.
+          Celui-ci garde le même rôle (annoncer l'étape suivante en une phrase)
+          avec une facture plus actuelle : visière sombre, regard qui balaie,
+          halo diffus, pastille d'état. Le personnage est le seul élément aux
+          angles arrondis — le reste du système est à angles vifs, et ce contraste
+          est ce qui le fait lire comme un interlocuteur plutôt qu'un bloc d'UI. ── */
+    @keyframes lumi-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+    @keyframes lumi-blink { 0%, 91%, 100% { transform: scaleY(1); } 95% { transform: scaleY(.08); } }
+    @keyframes lumi-scan { 0%, 100% { transform: translateX(0); } 30% { transform: translateX(2.5px); } 65% { transform: translateX(-2.5px); } }
+    @keyframes lumi-ping { 0% { transform: scale(.7); opacity: .9; } 75% { transform: scale(2.4); opacity: 0; } 100% { opacity: 0; } }
+    @keyframes lumi-status { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+    .assistant {
+      display: flex; align-items: center; gap: var(--space-3);
+      padding: var(--space-3); margin-bottom: var(--space-6);
+      background: linear-gradient(100deg,
+        color-mix(in srgb, var(--color-accent) 9%, var(--color-neutral-100)) 0%,
+        var(--color-neutral-100) 62%);
+      border-left: 3px solid var(--color-accent);
+    }
+    .assistant-avatar { flex: none; animation: lumi-float 4s ease-in-out infinite; }
+    .assistant-avatar .lumi-eyes { animation: lumi-scan 6s ease-in-out infinite; }
+    .assistant-avatar .lumi-eye { transform-origin: center; animation: lumi-blink 5.5s ease-in-out infinite; }
+    .assistant-avatar .lumi-ping { transform-origin: 28px 5px; animation: lumi-ping 2.8s ease-out infinite; }
+    .assistant-text { min-width: 0; }
+    .assistant-name {
+      display: flex; align-items: center; gap: 6px;
+      font-family: var(--font-heading); font-weight: 800;
+      font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+      color: var(--color-accent); margin-bottom: 1px;
+    }
+    .assistant-status {
+      width: 5px; height: 5px; border-radius: 50%; background: var(--color-ok);
+      animation: lumi-status 2.4s ease-in-out infinite;
+    }
+    .assistant-says { margin: 0; font-size: 14px; line-height: 1.45; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .assistant-avatar, .assistant-avatar *, .node, .assistant-status { animation: none !important; }
+    }
 
     /* ── Composants Modernist ── */
     .card {
@@ -163,7 +214,7 @@
       cursor: pointer; text-decoration: none;
       font-family: var(--font-heading); font-weight: 800; font-size: 14px; line-height: 1.2;
       color: var(--color-text); background: transparent; border: 1px solid transparent;
-      padding: var(--space-2) calc(var(--space-3) * 1.2); border-radius: var(--radius-md);
+      padding: var(--space-3) calc(var(--space-3) * 1.2); border-radius: var(--radius-md);
     }
     .btn-primary { background: var(--color-accent); color: var(--color-bg); }
     .btn-primary:hover { background: var(--color-accent-600); }
@@ -172,56 +223,78 @@
     .btn-secondary:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
     .btn-block { width: 100%; margin-top: var(--space-2); justify-content: center; }
 
-    .table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .table { width: 100%; border-collapse: collapse; font-size: 13px; }
     .table td { padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
     .table tr:last-child td { border-bottom: 0; }
     .table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 
-    /* ── Encart « limites connues » — obligatoire sur chaque écran, au même
-          titre que le bandeau RUO. Ces limites sont documentées (plan.md §4.2) ;
-          elles doivent donc aussi être lisibles par qui utilise l'app, pas
-          seulement par qui lit le dépôt. ── */
-    .limits {
-      margin-top: var(--space-4); padding: var(--space-3);
-      background: var(--color-neutral-100); border-left: 3px solid var(--color-neutral-500);
-    }
+    /* ── Encart « limites connues » ──
+          Ces limites sont documentées (plan.md §4.2) et doivent rester lisibles
+          par qui utilise l'app. Mais les quatre paragraphes affichés en entier sur
+          chaque écran noyaient le reste, et un mur de texte permanent finit par ne
+          plus être lu du tout. Compromis : la limite qui change la lecture du
+          résultat reste visible en clair, les trois chiffres qui la nuancent
+          passent derrière un dépliant — et le bandeau RUO, lui, ne bouge pas. ── */
+    .limits { padding: var(--space-3); background: var(--color-neutral-100); border-left: 3px solid var(--color-neutral-500); }
     .limits-title {
-      font-family: var(--font-heading); font-weight: 800; font-size: 11px;
-      letter-spacing: .1em; text-transform: uppercase; color: var(--color-neutral-700);
+      font-family: var(--font-heading); font-weight: 800; font-size: 10px;
+      letter-spacing: .12em; text-transform: uppercase; color: var(--color-neutral-700);
       margin-bottom: var(--space-2);
     }
-    /* ── Navigateur de coupes (page résultat) ── */
-    .strip-controls { margin: var(--space-2) 0 var(--space-2); }
+    .limits-lead { margin: 0; font-size: 12px; line-height: 1.5; }
+    .limits details { margin-top: var(--space-2); }
+    .limits summary {
+      cursor: pointer; font-size: 11px; font-family: var(--font-heading); font-weight: 800;
+      color: var(--color-neutral-700); list-style: none;
+    }
+    .limits summary::-webkit-details-marker { display: none; }
+    .limits summary::before { content: "▸ "; }
+    .limits details[open] summary::before { content: "▾ "; }
+    .limits summary:hover { color: var(--color-text); }
+    .limits ul { margin: var(--space-2) 0 0; padding-left: 15px; font-size: 11px; line-height: 1.5; }
+    .limits li { margin-bottom: var(--space-2); }
+    .limits li:last-child { margin-bottom: 0; }
+
+    /* Chiffres clés en pastilles : plus rapides à lire qu'une phrase, et ils
+       restent visibles quand le détail est replié. */
+    .metrics { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-top: var(--space-2); }
+    .metric {
+      display: inline-flex; align-items: baseline; gap: 4px;
+      padding: 2px 7px; background: var(--color-neutral-200); font-size: 10px;
+      color: var(--color-neutral-800);
+    }
+    .metric b { font-family: var(--font-heading); font-weight: 800; font-size: 11px; color: var(--color-text); }
+
+    /* ── Navigateur de coupes (page résultat) ──
+          Les coupes sont carrées : dans la colonne large du format bureau, l'image
+          faisait 678 px de haut et poussait le curseur sous la ligne de flottaison.
+          Or parcourir les coupes est l'interaction qui montre la lésion apparaître —
+          elle doit être visible sans défiler. Borner la *largeur* du conteneur plutôt
+          que la hauteur de l'image garde le marqueur (positionné en %) exact. ── */
+    .viewer { max-width: min(100%, 58vh); margin: 0 auto; }
+    .strip-controls { margin: var(--space-2) 0; }
     .strip-row {
       display: flex; align-items: center; justify-content: space-between;
-      gap: var(--space-2); font-size: 11px; margin-top: var(--space-1);
+      gap: var(--space-2); font-size: 12px; margin-top: var(--space-1);
     }
-    #slice-range {
-      width: 100%; height: 20px; accent-color: var(--color-accent);
-      background: transparent; cursor: pointer;
-    }
+    #slice-range { width: 100%; height: 20px; accent-color: var(--color-accent); background: transparent; cursor: pointer; }
     .strip-btn {
       font-family: var(--font-heading); font-weight: 800; font-size: 11px;
-      padding: 3px 10px; border: 1px solid var(--color-divider);
-      background: transparent; color: inherit; cursor: pointer; border-radius: 0;
-      flex: none;
+      padding: 4px 10px; border: 1px solid var(--color-divider);
+      background: transparent; color: inherit; cursor: pointer; border-radius: 0; flex: none;
     }
     .strip-btn:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
 
     .how-link {
-      display: inline-block; margin-top: var(--space-4); font-size: 12px;
+      display: inline-block; font-size: 12px;
       font-family: var(--font-heading); font-weight: 800;
       color: var(--color-accent); text-decoration: none;
     }
     .how-link:hover { text-decoration: underline; }
 
-    .limits ul { margin: 0; padding-left: 16px; font-size: 11px; line-height: 1.5; }
-    .limits li { margin-bottom: var(--space-1); }
-    .limits li:last-child { margin-bottom: 0; }
-
-    /* ── Bandeau conformité — obligatoire sur chaque écran ── */
+    /* ── Bandeau conformité — obligatoire sur chaque écran, jamais repliable ── */
     .ruo-banner {
-      margin: 16px 0 0; padding: var(--space-2) var(--space-3);
+      margin: 0; padding: var(--space-2) var(--space-3);
       background: var(--color-warn-100); border: 1px solid var(--color-warn);
       color: var(--color-neutral-900); font-size: 11px; line-height: 1.45;
     }
@@ -257,56 +330,87 @@
       </div>
       <hr class="hr">
 
-      <div class="mascot-row">
-        <svg class="mascot" width="42" height="42" viewBox="0 0 42 42" aria-hidden="true">
-          <circle cx="21" cy="22" r="17" fill="var(--color-accent-100)" stroke="var(--color-accent)" stroke-width="2"></circle>
-          <line x1="21" y1="5" x2="21" y2="10" stroke="var(--color-accent)" stroke-width="2"></line>
-          <circle cx="21" cy="4" r="2.5" fill="var(--color-accent)"></circle>
-          <g class="eyes">
-            <circle cx="14.5" cy="20" r="2.2" fill="var(--color-accent-700)"></circle>
-            <circle cx="27.5" cy="20" r="2.2" fill="var(--color-accent-700)"></circle>
+      <div class="assistant">
+        <svg class="assistant-avatar" width="52" height="52" viewBox="0 0 56 56" aria-hidden="true">
+          <defs>
+            <linearGradient id="lumi-shell" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#3a3737"></stop>
+              <stop offset="1" stop-color="#1a1818"></stop>
+            </linearGradient>
+            <radialGradient id="lumi-halo">
+              <stop offset="0" stop-color="var(--color-accent)" stop-opacity=".38"></stop>
+              <stop offset="1" stop-color="var(--color-accent)" stop-opacity="0"></stop>
+            </radialGradient>
+          </defs>
+          <circle cx="28" cy="32" r="24" fill="url(#lumi-halo)"></circle>
+          <circle class="lumi-ping" cx="28" cy="5" r="3.5" fill="var(--color-accent)" opacity=".55"></circle>
+          <line x1="28" y1="7" x2="28" y2="14" stroke="var(--color-accent)" stroke-width="2" stroke-linecap="round"></line>
+          <circle cx="28" cy="5" r="2.6" fill="var(--color-accent)"></circle>
+          <rect x="7" y="26" width="4.5" height="11" rx="2.2" fill="var(--color-accent-600)"></rect>
+          <rect x="44.5" y="26" width="4.5" height="11" rx="2.2" fill="var(--color-accent-600)"></rect>
+          <rect x="11" y="14" width="34" height="34" rx="12" fill="url(#lumi-shell)"></rect>
+          <rect x="15.5" y="21" width="25" height="17" rx="8.5" fill="#0b0d10"
+                stroke="var(--color-accent-700)" stroke-width="1"></rect>
+          <g class="lumi-eyes">
+            <ellipse class="lumi-eye" cx="23" cy="29.5" rx="2.7" ry="3.1" fill="var(--color-accent-400)"></ellipse>
+            <ellipse class="lumi-eye" cx="33" cy="29.5" rx="2.7" ry="3.1" fill="var(--color-accent-400)"></ellipse>
           </g>
-          <path d="M 14 27 Q 21 32 28 27" fill="none" stroke="var(--color-accent-700)" stroke-width="2" stroke-linecap="round"></path>
+          <rect x="23" y="42.5" width="10" height="2" rx="1" fill="var(--color-accent-700)" opacity=".7"></rect>
         </svg>
-        <div class="card elev-sm bubble">
-          <p class="card-body">{% block mascot %}Bonjour, je suis Lumi.{% endblock %}</p>
+        <div class="assistant-text">
+          <div class="assistant-name"><span class="assistant-status"></span>Lumi</div>
+          <p class="assistant-says">{% block mascot %}Bonjour, je suis Lumi.{% endblock %}</p>
         </div>
       </div>
 
-      {% block content %}{% endblock %}
+      <div class="layout">
+        <div class="layout-main">
+          {% block content %}{% endblock %}
+        </div>
 
-      {% block how_link %}
-        <a href="{{ url_for('how_it_works') }}" class="how-link">Comment ça marche →</a>
-      {% endblock %}
+        <aside class="layout-side">
+          {% block side %}{% endblock %}
 
-      <div class="limits">
-        <div class="limits-title">Limites connues</div>
-        <ul>
-          {% block limits_slice %}
-            <li>Le modèle ne sait pas encore <strong>trouver seul</strong> la bonne coupe
-              dans un volume complet (vérifié 0/186 sur les patients de test). Les cas
-              de <code>demo_cases/</code> portent une coupe fixée à l'avance ; un autre
-              volume ne donnera pas un résultat fiable.</li>
+          <div class="limits">
+            <div class="limits-title">Limites connues</div>
+            {% block limits_slice %}
+              <p class="limits-lead">Le modèle ne sait pas encore <strong>trouver seul</strong> la
+                bonne coupe dans un volume complet. Les cas de démonstration en portent une
+                fixée à l'avance ; un autre volume ne donnera pas un résultat fiable.</p>
+            {% endblock %}
+
+            <div class="metrics">
+              <span class="metric" title="Dice sur 28 patients de test, IC95 0,47–0,59">Dice <b>0,53</b></span>
+              <span class="metric" title="Lésion trouvée une fois la bonne coupe montrée, IC95 82–93">Sensibilité <b>88 %</b></span>
+              <span class="metric" title="Coupes saines déclenchant une alarme sur un volume entier">Faux positifs <b>99,97 %</b></span>
+            </div>
+
+            <details>
+              <summary>Ce que ces chiffres veulent dire</summary>
+              <ul>
+                <li>Entraîné sur des <strong>boîtes englobantes</strong>, pas des contours
+                  d'expert : le Dice de 0,53 n'est pas comparable à la littérature (~0,80).</li>
+                <li>Les 88 % valent <em>une fois la bonne coupe montrée</em>. Sur un volume
+                  entier, une alarme est levée sur presque toutes les coupes saines
+                  (~222 fausses zones par examen).</li>
+                <li>Aucune validation clinique : chiffres de recherche sur 28 patients de
+                  test, jamais une performance clinique.</li>
+              </ul>
+            </details>
+          </div>
+
+          {% block how_link %}
+            <a href="{{ url_for('how_it_works') }}" class="how-link">Comment ça marche →</a>
           {% endblock %}
-          <li>Entraîné sur des <strong>boîtes englobantes</strong> TCIA, pas des contours
-            d'expert : Dice <strong>0,53</strong> [IC95 0,47–0,59] sur 28 patients de
-            test, non comparable à la littérature (~0,80) qui utilise des contours.</li>
-          <li>Une fois la bonne coupe montrée, la lésion est trouvée dans
-            <strong>88 %</strong> [IC95 82–93] des cas. Sur un volume entier, en
-            revanche, une alarme est levée sur <strong>99,97 %</strong> des coupes
-            saines (~222 fausses zones par examen).</li>
-          <li>Aucune validation clinique : chiffres de recherche sur un échantillon
-            limité, jamais une performance clinique.</li>
-        </ul>
-      </div>
 
-      <p class="ruo-banner">
-        <strong>Research Use Only — Not for diagnostic use.</strong>
-        Aucune décision clinique ne doit reposer sur cet outil.
-        {% if backend == "mock" %}Le moteur <strong>mock</strong> génère des résultats
-        fictifs et ne lit pas l'image ; connectez le vrai modèle pour obtenir de
-        véritables prédictions.{% endif %}
-      </p>
+          <p class="ruo-banner">
+            <strong>Research Use Only — Not for diagnostic use.</strong>
+            Aucune décision clinique ne doit reposer sur cet outil.
+            {% if backend == "mock" %}Le moteur <strong>mock</strong> génère des résultats
+            fictifs et ne lit pas l'image.{% endif %}
+          </p>
+        </aside>
+      </div>
     </section>
   </main>
 </body>

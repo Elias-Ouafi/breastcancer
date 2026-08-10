@@ -1,8 +1,8 @@
 """Honest evaluation of a trained lesion-localisation U-Net on the held-out split.
 
-    python -m imaging.evaluate --data-dir preprocessed_data_mri_p2 \
-        --checkpoint results_mri_p2_negfix/unet_best.pt \
-        --output-dir results_mri_p2_negfix
+    python -m imaging.evaluate --data-dir data/preprocessed_data/dce_mri_p2 \
+        --checkpoint models/dce_mri_p2_negfix/unet_best.pt \
+        --output-dir models/dce_mri_p2_negfix
 
 ``imaging.train`` reports a single mean Dice over lesion-bearing slices. That number
 is real but it answers only one question ("once shown a lesion slice, how well is the
@@ -33,7 +33,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import os
+import sys
 import time
 from collections import deque
 
@@ -44,7 +46,13 @@ import torch.nn.functional as F
 try:  # allow both "python -m imaging.evaluate" and direct execution
     from .dataset import split_npz_by_patient
 except ImportError:  # pragma: no cover
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from dataset import split_npz_by_patient
+
+import config  # noqa: E402 - repo root, importable under both invocations
+from logging_setup import setup_logging
+
+log = logging.getLogger(__name__)
 
 
 def connected_components(mask, min_size=1):
@@ -207,13 +215,13 @@ def run(args):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, _ = load_unet(args.checkpoint, base=args.base_channels, device=device)
-    print(f"Device: {device}"
+    log.info(f"Device: {device}"
           + (f" ({torch.cuda.get_device_name(0)})" if device.type == "cuda" else ""))
 
     train_paths, val_paths, test_paths = split_npz_by_patient(
         args.data_dir, val_frac=args.val_frac, test_frac=args.test_frac, seed=args.seed)
     paths = {"test": test_paths, "val": val_paths, "train": train_paths}[args.split]
-    print(f"Split '{args.split}': {len(paths)} patients "
+    log.info(f"Split '{args.split}': {len(paths)} patients "
           f"(train {len(train_paths)} / val {len(val_paths)} / test {len(test_paths)})\n")
 
     rows = []
@@ -221,7 +229,7 @@ def run(args):
         row = evaluate_patient(model, device, path, args.image_size, args.threshold,
                                args.hit_iou, args.min_component)
         rows.append(row)
-        print(f"[{i:3d}/{len(paths)}] {row['case_id']:<18} "
+        log.info(f"[{i:3d}/{len(paths)}] {row['case_id']:<18} "
               f"Dice {row['dice']:.3f}  sens(IoU) {row['sensitivity_iou']:.2f}  "
               f"sens(centre) {row['sensitivity_centroid']:.2f}  "
               f"FP {row['fp_components']:>5} sur {row['n_negative_slices']:>4} coupes  "
@@ -233,8 +241,10 @@ def run(args):
     seconds = [r["seconds"] for r in rows]
     slices = sum(r["n_slices"] for r in rows)
     summary = {
-        "checkpoint": args.checkpoint,
-        "data_dir": args.data_dir,
+        # Repo-relative: this report is committed, and an absolute path would bake the
+        # machine that produced it (and its home directory) into a public artefact.
+        "checkpoint": os.path.relpath(args.checkpoint, config.ROOT).replace(os.sep, "/"),
+        "data_dir": os.path.relpath(args.data_dir, config.ROOT).replace(os.sep, "/"),
         "split": args.split,
         "n_patients": len(rows),
         "n_slices": slices,
@@ -275,31 +285,31 @@ def run(args):
         c = summary[key]
         return f"{c['mean'] * scale:.3f}{unit}  [IC95 {c['lo'] * scale:.3f} – {c['hi'] * scale:.3f}]"
 
-    print(f"\n{'=' * 74}")
-    print(f"Split {args.split} — {summary['n_patients']} patients, {slices} coupes")
-    print(f"{'=' * 74}")
-    print("Sur les coupes contenant une lésion (ce que mesurait déjà l'entraînement)")
-    print(f"  Dice                        {fmt('dice')}")
-    print(f"  IoU                         {fmt('iou')}")
-    print(f"  Sensibilité (IoU>={args.hit_iou})      {fmt('sensitivity_iou', 100, '%')}")
-    print(f"  Sensibilité (centre visé)   {fmt('sensitivity_centroid', 100, '%')}")
-    print("\nSur le volume entier (le régime d'un vrai upload)")
-    print(f"  Faux positifs / volume      {fmt('fp_components_per_volume')}")
-    print(f"  Coupes saines avec alarme   {fmt('fp_slice_rate', 100, '%')}")
-    print("\nTemps d'inférence")
-    print(f"  Par volume                  {summary['seconds_per_volume']['mean']:.2f} s "
+    log.info(f"{'=' * 74}")
+    log.info(f"Split {args.split} — {summary['n_patients']} patients, {slices} coupes")
+    log.info(f"{'=' * 74}")
+    log.info("Sur les coupes contenant une lésion (ce que mesurait déjà l'entraînement)")
+    log.info(f"  Dice                        {fmt('dice')}")
+    log.info(f"  IoU                         {fmt('iou')}")
+    log.info(f"  Sensibilité (IoU>={args.hit_iou})      {fmt('sensitivity_iou', 100, '%')}")
+    log.info(f"  Sensibilité (centre visé)   {fmt('sensitivity_centroid', 100, '%')}")
+    log.info("Sur le volume entier (le régime d'un vrai upload)")
+    log.info(f"  Faux positifs / volume      {fmt('fp_components_per_volume')}")
+    log.info(f"  Coupes saines avec alarme   {fmt('fp_slice_rate', 100, '%')}")
+    log.info("Temps d'inférence")
+    log.info(f"  Par volume                  {summary['seconds_per_volume']['mean']:.2f} s "
           f"(médiane {summary['seconds_per_volume']['median']:.2f}, "
           f"max {summary['seconds_per_volume']['max']:.2f})")
-    print(f"  Par coupe                   {summary['ms_per_slice']:.1f} ms")
-    print(f"\n{json_path}\n{csv_path}")
+    log.info(f"  Par coupe                   {summary['ms_per_slice']:.1f} ms")
+    log.info(f"{json_path}\n{csv_path}")
     return summary
 
 
 def build_arg_parser():
     p = argparse.ArgumentParser(description="Evaluate a lesion-localisation U-Net honestly.")
-    p.add_argument("--data-dir", default="preprocessed_data_mri_p2")
-    p.add_argument("--checkpoint", default=os.path.join("results_mri_p2_negfix", "unet_best.pt"))
-    p.add_argument("--output-dir", default="results_mri_p2_negfix")
+    p.add_argument("--data-dir", default=config.DCE_MRI_PREPROCESSED_DIR)
+    p.add_argument("--checkpoint", default=config.DCE_MRI_UNET_CKPT)
+    p.add_argument("--output-dir", default=config.DCE_MRI_MODEL_DIR)
     p.add_argument("--split", choices=["test", "val", "train"], default="test")
     p.add_argument("--image-size", type=int, default=256)
     p.add_argument("--base-channels", type=int, default=32)
@@ -322,4 +332,5 @@ def build_arg_parser():
 
 
 if __name__ == "__main__":
+    setup_logging(logfile="evaluate.log")
     run(build_arg_parser().parse_args())

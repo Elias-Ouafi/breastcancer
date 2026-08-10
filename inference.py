@@ -6,8 +6,8 @@ without re-running the batch training scripts:
 * :func:`predict_tabular` — scores a single Wisconsin 30-feature record with the
   persisted Spark ``PipelineModel`` (see ``train_tabular_model.py``). Returns the
   predicted diagnosis and, for the logistic model, a malignancy probability.
-* :func:`predict_dbt` — runs the trained 2D U-Net (``results/unet_best.pt``) over a
-  preprocessed DBT ``.npz`` volume (or a raw volume array) and returns the localised
+* :func:`predict_dbt` — runs the trained 2D U-Net (``models/dbt/unet_best.pt``) over
+  a preprocessed DBT ``.npz`` volume (or a raw volume array) and returns the localised
   lesion: best slice, bounding box, and a detection confidence.
 
 Neither entry point retrains anything; both load saved artefacts. The tabular path
@@ -17,16 +17,22 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 from typing import Mapping, Sequence, Union
 
 import numpy as np
 
+import config
+from logging_setup import setup_logging
+
+log = logging.getLogger(__name__)
+
 # --------------------------------------------------------------------------- #
 # Tabular inference (Wisconsin, Spark MLlib)
 # --------------------------------------------------------------------------- #
 
-DEFAULT_TABULAR_DIR = os.path.join("results", "tabular_model")
+DEFAULT_TABULAR_DIR = config.TABULAR_MODEL_DIR
 
 
 def _load_tabular_metadata(model_dir):
@@ -118,7 +124,7 @@ def predict_tabular(features: Union[Mapping[str, float], Sequence[float]],
 # Imaging inference (DBT lesion localisation, 2D U-Net / PyTorch)
 # --------------------------------------------------------------------------- #
 
-DEFAULT_UNET_CKPT = os.path.join("results", "unet_best.pt")
+DEFAULT_UNET_CKPT = config.DBT_UNET_CKPT
 
 
 def load_unet(checkpoint: str = DEFAULT_UNET_CKPT, base: int = 32, device=None):
@@ -135,7 +141,7 @@ def load_unet(checkpoint: str = DEFAULT_UNET_CKPT, base: int = 32, device=None):
     if not os.path.exists(checkpoint):
         raise FileNotFoundError(
             f"No U-Net checkpoint at {checkpoint!r}. Train it first: "
-            "python -m imaging.train --data-dir preprocessed_data"
+            "python -m imaging.train --data-dir data/preprocessed_data/dbt"
         )
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(base_channels=base)
@@ -176,7 +182,7 @@ def _bounding_box(binary_mask):
     return (x0, y0, x1 - x0 + 1, y1 - y0 + 1)
 
 
-DEFAULT_SLICE_CLF_CKPT = os.path.join("results_sliceclf", "sliceclf_best.pt")
+DEFAULT_SLICE_CLF_CKPT = config.SLICE_CLF_CKPT
 
 
 def load_slice_classifier(checkpoint: str = DEFAULT_SLICE_CLF_CKPT, base: int = 16, device=None):
@@ -380,7 +386,7 @@ def predict_dbt(volume: Union[str, np.ndarray],
                             forced_slice, source_n_slices)
 
 
-DEFAULT_MRI_UNET_CKPT = os.path.join("results_mri_p2_negfix", "unet_best.pt")
+DEFAULT_MRI_UNET_CKPT = config.DCE_MRI_UNET_CKPT
 
 
 def predict_dce_mri(volume: Union[str, np.ndarray],
@@ -616,12 +622,13 @@ def render_overlay_png(volume: Union[str, np.ndarray], best_slice: int, box_xywh
 
 
 if __name__ == "__main__":
+    setup_logging()
     # Tiny smoke path for the imaging side: score the first preprocessed volume.
     from glob import glob
 
-    npzs = sorted(glob(os.path.join("preprocessed_data", "*.npz")))
+    npzs = sorted(glob(os.path.join(config.DBT_PREPROCESSED_DIR, "*.npz")))
     if npzs:
-        print(f"Scoring {npzs[0]} ...")
-        print(predict_dbt(npzs[0]))
+        log.info(f"Scoring {npzs[0]} ...")
+        log.info(predict_dbt(npzs[0]))
     else:
-        print("No preprocessed .npz volumes found to demo predict_dbt.")
+        log.info("No preprocessed .npz volumes found to demo predict_dbt.")

@@ -14,17 +14,18 @@ Notes on the scikit-learn -> Spark MLlib mapping:
     :class:`GBTClassifier` (gradient-boosted trees), which also stands in for the
     XGBoost model the old pipeline used.
 """
+import logging
 import os
 
 import pandas as pd
+
+import config
 
 try:
     import matplotlib.pyplot as plt
 except ImportError:
     plt = None
 
-from pyspark.sql import DataFrame, SparkSession
-from pyspark.ml.feature import StandardScaler, StringIndexer, VectorAssembler
 from pyspark.ml.classification import (
     GBTClassifier,
     LinearSVC,
@@ -36,6 +37,10 @@ from pyspark.ml.evaluation import (
     BinaryClassificationEvaluator,
     MulticlassClassificationEvaluator,
 )
+from pyspark.ml.feature import StandardScaler, StringIndexer, VectorAssembler
+from pyspark.sql import DataFrame, SparkSession
+
+log = logging.getLogger(__name__)
 
 
 def get_spark(app_name="breastcancer-tabular"):
@@ -137,24 +142,28 @@ def train_models(train_df, test_df, n_features):
     return results
 
 
-def save_results(results, save_path="data/model_results.csv"):
+def save_results(results, save_path=None):
     """Persist the per-model metrics to CSV so the report can be regenerated.
 
     Rows are model names, columns are the metrics from :func:`_evaluate`
     (Accuracy, Precision, Recall, F1-Score, ROC AUC). This is the authoritative
-    Spark MLlib output the quantitative report is built from.
+    Spark MLlib output the quantitative report is built from, so it lands in
+    ``reports/`` rather than in the data tree.
     """
+    save_path = save_path or config.TABULAR_RESULTS_CSV
     metrics_df = pd.DataFrame(results).T
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     metrics_df.to_csv(save_path)
     return metrics_df
 
 
-def create_model_comparison_plot(results, save_path="plots/model_comparison.png"):
+def create_model_comparison_plot(results, save_path=None):
     """Create and save a comparison plot of model performance."""
     if plt is None:
-        print("matplotlib not installed; skipping model comparison plot.")
+        log.info("matplotlib not installed; skipping model comparison plot.")
         return
+
+    save_path = save_path or config.MODEL_COMPARISON_PNG
 
     metrics_df = pd.DataFrame(results).T
 
