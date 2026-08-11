@@ -1,0 +1,2 @@
+epoch,train_loss,val_dice,val_iou
+1,0.893812,0.463479,0.329401
