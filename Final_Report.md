@@ -146,7 +146,7 @@ SVM and Logistic Regression are effectively tied, with Linear SVM edging ahead o
 ROC-AUC (99.89% vs 99.83%).
 
 These numbers are produced by `AnalyzeData.py` and written to
-`data/model_results.csv`; re-run `python Main.py` (requires a JVM for PySpark) to
+`reports/model_results.csv`; re-run `python Main.py` (requires a JVM for PySpark) to
 regenerate them.
 
 📈 *Model performance comparison visual:*
@@ -166,7 +166,7 @@ clinical decision support.
 ### Notes:
 - All visualizations are stored in the `plots/` directory
 - The model comparison plot shows the performance of all five evaluated Spark MLlib models
-- Per-model metrics are persisted to `data/model_results.csv`
+- Per-model metrics are persisted to `reports/model_results.csv`
 
 ### References
 Wolberg, W., Mangasarian, O., Street, N., & Street, W. (1993). Breast Cancer Wisconsin (Diagnostic) [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C5DW2B. 

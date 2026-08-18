@@ -222,12 +222,30 @@ def api_predict():
     return result
 
 
+def _in_container():
+    """True when running inside a container. Docker creates /.dockerenv at the root."""
+    return os.path.exists("/.dockerenv")
+
+
+def bind_host():
+    """The interface to listen on: loopback, unless we are inside a container.
+
+    The property being protected is "not reachable from another machine", and on a
+    normal host that means binding 127.0.0.1 — which is why it is not configurable and
+    there is no env var here to set it to 0.0.0.0.
+
+    A container has no loopback worth binding: 127.0.0.1 inside its own network
+    namespace is reachable by nothing at all, not even the host, so the app would
+    simply be dead. Binding 0.0.0.0 there means the container's own isolated
+    interface, and docker-compose.yml publishes it as `127.0.0.1:5000:5000` — bound to
+    the host's loopback. The guarantee is unchanged; only the layer enforcing it moves
+    from the process to the port mapping.
+    """
+    return "0.0.0.0" if _in_container() else "127.0.0.1"  # noqa: S104 - see docstring
+
+
 def main():
-    # Loopback only, by design: the server binds to 127.0.0.1 and is therefore
-    # unreachable from any other machine on the network. The host is intentionally
-    # NOT configurable (no 0.0.0.0 / public binding), so the app can only ever run
-    # locally — nothing is deployed to a remote/named server.
-    host = "127.0.0.1"
+    host = bind_host()
     port = int(os.environ.get("MRI_APP_PORT", "5000"))
     # use_reloader=False keeps a single local process; the interactive debugger
     # (remote code execution surface) stays off.

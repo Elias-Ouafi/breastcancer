@@ -1,0 +1,23 @@
+services:
+  demo:
+    build: .
+    image: breastcancer-demo
+    # 127.0.0.1 on the left is load-bearing, not decoration. Written as "5000:5000"
+    # Docker would bind 0.0.0.0 on the host and publish a research tool -- one that
+    # renders medical images and states it is not clinically validated -- to every
+    # machine on the network. This form reaches the container from this machine only.
+    ports:
+      - "127.0.0.1:5000:5000"
+    environment:
+      # Set by run_demo.py anyway; stated here so `docker compose config` shows which
+      # model is being served without reading the launcher.
+      MRI_APP_BACKEND: dce_mri
+      BREASTCANCER_LOG_LEVEL: INFO
+    # The demo reads a versioned checkpoint and three curated cases, writes uploads to
+    # a temp dir and deletes them. It never needs to write to the image.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"

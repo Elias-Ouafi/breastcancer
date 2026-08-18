@@ -1,0 +1,39 @@
+# The build context is sent to the daemon before anything is built, so shipping data/
+# wholesale would push ~90 GB across a socket to produce a ~700 MB image.
+#
+# The heavy directories are named one by one rather than excluding `data/` and
+# re-including `data/curated_data/demo_cases/`. Docker does support that, but the
+# semantics of re-including a path under an excluded parent are subtle enough that a
+# mistake shows up as a COPY failure at build time. Naming what to exclude cannot
+# fail that way, and the demo cases are what make the image work at all.
+data/raw_data/
+data/preprocessed_data/
+data/curated_data/slice_bank_p2/
+data/_legacy/
+models/dbt/
+models/tabular/
+models/_legacy/
+
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.git/
+.github/
+.claude/
+.kaggle/
+
+logs/
+plots/
+reports/
+tests/
+scripts/
+pipelines/
+*.ipynb
+
+*.md
+!README.md
+Dockerfile
+docker-compose.yml
+.dockerignore
+.gitignore
