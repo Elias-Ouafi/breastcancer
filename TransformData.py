@@ -9,6 +9,8 @@ import pandas as pd
 import pydicom
 
 import config
+import lineage
+import validation
 from logging_setup import setup_logging
 
 log = logging.getLogger(__name__)
@@ -347,7 +349,7 @@ def crop_to_roi(volume, mask, margin=16):
 
 
 def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, crop=True,
-                      case_id=None):
+                      case_id=None, summary=None):
     """Save a preprocessed volume + mask as a single compressed .npz file.
 
     Three levers keep the files small:
@@ -360,6 +362,12 @@ def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, cr
     `case_id` is the real patient identifier used to group files for a leakage-free
     train/val/test split (several series/views can belong to one patient). It is
     stored inside the .npz; when omitted the filename (`patient_id`) is used.
+
+    Every write goes through `validation.validate_volume_and_mask` first: this is the
+    one place all four preprocessing paths funnel through, so it is the only place a
+    check has to be written to cover them all. A broken volume raises here rather than
+    surfacing hours later as a NaN loss. Pass `summary` a dict to collect the
+    per-case stats for the lineage manifest.
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -370,13 +378,22 @@ def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, cr
     volume = volume.astype(dtype)
     mask = mask.astype(np.uint8)
 
+    # Validate after the cast: float16 overflow is one of the failures being caught,
+    # and it does not exist until the cast has happened.
+    key = str(case_id) if case_id is not None else str(patient_id)
+    warnings = validation.validate_volume_and_mask(
+        volume, mask, case_id=key, expect_full_frame=not crop)
+    if summary is not None:
+        summary[key] = validation.summarise(volume, mask)
+        summary[key]["warnings"] = warnings
+
     out_path = os.path.join(output_dir, f"{patient_id}.npz")
     np.savez_compressed(
         out_path,
         volume=volume,
         mask=mask,
         crop_offset=np.asarray(offset, dtype=np.int32),
-        case_id=np.asarray(str(case_id) if case_id is not None else str(patient_id)),
+        case_id=np.asarray(key),
     )
     return out_path
 
@@ -815,7 +832,7 @@ def preprocess_dce_mri_with_boxes(root_dir, boxes_path,
     boxes = _read_mri_boxes(boxes_path)
     groups = group_dce_series_by_patient(root_dir)
 
-    saved, skipped = 0, 0
+    saved, skipped, summary = 0, 0, {}
     for pid, phases in groups.items():
         if 0 not in phases or post_phase_rank not in phases:
             log.warning(f"[MRI] {pid}: missing pre or post-phase {post_phase_rank} series, skipping.")
@@ -848,9 +865,26 @@ def preprocess_dce_mri_with_boxes(root_dir, boxes_path,
             mask = np.logical_or(mask, create_mask(subtraction.shape, bbox)).astype(np.uint8)
 
         subtraction = normalize_intensity(subtraction)
-        save_preprocessed(pid, subtraction, mask, output_dir, crop=crop, case_id=pid)
+        save_preprocessed(pid, subtraction, mask, output_dir, crop=crop, case_id=pid,
+                          summary=summary)
         saved += 1
         log.info(f"[MRI] {pid}: {len(rows)} box(es), {int(mask.sum())} lesion voxels -> saved.")
+
+    # Written last, and only on a completed pass: a folder with no manifest is a
+    # folder whose run was interrupted, which is exactly what you want to know.
+    lineage.write_manifest(
+        output_dir,
+        source=root_dir,
+        parameters={
+            "pipeline": "preprocess_dce_mri_with_boxes",
+            "post_phase_rank": post_phase_rank,
+            "crop": crop,
+            "boxes": lineage.relative_path(boxes_path),
+            "skipped": skipped,
+        },
+        cases=summary,
+        warnings=[w for case in summary.values() for w in case.get("warnings", [])],
+    )
 
     log.info(f"[MRI] Saved {saved} patients, skipped {skipped}.")
     return saved, skipped
