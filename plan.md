@@ -74,7 +74,7 @@ la biopsie. À assumer comme pendant image du Wisconsin, ou à retirer.
 curated), chemins centralisés dans `config.py`, checkpoints dans `models/`, pipeline
 exécutable et reprenable via `python -m pipelines.dce_mri`, **87 tests** (~7 s, sans GPU
 ni dataset) et ruff en CI. Docker, validation de schéma et manifeste de lineage sont
-écrits et testés — mais pas encore commités, donc inexistants pour un relecteur.
+écrits, testés et commités le 2026-08-18.
 
 ## Ce qui reste ouvert
 
@@ -92,7 +92,7 @@ Ordonné par ce qui rapproche de la cible en deux étapes, pas par facilité.
 | P3 | Registre de traitement RGPD | Une page : base légale, nature des données, finalité, conservation, sécurité |
 | P3 | Nom de produit + logo | Choisi et intégré au header de l'app |
 
-**Livrés le 2026-08-11, en attente de commit** (branche `amelioration-docker-preprocess-env`) :
+**Livrés** (branche `amelioration-docker-preprocess-env`, commités le 2026-08-18) :
 
 | Tâche | Où | Ce qui la rend faite |
 |---|---|---|
