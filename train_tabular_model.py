@@ -31,6 +31,7 @@ from pyspark.ml.classification import LinearSVC, LogisticRegression
 from pyspark.ml.feature import PCA, Imputer, StandardScaler, StringIndexer, VectorAssembler
 
 import config
+import tabular_export
 from ExtractData import extract_breast_cancer_wisconsin_diagnostic_data
 from logging_setup import setup_logging
 from TransformData import _get_spark, _pandas_to_spark
@@ -114,8 +115,12 @@ def train_and_save(model_dir=DEFAULT_MODEL_DIR, served_model="logistic",
     with open(os.path.join(model_dir, "metadata.json"), "w") as f:
         json.dump(metadata, f, indent=2)
 
+    # And again as plain arrays, which is the copy anything actually serves: the
+    # PipelineModel above can only be read back through a JVM, and the app has none.
+    tabular_export.export_pipeline(model, metadata, model_dir)
+
     print(f"Saved tabular {served_model} PipelineModel to {model_dir!r} "
-          f"(PCA components: {k}).")
+          f"(PCA components: {k}), plus a JVM-free export beside it.")
     return metadata
 
 

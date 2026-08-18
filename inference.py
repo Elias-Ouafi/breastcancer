@@ -10,8 +10,10 @@ without re-running the batch training scripts:
   a preprocessed DBT ``.npz`` volume (or a raw volume array) and returns the localised
   lesion: best slice, bounding box, and a detection confidence.
 
-Neither entry point retrains anything; both load saved artefacts. The tabular path
-needs a JVM (PySpark); the imaging path needs only ``torch`` + ``numpy``.
+Neither entry point retrains anything; both load saved artefacts, and neither needs
+a JVM: the tabular path reads the flattened export written by ``tabular_export``
+(numpy only), the imaging path needs ``torch`` + ``numpy``. Spark stays where it
+belongs, in training.
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ from typing import Mapping, Sequence, Union
 import numpy as np
 
 import config
+import tabular_export
 from logging_setup import setup_logging
 
 log = logging.getLogger(__name__)
@@ -70,9 +73,25 @@ def _order_features(features, feature_order):
     return [float(v) for v in values]
 
 
+_TABULAR_SCORER = {}
+
+
+def load_tabular_scorer(model_dir: str = DEFAULT_TABULAR_DIR):
+    """Return the cached JVM-free scorer for ``model_dir``, loading it once.
+
+    Cached for the same reason the U-Net is (see ``app.predictor``): re-reading a
+    13 KB JSON per request is not expensive, but a served model that is re-parsed on
+    every call is how the imaging path ended up spending 350 ms of its response on
+    disk I/O before anyone noticed.
+    """
+    if model_dir not in _TABULAR_SCORER:
+        _TABULAR_SCORER[model_dir] = tabular_export.TabularScorer.load(model_dir)
+    return _TABULAR_SCORER[model_dir]
+
+
 def predict_tabular(features: Union[Mapping[str, float], Sequence[float]],
                     model_dir: str = DEFAULT_TABULAR_DIR):
-    """Score one Wisconsin record with the persisted tabular pipeline.
+    """Score one Wisconsin record. Milliseconds, no Spark, no JVM.
 
     Parameters
     ----------
@@ -80,14 +99,32 @@ def predict_tabular(features: Union[Mapping[str, float], Sequence[float]],
         The 30 diagnostic features, either as a ``{feature_name: value}`` mapping or a
         sequence in the persisted feature order (see ``metadata.json``).
     model_dir : str
-        Directory holding ``pipeline_model/`` and ``metadata.json``.
+        Directory holding ``tabular_model.json`` (and, for training, the Spark
+        ``pipeline_model/`` it was exported from).
 
     Returns
     -------
     dict
         ``{"prediction": 0.0|1.0, "diagnosis": "Benign"|"Malignant",
-        "malignant_probability": float|None}``. The probability is ``None`` when the
-        served model is Linear SVM (no probability output).
+        "malignant_probability": float|None, "margin": float}``. The probability is
+        ``None`` when the served model is Linear SVM (no probability output).
+
+    This used to start a Spark session and load a ``PipelineModel`` on every call,
+    which is why nothing called it: the demo image ships no JVM, and seconds of
+    startup to score thirty floats is not a request path. It now reads the flattened
+    export instead, which reproduces the Spark model to floating-point noise --
+    ``tests/test_tabular_export.py`` scores the whole dataset both ways and holds it
+    to 1e-9. ``predict_tabular_spark`` below is what it is checked against.
+    """
+    return load_tabular_scorer(model_dir).predict(features)
+
+
+def predict_tabular_spark(features: Union[Mapping[str, float], Sequence[float]],
+                          model_dir: str = DEFAULT_TABULAR_DIR):
+    """Score through the Spark ``PipelineModel`` itself. Needs a JVM; used to verify.
+
+    Kept because the export is only trustworthy if something still compares against
+    the thing it was exported from. Not for serving -- see ``predict_tabular``.
     """
     from pyspark.ml import PipelineModel
     from pyspark.sql.types import DoubleType, StructField, StructType

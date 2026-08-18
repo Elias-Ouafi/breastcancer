@@ -115,3 +115,14 @@ models/sliceclf/*
 !models/sliceclf/sliceclf_best.pt
 !models/sliceclf/sliceclf_metrics.csv
 !models/sliceclf/sliceclf_test_metrics.json
+
+# The tabular model, flattened by tabular_export: 13 KB of JSON, and the only copy
+# that can be served without a JVM. Versioned for the same reason as the checkpoints
+# above -- /biopsie has to answer on a fresh clone, and refitting it needs Spark,
+# Java and a network fetch of the UCI dataset. The Spark PipelineModel it was
+# exported from stays out: it is a directory of parquet only Spark can read, and
+# nothing in the serving path opens it.
+!models/tabular/
+models/tabular/*
+!models/tabular/tabular_model.json
+!models/tabular/metadata.json

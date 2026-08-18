@@ -16,7 +16,8 @@ tourne le pipeline — est dans [README.md](README.md), au plus près du code.
 > **Relu contre la cible produit**, énoncée ici pour la première fois : (1) une IRM en
 > entrée, dire s'il y a un cancer ; (2) les retours de la biopsie en entrée, dire si
 > c'est malin ou bénin. Les mesures ci-dessous étaient justes ; c'est leur lecture qui
-> change. Aucune ne répond à l'étape 1, et l'étape 2 ne sort pas du disque.
+> change. Aucune ne répond à l'étape 1. L'étape 2, elle, ne sortait pas du disque —
+> c'est corrigé depuis le 2026-08-18.
 
 **Ce qui est mesuré.** U-Net 2D entraîné sur 186 patients Duke-Breast-Cancer-MRI, servi
 sur le volume de soustraction 2ᵉ phase post-injection. Sur 28 patients de test jamais
@@ -58,12 +59,29 @@ dans le docstring de la fonction qui les exclut), puis une tête de classificati
 niveau **volume/patient**, jugée sur sensibilité/spécificité/ROC-AUC. Pas sur du Dice :
 le Dice répond à « où », une fois que « si » est répondu.
 
-**Étape 2 — faite, mesurée, débranchée.** Wisconsin Diagnostic *est* l'étape 2 : 30
+**Étape 2 — branchée le 2026-08-18.** Wisconsin Diagnostic *est* l'étape 2 : 30
 features morphologiques mesurées sur une cytoponction, 569 cas, label M/B, ROC-AUC
-99,89 % (`Final_Report.md`). `train_tabular_model.py` persiste un `PipelineModel` unique
-dans `models/tabular/`, et `inference.predict_tabular` sait scorer 30 features brutes.
-Mais `app/` n'appelle jamais `predict_tabular` : pas de route, pas de formulaire, pas de
-template. La moitié la plus performante du projet est un moteur sans pédale.
+99,89 % (`Final_Report.md`). Elle est désormais servie à `/biopsie` : dix mesures ×
+trois statistiques, deux exemples cliquables, verdict malin/bénin et probabilité.
+
+Ce qui bloquait n'était pas le modèle mais le fait de le servir. `predict_tabular`
+démarrait une session Spark et relisait un `PipelineModel` à chaque appel — des
+secondes de JVM pour trente flottants, dans une image qui n'embarque volontairement
+ni Spark ni JVM. Or ce pipeline est entièrement affine (impute → standardise → PCA →
+standardise → logistique) : `tabular_export.py` en extrait les constantes dans
+13 Ko de JSON qui reproduisent le modèle Spark **à 1,0 × 10⁻¹⁵ près, 0 désaccord de
+label sur les 569 lignes**. Spark reste l'outil d'entraînement, il sort du chemin de
+requête. L'artefact est versionné, comme les checkpoints, pour que `/biopsie` réponde
+depuis un clone.
+
+Deux choses corrigées au passage. `models/tabular/` ne contenait pas de
+`metadata.json` : le modèle persisté était inutilisable, et personne ne s'en était
+aperçu puisque rien ne l'ouvrait. Et `_get_spark` ne pointait pas vers le `winutils`
+pourtant fourni dans le venv, donc le pipeline tabulaire ne démarrait que pour qui
+avait posé `HADOOP_HOME` à la main dans son shell.
+
+La probabilité affichée est bornée à « > 99,9 % » plutôt qu'arrondie : le modèle rend
+0,9999999999991 sur l'exemple malin, et « 100,0 % » se lirait comme une certitude.
 
 **BreakHis est une branche morte.** `ExtractBreakHis.py` télécharge et extrait ;
 `BREAKHIS_DIR` n'apparaît nulle part ailleurs que dans `config.py`. Zéro modèle, zéro
@@ -72,8 +90,8 @@ la biopsie. À assumer comme pendant image du Wisconsin, ou à retirer.
 
 **Le dépôt, lui, tient.** Données en couches sous `data/` (raw → preprocessed →
 curated), chemins centralisés dans `config.py`, checkpoints dans `models/`, pipeline
-exécutable et reprenable via `python -m pipelines.dce_mri`, **87 tests** (~7 s, sans GPU
-ni dataset) et ruff en CI. Docker, validation de schéma et manifeste de lineage sont
+exécutable et reprenable via `python -m pipelines.dce_mri`, **116 tests** (~7 s hors
+parité Spark, sans GPU ni dataset) et ruff en CI. Docker, validation de schéma et manifeste de lineage sont
 écrits, testés et commités le 2026-08-18.
 
 ## Ce qui reste ouvert
@@ -82,12 +100,10 @@ Ordonné par ce qui rapproche de la cible en deux étapes, pas par facilité.
 
 | Priorité | Tâche | Critère de « fait » |
 |---|---|---|
-| P0 | Commiter Docker + validation + lineage | Les trois chantiers ci-dessous sont sur `main` ; un relecteur les voit |
-| P1 | Brancher l'étape 2 dans l'app | Une route et un formulaire 30 champs (ou upload CSV) appellent `inference.predict_tabular` et affichent malin/bénin avec sa probabilité |
 | P1 | Acquérir des examens négatifs | Le corpus contient des patients sans lésion ; un split conserve la proportion |
 | P1 | Tête de détection au niveau volume | Sensibilité, **spécificité** et ROC-AUC patient publiées avec IC, comme §4.3 l'a fait pour la localisation |
 | P2 | Trancher le sort de BreakHis | Un modèle bénin/malin entraîné et mesuré, ou le script et `BREAKHIS_DIR` supprimés |
-| P2 | Trancher le sort du pipeline tabulaire Spark | Assumé et documenté comme démo Spark, ou retiré — aujourd'hui il impose une JVM à tout le dépôt pour 569 lignes |
+| P3 | Trancher le sort du pipeline tabulaire Spark | Assumé et documenté comme démo Spark, ou retiré. Rétrogradé de P2 : depuis l'export, la JVM n'est plus qu'une dépendance d'entraînement, plus une condition pour servir |
 | P2 | Bug NaN fp16 non résolu | La divergence (§4.2, repoussée époque 11 → 15) est localisée dans le forward pass et corrigée, ou documentée comme acceptée |
 | P3 | Registre de traitement RGPD | Une page : base légale, nature des données, finalité, conservation, sécurité |
 | P3 | Nom de produit + logo | Choisi et intégré au header de l'app |
@@ -99,6 +115,7 @@ Ordonné par ce qui rapproche de la cible en deux étapes, pas par facilité.
 | Packaging Docker | `Dockerfile`, `docker-compose.yml` | `docker compose up --build` rejoue la démo ; image étroite (ni Spark, ni JVM, ni ITK), torch CPU, `read_only`, port publié sur `127.0.0.1` seulement, healthcheck sur `run_demo.py --check` |
 | Validation de schéma | `validation.py`, branchée dans `save_preprocessed` | Dimensions, dtype, finitude et binarité du masque vérifiés au point unique d'écriture ; le seuil `MIN_IN_PLANE = 128` est calibré sur l'incident de crop du §4.2, pas deviné. 13 tests |
 | Manifeste de lineage | `lineage.py` | `manifest.json` par dossier prétraité : commit (suffixé `-dirty`), source, paramètres, stats par cas. Écrit en dernier — son absence signale une run interrompue. 8 tests |
+| Étape 2 branchée (branche `ameliore-le-mvp`) | `tabular_export.py`, `/biopsie`, `app/templates/biopsy.html` | Formulaire 30 champs groupé en 10 mesures × 3 statistiques, deux exemples cliquables, API JSON jumelle. Export JVM-free vérifié contre Spark sur les 569 lignes (0 désaccord, écart max 1,0 × 10⁻¹⁵). 29 tests |
 
 Rien de tout cela ne bloque la démonstration actuelle : elle tourne depuis un clone.
 Tout, en revanche, sépare cette démonstration de l'outil décrit en tête de document.

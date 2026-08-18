@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import shutil
+import sys
 import tempfile
 
 import numpy as np
@@ -58,8 +59,33 @@ try:
 except ImportError:
     itk = itkwidgets = view = None
 
+def _ensure_hadoop_home():
+    """Point Hadoop at the bundled winutils on Windows, when nothing else has.
+
+    Spark's Hadoop layer refuses to start on Windows without ``HADOOP_HOME`` and a
+    ``winutils.exe`` under it -- it dies in ``SparkSubmit`` before any of our code
+    runs, with a ``FileNotFoundException`` that names the variable but not what to
+    put in it. The binaries are already bundled at ``<venv>/hadoop/bin``; nothing
+    was pointing at them, so the tabular pipeline only ran for someone who had set
+    the variable by hand in their own shell and forgotten they had.
+
+    Set before the session is built, because pyspark launches the JVM as a
+    subprocess that inherits this environment. An existing ``HADOOP_HOME`` wins: a
+    machine with a real Hadoop install should keep using it.
+    """
+    if os.name != "nt" or os.environ.get("HADOOP_HOME"):
+        return
+    bundled = os.path.join(sys.prefix, "hadoop")
+    if not os.path.isfile(os.path.join(bundled, "bin", "winutils.exe")):
+        return
+    os.environ["HADOOP_HOME"] = bundled
+    os.environ["PATH"] = os.path.join(bundled, "bin") + os.pathsep + os.environ.get("PATH", "")
+    log.debug("HADOOP_HOME set to bundled %s", bundled)
+
+
 def _get_spark(app_name="breastcancer-tabular"):
     """Return the active :class:`SparkSession`, creating one if needed."""
+    _ensure_hadoop_home()
     return (
         SparkSession.builder.appName(app_name)
         .config("spark.sql.shuffle.partitions", "8")
