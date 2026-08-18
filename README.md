@@ -133,7 +133,7 @@ cannot drift apart.
 ```bash
 pip install -e ".[dev]"
 ruff check .        # lint
-pytest              # 68 tests, ~6 s, no GPU or dataset needed
+pytest              # 87 tests, ~7 s, no GPU or dataset needed
 ```
 
 [CI](.github/workflows/ci.yml) runs both on every push and pull request. The suite

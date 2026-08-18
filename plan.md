@@ -1,6 +1,8 @@
 # plan.md — décisions de conception et journal des mesures
 
 > **Modalité** : IRM mammaire multiphase (DCE-MRI, DICOM).
+> **Outil visé** : deux étapes — (1) une IRM en entrée, dire s'il y a un cancer ;
+> (2) les retours de la biopsie en entrée, dire si c'est malin ou bénin.
 > **Cible** : démo / portfolio. **Pas d'usage clinique, pas de certification.**
 > **Mention obligatoire, partout** : *Research Use Only — Not for diagnostic use*.
 
@@ -9,45 +11,108 @@ l'app (Partie 3) et le journal daté de ce qui a été mesuré, y compris les é
 (§4.1 à §4.3). Le reste — comment lancer la démo, où vivent les données, comment
 tourne le pipeline — est dans [README.md](README.md), au plus près du code.
 
-## Où en est le projet (2026-08-10)
+## Où en est le projet (2026-08-18)
 
-**Le modèle.** U-Net 2D entraîné sur 186 patients Duke-Breast-Cancer-MRI, servi sur le
-volume de soustraction 2ᵉ phase post-injection. Sur 28 patients de test jamais vus,
-avec intervalles de confiance bootstrap calculés **par patient** — les coupes d'un même
-patient sont corrélées, rééchantillonner les coupes donnerait un intervalle faussement
-étroit :
+> **Relu contre la cible produit**, énoncée ici pour la première fois : (1) une IRM en
+> entrée, dire s'il y a un cancer ; (2) les retours de la biopsie en entrée, dire si
+> c'est malin ou bénin. Les mesures ci-dessous étaient justes ; c'est leur lecture qui
+> change. Aucune ne répond à l'étape 1, et l'étape 2 ne sort pas du disque.
+
+**Ce qui est mesuré.** U-Net 2D entraîné sur 186 patients Duke-Breast-Cancer-MRI, servi
+sur le volume de soustraction 2ᵉ phase post-injection. Sur 28 patients de test jamais
+vus, avec intervalles de confiance bootstrap calculés **par patient** — les coupes d'un
+même patient sont corrélées, rééchantillonner les coupes donnerait un intervalle
+faussement étroit :
 
 | | Valeur | IC 95 % |
 |---|---|---|
 | Dice | 0,533 | 0,473 – 0,593 |
 | Sensibilité lésion (IoU ≥ 0,1) | 88,0 % | 81,9 – 93,4 |
 | Faux positifs par volume | 222 | 205 – 237 |
+| Coupes saines déclenchant une alarme | 99,97 % | 99,92 – 100 |
 | Temps par volume | 0,82 s | — |
 
 Détail par patient dans `models/dce_mri_p2_negfix/eval_report.json` et
 `eval_per_patient.csv`, régénérables par `python -m pipelines.dce_mri --from evaluate`.
 
-**La limite qui compte.** Le modèle segmente bien une lésion *une fois la bonne coupe
-montrée*. Il ne sait pas trouver cette coupe seul : voir §4.2 pour la démonstration
-chiffrée, et §4.3 pour ce qu'un classifieur dédié y change (0 % → 43 % en top-1). Les
-cas de démonstration portent donc une coupe fixée à l'avance, et l'app le dit.
+**Étape 1 — la détection n'est pas commencée.** Le modèle segmente bien une lésion *une
+fois la bonne coupe montrée*, mais « y a-t-il un cancer ? » n'est posé nulle part dans
+le code, et trois faits l'enchaînent :
 
-**Le dépôt.** Données en couches sous `data/` (raw → preprocessed → curated), chemins
-centralisés dans `config.py`, checkpoints dans `models/`, pipeline exécutable et
-reprenable via `python -m pipelines.dce_mri`, 68 tests et ruff en CI.
+1. *Aucun pouvoir de tri.* 99,97 % des coupes sans lésion déclenchent une alarme, et
+   l'aire prédite est la même sur coupe avec lésion (1228,6 px) et sans (1228,3 px) —
+   §4.2. Ce n'est pas un mauvais classement, c'est l'absence de signal discriminant.
+2. *Aucun négatif dans le corpus.* Le préprocessing est piloté par les annotations :
+   `download_annotated_dbt_series` ne récupère que les patients listés au CSV de boîtes
+   (`ExtractData.py`), et le côté Duke ne retient que les patients avec boîte. **100 %
+   des patients du corpus ont un cancer** : ni spécificité, ni ROC patient, ni même la
+   possibilité d'entraîner la tâche.
+3. *La démo contourne les deux.* Les trois cas portent une coupe figée choisie à
+   l'avance par un humain (`forced_slice`). L'app le dit — c'est honnête, ce n'est pas
+   une solution. Le classifieur de coupe dédié fait 0 % → 42,9 % en top-1 (§4.3) : le
+   problème est tractable, il n'est pas résolu.
+
+Ce qu'il faudrait : des examens **sans** cancer (les normaux de `Breast-Cancer-Screening-DBT`
+sont la source la moins chère — la collection est majoritairement normale, c'est écrit
+dans le docstring de la fonction qui les exclut), puis une tête de classification au
+niveau **volume/patient**, jugée sur sensibilité/spécificité/ROC-AUC. Pas sur du Dice :
+le Dice répond à « où », une fois que « si » est répondu.
+
+**Étape 2 — faite, mesurée, débranchée.** Wisconsin Diagnostic *est* l'étape 2 : 30
+features morphologiques mesurées sur une cytoponction, 569 cas, label M/B, ROC-AUC
+99,89 % (`Final_Report.md`). `train_tabular_model.py` persiste un `PipelineModel` unique
+dans `models/tabular/`, et `inference.predict_tabular` sait scorer 30 features brutes.
+Mais `app/` n'appelle jamais `predict_tabular` : pas de route, pas de formulaire, pas de
+template. La moitié la plus performante du projet est un moteur sans pédale.
+
+**BreakHis est une branche morte.** `ExtractBreakHis.py` télécharge et extrait ;
+`BREAKHIS_DIR` n'apparaît nulle part ailleurs que dans `config.py`. Zéro modèle, zéro
+test, zéro métrique. C'est pourtant le support image de l'étape 2 — les lames issues de
+la biopsie. À assumer comme pendant image du Wisconsin, ou à retirer.
+
+**Le dépôt, lui, tient.** Données en couches sous `data/` (raw → preprocessed →
+curated), chemins centralisés dans `config.py`, checkpoints dans `models/`, pipeline
+exécutable et reprenable via `python -m pipelines.dce_mri`, **87 tests** (~7 s, sans GPU
+ni dataset) et ruff en CI. Docker, validation de schéma et manifeste de lineage sont
+écrits et testés — mais pas encore commités, donc inexistants pour un relecteur.
 
 ## Ce qui reste ouvert
 
+Ordonné par ce qui rapproche de la cible en deux étapes, pas par facilité.
+
 | Priorité | Tâche | Critère de « fait » |
 |---|---|---|
-| P2 | Packaging Docker | `docker compose up` rejoue la démo sans configuration manuelle |
-| P2 | Validation de schéma à l'entrée du préprocessing | Dimensions, dtype et présence du masque vérifiés ; un volume malformé échoue avec un message nommant le patient |
-| P2 | Manifeste de lineage par dossier prétraité | `manifest.json` : source, commit, paramètres, date |
+| P0 | Commiter Docker + validation + lineage | Les trois chantiers ci-dessous sont sur `main` ; un relecteur les voit |
+| P1 | Brancher l'étape 2 dans l'app | Une route et un formulaire 30 champs (ou upload CSV) appellent `inference.predict_tabular` et affichent malin/bénin avec sa probabilité |
+| P1 | Acquérir des examens négatifs | Le corpus contient des patients sans lésion ; un split conserve la proportion |
+| P1 | Tête de détection au niveau volume | Sensibilité, **spécificité** et ROC-AUC patient publiées avec IC, comme §4.3 l'a fait pour la localisation |
+| P2 | Trancher le sort de BreakHis | Un modèle bénin/malin entraîné et mesuré, ou le script et `BREAKHIS_DIR` supprimés |
 | P2 | Trancher le sort du pipeline tabulaire Spark | Assumé et documenté comme démo Spark, ou retiré — aujourd'hui il impose une JVM à tout le dépôt pour 569 lignes |
+| P2 | Bug NaN fp16 non résolu | La divergence (§4.2, repoussée époque 11 → 15) est localisée dans le forward pass et corrigée, ou documentée comme acceptée |
 | P3 | Registre de traitement RGPD | Une page : base légale, nature des données, finalité, conservation, sécurité |
 | P3 | Nom de produit + logo | Choisi et intégré au header de l'app |
 
-Rien de tout cela ne bloque une démonstration : elle tourne depuis un clone.
+**Livrés le 2026-08-11, en attente de commit** (branche `amelioration-docker-preprocess-env`) :
+
+| Tâche | Où | Ce qui la rend faite |
+|---|---|---|
+| Packaging Docker | `Dockerfile`, `docker-compose.yml` | `docker compose up --build` rejoue la démo ; image étroite (ni Spark, ni JVM, ni ITK), torch CPU, `read_only`, port publié sur `127.0.0.1` seulement, healthcheck sur `run_demo.py --check` |
+| Validation de schéma | `validation.py`, branchée dans `save_preprocessed` | Dimensions, dtype, finitude et binarité du masque vérifiés au point unique d'écriture ; le seuil `MIN_IN_PLANE = 128` est calibré sur l'incident de crop du §4.2, pas deviné. 13 tests |
+| Manifeste de lineage | `lineage.py` | `manifest.json` par dossier prétraité : commit (suffixé `-dirty`), source, paramètres, stats par cas. Écrit en dernier — son absence signale une run interrompue. 8 tests |
+
+Rien de tout cela ne bloque la démonstration actuelle : elle tourne depuis un clone.
+Tout, en revanche, sépare cette démonstration de l'outil décrit en tête de document.
+
+## Écarts doc ↔ code relevés le 2026-08-18
+
+Gardés ici une fois corrigés : ce sont les chiffres qu'un relecteur vérifie en premier,
+et savoir qu'ils ont dérivé une fois dit où regarder la prochaine fois.
+
+| Constat | Où | État |
+|---|---|---|
+| `README.md` annonçait « 68 tests, ~6 s » ; il y en a 87, en ~7 s | `README.md` §Development | Corrigé le 2026-08-18 |
+| `Final_Report.md` pointait `data/model_results.csv` ; le code écrit `reports/model_results.csv` | `Final_Report.md` vs `config.py` (`TABULAR_RESULTS_CSV`) | Corrigé le 2026-08-18 |
+| `models/dce_mri_p2_negfix/` nomme une expérience, pas une couche — contredit la règle « layers, not experiments » posée dans `config.py` | `config.py` | Ouvert — un renommage casse les chemins versionnés dont dépend la démo |
 
 ---
 
