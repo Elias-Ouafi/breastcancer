@@ -265,7 +265,7 @@ le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 
 | Priorité | Tâche | Critère de « fait » |
 |---|---|---|
-| P1 | Corpus DBT à deux classes, d'une seule source | Le filtre « patients annotés » de `download_annotated_dbt_series` est levé, des normaux sont téléchargés, l'étiquette patient est cancer / non-cancer, et le split par patient conserve la prévalence |
+| P1 | Corpus DBT à deux classes, d'une seule source | Le filtre « patients annotés » de `download_annotated_dbt_series` est levé, des normaux sont téléchargés, l'étiquette patient est cancer / non-cancer, et le split par patient conserve la prévalence. **Avancement au 2026-09-12** : l'étiquette patient est faite (colonne `Class`, voir Livré) et le split stratifié aussi (`imaging.dataset.split_npz_by_patient`, prévalence conservée dans les trois splits, aucune classe arrondie hors de l'entraînement, répartition DCE-MRI inchangée et testée comme telle). Il manque les normaux, et ils sont **bloqués** : voir ci-dessous |
 | P1 | Tête de décision au niveau examen | Une probabilité par patient — pas une agrégation « une coupe s'allume », dont le §« Cible chiffrée » montre qu'elle exige 99,94 % de spécificité par coupe. **ROC-AUC patient avec IC bootstrap par patient** dans `eval_report.json` |
 | P1 | Choisir et publier le point de fonctionnement | Seuil fixé sur la **validation** pour Se = 82,8 % ; spécificité, VPP et **prévalence du jeu de test** rapportées sur le **test**, avec IC. Le panneau « Limites connues » cite Se/Sp/IC/prévalence au lieu du Dice |
 | P2 | Étape 2 en version image, depuis `Class` | Les 141 patients annotés (82 bénins / 59 cancers) entraînent un modèle bénin/malin mesuré, en complément de Wisconsin |
@@ -309,6 +309,20 @@ et savoir qu'ils ont dérivé une fois dit où regarder la prochaine fois.
 | `Final_Report.md` pointait `data/model_results.csv` ; le code écrit `reports/model_results.csv` | `Final_Report.md` vs `config.py` (`TABULAR_RESULTS_CSV`) | Corrigé le 2026-08-18 |
 | `models/dce_mri_p2_negfix/` nomme une expérience, pas une couche — contredit la règle « layers, not experiments » posée dans `config.py` | `config.py` | Ouvert — un renommage casse les chemins versionnés dont dépend la démo |
 
+### Obstacle relevé le 2026-09-12 : TCIA injoignable depuis cette machine
+
+`BCS-DBT-labels-*.csv` porte le statut par étude (normal / actionable / benign /
+cancer) et c'est le seul moyen de savoir qu'un examen est normal — « absent du CSV de
+boîtes » ne le dit pas. Il n'est pas sur le disque, et il ne peut pas y arriver d'ici :
+tous les hôtes de `cancerimagingarchive.net` sont en **timeout TCP**, bac à sable
+désactivé compris, comme `github.com` et `sites.duke.edu`. `pypi.org`, `google.com`,
+`zenodo.org`, `huggingface.co` et `raw.githubusercontent.com` répondent — donc la
+machine a un accès réseau, filtré. Ce n'est pas un problème de code, et aucun code ne
+le contourne.
+
+Décision (2026-09-12) : les normaux attendent. Le corpus à deux classes reste ouvert,
+et ce qu'on peut faire des 147 séries déjà étiquetées passe devant.
+
 ### Relevés le 2026-09-12
 
 Audit du dépôt contre la cible produit. Presque tous sont des corrections de
@@ -320,7 +334,7 @@ documentation, pas de code, et se décident une par une. Ce qu'un utilisateur vo
 | « mesurée sur 20 % des 569 cas **tenus à l'écart de l'entraînement** » — le modèle servi est ajusté sur 569/569, sans split. Les 97,67 % viennent d'un autre modèle, celui d'`AnalyzeData` | `app/templates/biopsy.html` vs `train_tabular_model.py` (`pipeline.fit(labelled)`) | Corrigé le 2026-09-12 |
 | Parité annoncée « sur les 569 lignes, écart max 1 × 10⁻¹⁵ » ; le test compare **5 lignes** à 1e-9, et le dit dans son propre commentaire | `plan.md`, docstring `inference.predict_tabular` vs `tests/test_tabular_export.py` | Ouvert |
 | Les métriques tabulaires renvoient à `reports/model_results.csv`, **absent du disque** — comme `pca_info.csv`, `feature_contributions.csv`, `scree_plot.png` | `Final_Report.md` | Ouvert |
-| « 87 tests, ~7 s » ; il y en a **141**, tous passants (116 à l'audit, plus 9 pour le P0 et 16 pour la colonne `Class`) | `README.md` §Development | Ouvert |
+| « 87 tests, ~7 s » ; il y en a **147**, tous passants (116 à l'audit, plus 9 pour le P0, 16 pour la colonne `Class` et 6 pour le split stratifié) | `README.md` §Development | Ouvert |
 | « 0,76 s par volume, 4,5 ms par coupe » ; l'artefact dit **0,825 s** et **4,83 ms** | `plan.md` §4.3 et `DEMO.md` vs `eval_report.json` | Ouvert |
 | « temps de calcul ~110 ms » ; mesuré 69-73 ms à chaud, 585 ms au premier appel | `README.md`, `DEMO.md` | Ouvert |
 | Checkpoint par défaut documenté `results_mri_p2/unet_best.pt` ; c'est `models/dce_mri_p2_negfix/unet_best.pt` | docstring `inference.predict_dce_mri` | Ouvert |
