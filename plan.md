@@ -1,8 +1,10 @@
 # plan.md — décisions de conception et journal des mesures
 
-> **Modalité** : IRM mammaire multiphase (DCE-MRI, DICOM).
-> **Outil visé** : deux étapes — (1) une IRM en entrée, dire s'il y a un cancer ;
+> **Outil visé** : deux étapes — (1) un examen en entrée, dire s'il y a un cancer ;
 > (2) les retours de la biopsie en entrée, dire si c'est malin ou bénin.
+> **Modalités** : étape 1 sur **DBT / mammographie** (`Breast-Cancer-Screening-DBT`),
+> décision du 2026-09-12, voir la section suivante. L'IRM multiphase (DCE-MRI, DICOM)
+> reste la modalité de la brique de **localisation**, qui s'active après l'étape 1.
 > **Cible** : démo / portfolio. **Pas d'usage clinique, pas de certification.**
 > **Mention obligatoire, partout** : *Research Use Only — Not for diagnostic use*.
 
@@ -10,6 +12,138 @@ Ce document garde ce qui ne se déduit pas du code : la charte graphique appliqu
 l'app (Partie 3) et le journal daté de ce qui a été mesuré, y compris les échecs
 (§4.1 à §4.3). Le reste — comment lancer la démo, où vivent les données, comment
 tourne le pipeline — est dans [README.md](README.md), au plus près du code.
+
+## Cible chiffrée et voie retenue (2026-09-12)
+
+Jusqu'ici l'étape 1 n'avait pas de cible chiffrée : « dire s'il y a un cancer » ne dit
+pas à quel taux. Elle en a une maintenant, prise sur le programme national de
+dépistage organisé, et elle change la modalité de l'étape 1.
+
+### La cible
+
+Point de fonctionnement visé, **au niveau patient**, un examen entrant, une décision
+sortante :
+
+| Mesure | Cible | Source |
+|---|---:|---|
+| Sensibilité | **82,8 %** | Santé publique France, dépistage organisé 50-74 ans |
+| Spécificité | **91,4 %** | idem |
+| Sensibilité selon la tranche d'âge | 76 – 88 % | idem |
+| Sensibilité à 1 an (cancers d'intervalle inclus) | 94,2 % | idem |
+
+Ce couple (Se, Sp) correspond, sous hypothèse binormale, à une **ROC-AUC patient de
+l'ordre de 0,95** — c'est l'objectif à porter dans `eval_report.json`, avec son IC.
+
+Repères de contexte, pas des cibles : faux négatifs > 15 % (MSD), 85 à 90 % des
+anomalies détectées ne sont pas des cancers (MSD), VPP 11,3 % en 2020 contre 7,8 % en
+2008 (SpF).
+
+### Ce qu'on ne vise pas : la VPP
+
+La sensibilité et la spécificité sont des propriétés du modèle à un seuil donné. **La
+VPP n'en est pas une** : elle dépend de la prévalence. Au taux de détection du
+programme (~6,7 cancers pour 1 000 dépistées), Se 82,8 % et Sp 91,4 % donnent
+
+    0,0067 × 0,828 / (0,0067 × 0,828 + 0,9933 × 0,086) = 6,1 %
+
+et non 11,3 %. Obtenir 11,3 % à cette prévalence et cette sensibilité demanderait une
+spécificité de 95,6 % : les deux chiffres publiés ne décrivent pas le même point de
+fonctionnement (années, définition du « test positif », dénominateurs). Aucun des deux
+n'est faux ; ils ne s'additionnent simplement pas.
+
+Conséquence opérationnelle : sur un jeu de test équilibré, le même modèle afficherait
+une VPP de ~90 %, ce qui ne prouverait rien. **On fixe (Se, Sp), et on publie la
+prévalence du jeu de test à côté de la VPP qui en découle.** Une VPP citée sans sa
+prévalence est un chiffre sans unité.
+
+### La voie retenue : bascule de l'étape 1 sur DBT / mammographie
+
+Trois raisons, indépendantes l'une de l'autre, rendaient la cible inatteignable sur le
+corpus DCE-MRI :
+
+1. **Mauvaise modalité pour la comparaison.** Les chiffres visés sont ceux de la
+   mammographie de dépistage. Un modèle IRM comparé à eux, même au bon niveau, compare
+   deux choses différentes.
+2. **Mauvaise population.** Duke-Breast-Cancer-MRI est une cohorte diagnostique :
+   prévalence 100 %, et `preprocess_dce_mri_with_boxes` écarte en plus tout patient
+   sans boîte. Une spécificité ne se mesure pas sur un corpus sans négatifs.
+3. **Le piège de la solution évidente.** Positifs chez Duke + négatifs ailleurs donne
+   un modèle qui apprend la source — scanner, protocole, centre — et une AUC de 0,99
+   qui ne vaut rien. Les deux classes doivent venir de la **même collection**.
+
+`Breast-Cancer-Screening-DBT` lève les trois d'un coup : c'est une collection de
+dépistage, **majoritairement normale** — le docstring de
+`ExtractData.download_annotated_dbt_series` le dit lui-même, juste avant d'exclure
+délibérément les patients non annotés. Le code de téléchargement, de prétraitement et
+d'appariement boîte ↔ série existe déjà et tourne.
+
+**Ce que la bascule ne fait pas** : elle n'annule pas le travail DCE-MRI. Le U-Net
+garde sa fonction — localiser une lésion une fois l'examen déclaré suspect — et ses
+mesures restent valides pour cette fonction-là. Il quitte le chemin critique de
+l'étape 1, il ne quitte pas le projet.
+
+### Les chiffres actuels — ligne de base au 2026-09-12
+
+Mesuré dans ce dépôt, pas repris de la documentation.
+
+**Étape 1, ce que produit l'app aujourd'hui :**
+
+| Mesure | Cible | Actuel |
+|---|---:|---|
+| Sensibilité patient | 82,8 % | **100 %**, trivialement : la sortie est constante |
+| Spécificité patient | 91,4 % | **0 %**, et non mesurable — zéro patient sain au corpus |
+| ROC-AUC patient | ≈ 0,95 | **non mesurable**, proxy le plus proche 0,50 |
+| Spécificité par coupe | — | **0,03 %** (99,97 % des coupes saines alarment) |
+| VPP | 11,3 % @ p ≈ 0,7 % | indéfinie (p = 100 %) |
+
+`inference._localize_lesion` décide par `best_conf >= 0.5`, et `best_conf` vaut
+**1,0000** partout : 28/28 patients du split test, et 160/160 coupes de
+`Breast_MRI_001` dont les 136 sans lésion (moyenne 1,0000, minimum 1,0000). La sortie
+binaire est une constante, et l'app l'affiche comme « Confiance 100 % ». La branche
+« aucune zone suspecte » des gabarits est inatteignable.
+
+**Ce qui reste valide, et qui relève de la localisation** (28 patients test, IC 95 %
+bootstrap par patient, `models/dce_mri_p2_negfix/eval_report.json`) : Dice 0,533
+[0,473 – 0,593] ; sensibilité lésion IoU ≥ 0,1 88,0 % [81,9 – 93,4] ; 222,2 faux
+positifs par volume [204,7 – 237,4] ; 0,825 s par volume. Classifieur de coupe :
+top-1 42,9 % (12/28, reproduit à travers `predict_dce_mri`), AUC **intra-volume**
+0,803 — un pouvoir de tri entre coupes d'un même patient, à ne pas lire comme une AUC
+de détection.
+
+**Pourquoi « durcir le seuil » ne marcherait pas.** Si la décision patient était « au
+moins une coupe s'allume » sur ~160 coupes, il faudrait un taux de faux positifs par
+coupe de 1 − 0,914^(1/160) ≈ **0,056 %**, soit une spécificité par coupe de 99,94 %
+contre 0,03 % mesurée. L'agrégation multiplie l'exigence par ~160 : il faut une tête
+de décision **au niveau volume**, pas un seuil mieux choisi.
+
+**Ce que le corpus DBT contient déjà**, et que le code ignore :
+
+| | Lignes | Patients | Classes |
+|---|---:|---:|---|
+| `BCS-DBT-boxes-train.csv` | 224 | 101 | benign 137 / cancer 87 |
+| `BCS-DBT-boxes-validation.csv` | 75 | 40 | benign 38 / cancer 37 |
+| **Pool** | **299** | **141** | **82 patients bénins / 59 cancers** |
+
+La colonne `Class` **n'est lue nulle part** : `preprocess_dbt_with_boxes` peint toute
+boîte dans le masque sans la regarder. Sur les **72 patients déjà prétraités**
+(147 `.npz`), **48 sont bénins et 24 cancéreux** — deux tiers des positifs actuels ne
+sont pas des cancers. C'est la mauvaise étiquette pour la cible, et c'est la bonne
+pour l'étape 2.
+
+### Ce que la cible coûte en données
+
+Pour **mesurer** ces taux, dans le jeu de test seul :
+
+| Objectif de mesure | ± 5 points | ± 3 points |
+|---|---:|---:|
+| Sensibilité 82,8 % → patients avec cancer | ~220 | ~610 |
+| Spécificité 91,4 % → patients sans cancer | ~121 | ~335 |
+
+Le split test actuel compte 28 patients, tous positifs : l'IC sur une sensibilité y
+serait de **± 14 points**, incapable de distinguer 82,8 % de 76 % ou de 94 %. C'est le
+même problème que celui déjà visible sur le classifieur de coupe (42,9 %, IC 25 – 61).
+La contrainte principale du projet n'est pas le modèle, c'est le volume d'examens
+annotés.
 
 ## Où en est le projet (2026-08-18)
 
@@ -96,15 +230,24 @@ parité Spark, sans GPU ni dataset) et ruff en CI. Docker, validation de schéma
 
 ## Ce qui reste ouvert
 
-Ordonné par ce qui rapproche de la cible en deux étapes, pas par facilité.
+Ordonné par ce qui rapproche de la cible en deux étapes, pas par facilité. Réordonné
+le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 
 | Priorité | Tâche | Critère de « fait » |
 |---|---|---|
-| P1 | Acquérir des examens négatifs | Le corpus contient des patients sans lésion ; un split conserve la proportion |
-| P1 | Tête de détection au niveau volume | Sensibilité, **spécificité** et ROC-AUC patient publiées avec IC, comme §4.3 l'a fait pour la localisation |
-| P2 | Trancher le sort de BreakHis | Un modèle bénin/malin entraîné et mesuré, ou le script et `BREAKHIS_DIR` supprimés |
+| P0 | Corriger les affirmations que le code contredit | L'app n'affiche plus « Confiance 100 % » pour une constante ; `biopsy.html` ne dit plus que le modèle servi a été mesuré hors échantillon (il est ajusté sur 569/569) |
+| P1 | Corpus DBT à deux classes, d'une seule source | Le filtre « patients annotés » de `download_annotated_dbt_series` est levé, des normaux sont téléchargés, l'étiquette patient est cancer / non-cancer, et le split par patient conserve la prévalence |
+| P1 | Lire la colonne `Class` des CSV de boîtes | `preprocess_dbt_with_boxes` distingue `cancer` de `benign` au lieu de peindre les deux dans le même masque (aujourd'hui : 48 bénins / 24 cancers sur les 72 patients prétraités) |
+| P1 | Tête de décision au niveau examen | Une probabilité par patient — pas une agrégation « une coupe s'allume », dont le §« Cible chiffrée » montre qu'elle exige 99,94 % de spécificité par coupe. **ROC-AUC patient avec IC bootstrap par patient** dans `eval_report.json` |
+| P1 | Choisir et publier le point de fonctionnement | Seuil fixé sur la **validation** pour Se = 82,8 % ; spécificité, VPP et **prévalence du jeu de test** rapportées sur le **test**, avec IC. Le panneau « Limites connues » cite Se/Sp/IC/prévalence au lieu du Dice |
+| P2 | Étape 2 en version image, depuis `Class` | Les 141 patients annotés (82 bénins / 59 cancers) entraînent un modèle bénin/malin mesuré, en complément de Wisconsin |
+| P2 | Donner à l'étape 2 tabulaire une mesure qui lui appartienne | `train_tabular_model.py` fait un split (ou une VC) et persiste les métriques du modèle **servi** ; `AnalyzeData` ajuste imputation/scaler/PCA **après** le split ; `reports/model_results.csv` recommité |
+| P2 | Trancher le sort de BreakHis | Un modèle bénin/malin entraîné et mesuré, ou le script et `BREAKHIS_DIR` supprimés. Rétrogradé de fait : `Class` fournit un pendant image moins cher |
 | P3 | Trancher le sort du pipeline tabulaire Spark | Assumé et documenté comme démo Spark, ou retiré. Rétrogradé de P2 : depuis l'export, la JVM n'est plus qu'une dépendance d'entraînement, plus une condition pour servir |
-| P2 | Bug NaN fp16 non résolu | La divergence (§4.2, repoussée époque 11 → 15) est localisée dans le forward pass et corrigée, ou documentée comme acceptée |
+| P3 | Bug NaN fp16 non résolu | La divergence (§4.2, repoussée époque 11 → 15) est localisée dans le forward pass et corrigée, ou documentée comme acceptée. Rétrogradé de P2 : le U-Net DCE-MRI quitte le chemin critique de l'étape 1. Le checkpoint servi reste un instantané pré-divergence (époque ≤ 14 sur 30) |
+| P3 | Retirer le code mort | `app/run_unet.py`, `DbtUNetPredictor` et `predict_dbt` pointent un checkpoint qui n'existe plus (`models/dbt/unet_best.pt`, écrasé par un smoke test, §4.1). À réécrire pour la nouvelle tête DBT ou à supprimer, pas à laisser documenté comme disponible dans `app/README.md` |
+| P3 | Réparer le paquet | `pyproject.toml` omet `logging_setup`, `validation` et `lineage` de `py-modules` : hors du répertoire du dépôt, `import inference` échoue. Masqué parce qu'on lance toujours depuis la racine |
+| P3 | Exécuter le lineage sur le corpus | Aucun `manifest.json` n'existe sous `data/preprocessed_data/` : le code est écrit et testé, jamais passé sur les données réelles |
 | P3 | Registre de traitement RGPD | Une page : base légale, nature des données, finalité, conservation, sécurité |
 | P3 | Nom de produit + logo | Choisi et intégré au header de l'app |
 
@@ -130,6 +273,26 @@ et savoir qu'ils ont dérivé une fois dit où regarder la prochaine fois.
 | `README.md` annonçait « 68 tests, ~6 s » ; il y en a 87, en ~7 s | `README.md` §Development | Corrigé le 2026-08-18 |
 | `Final_Report.md` pointait `data/model_results.csv` ; le code écrit `reports/model_results.csv` | `Final_Report.md` vs `config.py` (`TABULAR_RESULTS_CSV`) | Corrigé le 2026-08-18 |
 | `models/dce_mri_p2_negfix/` nomme une expérience, pas une couche — contredit la règle « layers, not experiments » posée dans `config.py` | `config.py` | Ouvert — un renommage casse les chemins versionnés dont dépend la démo |
+
+### Relevés le 2026-09-12
+
+Audit du dépôt contre la cible produit. Tous **ouverts** : ce sont des corrections de
+documentation, pas de code, et elles se décident une par une.
+
+| Constat | Où |
+|---|---|
+| « mesurée sur 20 % des 569 cas **tenus à l'écart de l'entraînement** » — le modèle servi est ajusté sur 569/569, sans split. Les 97,67 % viennent d'un autre modèle, celui d'`AnalyzeData` | `app/templates/biopsy.html` vs `train_tabular_model.py` (`pipeline.fit(labelled)`) |
+| Parité annoncée « sur les 569 lignes, écart max 1 × 10⁻¹⁵ » ; le test compare **5 lignes** à 1e-9, et le dit dans son propre commentaire | `plan.md`, docstring `inference.predict_tabular` vs `tests/test_tabular_export.py` |
+| Les métriques tabulaires renvoient à `reports/model_results.csv`, **absent du disque** — comme `pca_info.csv`, `feature_contributions.csv`, `scree_plot.png` | `Final_Report.md` |
+| « 87 tests, ~7 s » ; il y en a **116**, tous passants | `README.md` §Development |
+| « 0,76 s par volume, 4,5 ms par coupe » ; l'artefact dit **0,825 s** et **4,83 ms** | `plan.md` §4.3 et `DEMO.md` vs `eval_report.json` |
+| « temps de calcul ~110 ms » ; mesuré 69-73 ms à chaud, 585 ms au premier appel | `README.md`, `DEMO.md` |
+| Checkpoint par défaut documenté `results_mri_p2/unet_best.pt` ; c'est `models/dce_mri_p2_negfix/unet_best.pt` | docstring `inference.predict_dce_mri` |
+| Backend `unet` présenté comme disponible ; son checkpoint n'existe plus | `app/README.md`, `app/predictor.py` |
+| Logs annonçant `data/transformed_data.csv`, `data/pca_info.csv`, `data/scree_plot.png` ; le code écrit dans `reports/` et `plots/` | `TransformData.transform_data` |
+| IC 95 % top-1 `[25,0 – 60,7]` : aucun code ni artefact versionné ne la produit | `plan.md` §4.3 |
+| Fuite de préprocessing : imputation, scaler et PCA ajustés sur les 569 lignes **avant** le `randomSplit`, donc les 97,67 % / 99,89 % sont optimistes | `TransformData.transform_data` → `AnalyzeData.prepare_data` |
+| Étape 2 annoncée « livrée » ; la branche `ameliore-le-mvp` est locale, absente d'`origin` | `plan.md` §Livrés |
 
 ---
 
