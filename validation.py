@@ -36,18 +36,44 @@ log = logging.getLogger(__name__)
 # Real data sits at 448-512, so this leaves a factor of 3.5 of headroom.
 MIN_IN_PLANE = 128
 
+# BCS-DBT labels every annotated box ``benign`` or ``cancer``. Which one it is cannot
+# be recovered from the mask afterwards -- a benign lesion paints exactly the same
+# kind of pixels as a cancer -- so the class has to travel with the volume. It is
+# stored beside it as ``lesion_class`` (the word) and ``label`` (0/1, the exam-level
+# target a detection head is scored against). This map is the only place the encoding
+# is written down; 1 is cancer, so "positive" means what it says.
+LESION_CLASSES = {"benign": 0, "cancer": 1}
+
 
 class VolumeValidationError(ValueError):
     """A preprocessed volume violates a contract the rest of the pipeline relies on."""
 
 
-def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_frame=True):
+def lesion_class_label(lesion_class):
+    """Return ``(canonical class, label)`` for one lesion class, or raise.
+
+    Case and whitespace are normalised, so a CSV that spells it ``"Cancer"`` still
+    lands on 1. Anything else raises: an unrecognised class stored as a
+    plausible-looking 0 would be trained on without a word.
+    """
+    key = str(lesion_class).strip().lower()
+    if key not in LESION_CLASSES:
+        raise VolumeValidationError(
+            f"lesion_class must be one of {sorted(LESION_CLASSES)}; got {lesion_class!r}")
+    return key, LESION_CLASSES[key]
+
+
+def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_frame=True,
+                             lesion_class=None):
     """Check one volume/mask pair. Raises on a broken contract, warns on a smell.
 
     Returns the list of warnings raised, so a caller can count them across a run.
 
     ``expect_full_frame=False`` turns off the crop check, for the DBT pipeline and the
     demo cases, where a cropped volume is the intended output rather than an accident.
+
+    ``lesion_class``, when given, is checked against :data:`LESION_CLASSES` here --
+    the same single choke point as the rest, so a typo cannot reach the disk.
     """
     volume = np.asarray(volume)
     mask = np.asarray(mask)
@@ -74,6 +100,9 @@ def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_fram
         raise VolumeValidationError(
             f"{where}volume holds {bad} non-finite value(s) out of {volume.size}. "
             "Intensity normalisation failed, or an unnormalised volume overflowed float16")
+
+    if lesion_class is not None:
+        lesion_class_label(lesion_class)  # raises on anything unrecognised
 
     unique = np.unique(mask)
     if not np.isin(unique, (0, 1)).all():
@@ -105,15 +134,24 @@ def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_fram
     return warnings
 
 
-def summarise(volume, mask):
-    """Descriptive stats for the lineage manifest. Assumes validation already passed."""
+def summarise(volume, mask, lesion_class=None):
+    """Descriptive stats for the lineage manifest. Assumes validation already passed.
+
+    ``lesion_class`` is carried through when known, so the manifest says how many
+    cases of each class a run wrote -- the count a reader would otherwise have to
+    re-derive by opening every file.
+    """
     volume = np.asarray(volume)
     mask = np.asarray(mask) > 0
     positive_slices = int(mask.reshape(mask.shape[0], -1).any(axis=1).sum())
-    return {
+    stats = {
         "shape": list(volume.shape),
         "dtype": str(volume.dtype),
         "lesion_voxels": int(mask.sum()),
         "lesion_slices": positive_slices,
         "lesion_slice_fraction": round(positive_slices / volume.shape[0], 4),
     }
+    if lesion_class is not None:
+        key, label = lesion_class_label(lesion_class)
+        stats["lesion_class"], stats["label"] = key, label
+    return stats

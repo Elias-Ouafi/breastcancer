@@ -375,7 +375,7 @@ def crop_to_roi(volume, mask, margin=16):
 
 
 def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, crop=True,
-                      case_id=None, summary=None):
+                      case_id=None, summary=None, lesion_class=None):
     """Save a preprocessed volume + mask as a single compressed .npz file.
 
     Three levers keep the files small:
@@ -394,6 +394,13 @@ def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, cr
     check has to be written to cover them all. A broken volume raises here rather than
     surfacing hours later as a NaN loss. Pass `summary` a dict to collect the
     per-case stats for the lineage manifest.
+
+    `lesion_class` ("benign" or "cancer", see `validation.LESION_CLASSES`) is written
+    beside the arrays as `lesion_class` plus a 0/1 `label`. The mask cannot carry it:
+    a benign lesion and a cancer paint the same pixels, so a corpus whose files only
+    hold a mask has no way to answer the exam-level question. Omit it when the source
+    does not say (the DCE-MRI collection has no such column) -- the keys are then
+    absent, and absent means unknown rather than benign.
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -408,19 +415,31 @@ def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, cr
     # and it does not exist until the cast has happened.
     key = str(case_id) if case_id is not None else str(patient_id)
     warnings = validation.validate_volume_and_mask(
-        volume, mask, case_id=key, expect_full_frame=not crop)
+        volume, mask, case_id=key, expect_full_frame=not crop, lesion_class=lesion_class)
+    # The summary is keyed by output file, not by case: a DBT patient contributes up
+    # to four views, and keying by `case_id` made each series overwrite the previous
+    # one -- a manifest claiming 72 cases for 147 files, and losing 3 of its 5
+    # validation warnings with them. The patient grouping stays readable as `case_id`
+    # inside each entry, which is what a leakage-free split needs.
     if summary is not None:
-        summary[key] = validation.summarise(volume, mask)
-        summary[key]["warnings"] = warnings
+        entry = validation.summarise(volume, mask, lesion_class=lesion_class)
+        entry["case_id"] = key
+        entry["warnings"] = warnings
+        summary[str(patient_id)] = entry
+
+    arrays = {
+        "volume": volume,
+        "mask": mask,
+        "crop_offset": np.asarray(offset, dtype=np.int32),
+        "case_id": np.asarray(key),
+    }
+    if lesion_class is not None:
+        canonical, label = validation.lesion_class_label(lesion_class)
+        arrays["lesion_class"] = np.asarray(canonical)
+        arrays["label"] = np.asarray(label, dtype=np.uint8)
 
     out_path = os.path.join(output_dir, f"{patient_id}.npz")
-    np.savez_compressed(
-        out_path,
-        volume=volume,
-        mask=mask,
-        crop_offset=np.asarray(offset, dtype=np.int32),
-        case_id=np.asarray(key),
-    )
+    np.savez_compressed(out_path, **arrays)
     return out_path
 
 
@@ -477,14 +496,48 @@ def _boxes_for_series(ds, boxes_df):
                     & (boxes_df["View"].str.lower() == view)]
 
 
+# The column that says what an annotated box actually is. It shipped with the
+# collection from the start and nothing read it, so every box -- benign or cancer --
+# was painted into the same mask (plan.md, "Lire la colonne Class").
+BOX_CLASS_COLUMN = "Class"
+
+
+def _box_paths(boxes_csv):
+    """Normalise ``boxes_csv`` (one path, or several) to a list of paths."""
+    if isinstance(boxes_csv, (str, os.PathLike)):
+        return [boxes_csv]
+    return list(boxes_csv)
+
+
 def _read_boxes(boxes_csv):
     """Read one CSV path, or a list/tuple of paths, into a single boxes DataFrame.
 
     Pooling several CSVs (e.g. BCS-DBT ``boxes-train`` + ``boxes-validation``, which
     hold disjoint patients under the same schema) grows the annotated set in one call.
+
+    ``Class`` is required, lowercased, and checked against
+    ``validation.LESION_CLASSES``. Both rejections are deliberate: a file without the
+    column would have every box treated as one undistinguished lesion (the bug this
+    replaces), and an unrecognised value would be quietly dropped from the mask by the
+    class filter downstream. Neither failure shows up until a model has been trained
+    on it.
     """
-    paths = [boxes_csv] if isinstance(boxes_csv, (str, os.PathLike)) else list(boxes_csv)
-    return pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
+    frames = []
+    for path in _box_paths(boxes_csv):
+        df = pd.read_csv(path)
+        if BOX_CLASS_COLUMN not in df.columns:
+            raise ValueError(
+                f"{path}: no {BOX_CLASS_COLUMN!r} column. Benign and cancer boxes are "
+                "not the same target, so the class is required; got columns "
+                f"{list(df.columns)}")
+        df[BOX_CLASS_COLUMN] = df[BOX_CLASS_COLUMN].astype(str).str.strip().str.lower()
+        unknown = sorted(set(df[BOX_CLASS_COLUMN]) - set(validation.LESION_CLASSES))
+        if unknown:
+            raise ValueError(
+                f"{path}: unrecognised {BOX_CLASS_COLUMN} value(s) {unknown}; expected "
+                f"{sorted(validation.LESION_CLASSES)}")
+        frames.append(df)
+    return pd.concat(frames, ignore_index=True)
 
 
 def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
@@ -492,15 +545,34 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
                               output_dir=config.DBT_PREPROCESSED_DIR,
                               skip_empty=True,
                               slice_margin=2,
-                              crop=True):
+                              crop=True,
+                              mask_classes=("benign", "cancer")):
     """Preprocess Breast-Cancer-Screening-DBT series using the bounding-box annotations.
 
     DBT scans ship without DICOM SEG; lesions are given as 2D boxes in a separate
-    CSV (``PatientID``, ``View``, ``Slice``, ``X``, ``Y``, ``Width``, ``Height``).
-    For each series folder under ``root_dir`` this reads the multi-frame image,
-    normalises it (see :func:`normalize_intensity`), and builds a binary lesion mask
-    from the matching box rows by reusing :func:`create_mask`. Volumes are written as
-    compressed ``.npz`` via :func:`save_preprocessed`.
+    CSV (``PatientID``, ``View``, ``Slice``, ``X``, ``Y``, ``Width``, ``Height``,
+    ``Class``). For each series folder under ``root_dir`` this reads the multi-frame
+    image, normalises it (see :func:`normalize_intensity`), and builds a binary lesion
+    mask from the matching box rows by reusing :func:`create_mask`. Volumes are
+    written as compressed ``.npz`` via :func:`save_preprocessed`.
+
+    **The class is read, and it is stored.** ``Class`` says whether a box is a
+    ``benign`` finding or a ``cancer``; for a long time nothing read it, so both were
+    painted into one mask and a "positive" volume meant "some lesion" -- on the 72
+    patients preprocessed that way, 48 were benign and 24 cancers, so two thirds of
+    the positives were not cancers. The class now travels with each file, as
+    ``lesion_class`` and a 0/1 ``label`` (see :func:`save_preprocessed`), which is what
+    an exam-level cancer / no-cancer decision needs. In this collection a patient's
+    boxes are all of one class (verified: 82 benign-only and 59 cancer-only patients
+    across the pooled train + validation CSVs, no patient mixing the two), so one
+    label per file is not a simplification here; should a future CSV mix them, any
+    cancer box makes the exam a cancer exam and the mixture is logged.
+
+    ``mask_classes`` selects which boxes are *painted* into the mask, without changing
+    what the label says. The default paints both: a benign lesion is still a lesion to
+    localise, and dropping the benign patients would cost two thirds of the annotated
+    corpus. Pass ``("cancer",)`` for a cancer-only segmentation target -- series left
+    with an empty mask are then skipped like unannotated ones, and counted separately.
 
     ``crop`` (default True) keeps the historical behaviour of cropping to the lesion
     ROI, which keeps files small but only teaches the model to localise within an
@@ -521,12 +593,26 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
     ``boxes_csv`` may be a single path or a list of paths; pass both the train and
     validation boxes CSVs to build masks for the pooled annotated set. Series with no
     matching box are skipped when ``skip_empty`` is True (an empty mask is useless for
-    the localisation model and would store the full frame).
+    the localisation model and would store the full frame). Note what such a skip does
+    *not* mean: a series absent from the boxes CSV is a series with no annotated box,
+    which is not the same as a normal exam -- BCS-DBT states that in a separate
+    per-study labels file, which this function never reads.
+
+    Returns ``(saved, skipped)``; the per-class breakdown goes to the log and to the
+    lineage manifest written beside the volumes.
     """
     os.makedirs(output_dir, exist_ok=True)
     boxes = _read_boxes(boxes_csv)
 
-    saved, skipped = 0, 0
+    mask_classes = tuple(str(c).strip().lower() for c in mask_classes)
+    unknown = sorted(set(mask_classes) - set(validation.LESION_CLASSES))
+    if unknown:
+        raise ValueError(f"mask_classes holds unrecognised class(es) {unknown}; expected "
+                         f"{sorted(validation.LESION_CLASSES)}")
+
+    saved, skipped, summary = 0, 0, {}
+    saved_by_class = {name: 0 for name in validation.LESION_CLASSES}
+    skipped_unannotated, skipped_unpainted = 0, 0
     for name in sorted(os.listdir(root_dir)):
         folder = os.path.join(root_dir, name)
         if not os.path.isdir(folder):
@@ -535,14 +621,37 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
         if not dcm_files:
             continue
 
-        ds = pydicom.dcmread(os.path.join(folder, dcm_files[0]))
-        volume = ds.pixel_array.astype(np.float32)
+        # The header carries PatientID and view, which is all the box match needs --
+        # and the match is what decides whether this series is wanted at all. Reading
+        # the pixels first meant decoding every unannotated series (7-17 s and ~100 MB
+        # each on the real collection, 115 of 262 series) only to drop it.
+        path = os.path.join(folder, dcm_files[0])
+        ds = pydicom.dcmread(path, stop_before_pixels=True)
+
+        rows = _boxes_for_series(ds, boxes)
+        present = tuple(sorted(set(rows[BOX_CLASS_COLUMN]))) if len(rows) else ()
+        # Any cancer box makes the exam a cancer exam: at the level the decision is
+        # taken, one missed cancer is not offset by a correctly called benign.
+        lesion_class = "cancer" if "cancer" in present else (present[0] if present else None)
+        if len(present) > 1:
+            log.warning(f"[DBT] {name}: boxes of several classes {present} on one series; "
+                        f"labelling the exam {lesion_class!r}.")
+
+        painted = rows[rows[BOX_CLASS_COLUMN].isin(mask_classes)]
+        if skip_empty and painted.empty:
+            skipped += 1
+            if present:
+                skipped_unpainted += 1
+            else:
+                skipped_unannotated += 1
+            continue
+
+        volume = pydicom.dcmread(path).pixel_array.astype(np.float32)
         if volume.ndim == 2:
             volume = volume[None]  # (1, rows, cols)
 
-        rows = _boxes_for_series(ds, boxes)
         mask = np.zeros(volume.shape, dtype=np.uint8)
-        for _, r in rows.iterrows():
+        for _, r in painted.iterrows():
             z = int(r["Slice"])
             z0 = max(0, z - slice_margin)
             z1 = min(volume.shape[0], z + 1 + slice_margin)
@@ -554,17 +663,48 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
             mask = np.logical_or(mask, create_mask(volume.shape, bbox)).astype(np.uint8)
 
         if skip_empty and mask.sum() == 0:
+            # Boxes matched and were of a painted class, yet nothing was painted:
+            # a degenerate box (zero width/height, or off the frame).
+            log.warning(f"[DBT] {name}: {len(painted)} box(es) painted no voxel; skipping.")
             skipped += 1
+            skipped_unpainted += 1
             continue
 
         volume = normalize_intensity(volume)
         save_preprocessed(name, volume, mask, output_dir, crop=crop,
-                          case_id=getattr(ds, "PatientID", name))
+                          case_id=getattr(ds, "PatientID", name),
+                          lesion_class=lesion_class, summary=summary)
         saved += 1
-        log.info(f"[DBT] {name}: {len(rows)} box(es), "
-                     f"{int(mask.sum())} lesion voxels -> saved.")
+        if lesion_class is not None:
+            saved_by_class[lesion_class] += 1
+        log.info(f"[DBT] {name}: {len(painted)}/{len(rows)} box(es) painted, "
+                 f"class {lesion_class or 'unknown'}, "
+                 f"{int(mask.sum())} lesion voxels -> saved.")
 
-    log.info(f"[DBT] Saved {saved} series, skipped {skipped} without annotations.")
+    # Written last, and only on a completed pass: a folder with no manifest is a
+    # folder whose run was interrupted (same rule as the DCE-MRI path).
+    lineage.write_manifest(
+        output_dir,
+        source=root_dir,
+        parameters={
+            "pipeline": "preprocess_dbt_with_boxes",
+            "boxes": [lineage.relative_path(p) for p in _box_paths(boxes_csv)],
+            "crop": crop,
+            "slice_margin": slice_margin,
+            "skip_empty": skip_empty,
+            "mask_classes": list(mask_classes),
+            "saved_by_class": saved_by_class,
+            "skipped_unannotated": skipped_unannotated,
+            "skipped_unpainted": skipped_unpainted,
+        },
+        cases=summary,
+        warnings=[w for case in summary.values() for w in case.get("warnings", [])],
+    )
+
+    log.info(f"[DBT] Saved {saved} series "
+             f"({saved_by_class['cancer']} cancer, {saved_by_class['benign']} benign), "
+             f"skipped {skipped} ({skipped_unannotated} without any box, "
+             f"{skipped_unpainted} annotated but empty for classes {list(mask_classes)}).")
     return saved, skipped
 
 

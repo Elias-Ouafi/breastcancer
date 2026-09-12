@@ -245,6 +245,17 @@ Step 2 matches each downloaded series to its boxes by **PatientID + view**
 image, paints the box(es) into a binary mask with `create_mask`, crops to the lesion
 region of interest, and stores the real `PatientID` inside the `.npz` (as `case_id`).
 
+It also reads the boxes CSV's **`Class`** column and stores it: each `.npz` carries
+`lesion_class` (`benign` or `cancer`) and a 0/1 `label`. The mask cannot carry that —
+a benign lesion paints the same pixels as a cancer — so a file holding only a mask
+cannot answer the exam-level question, which is *cancer or not*, not *lesion or not*.
+Pass `mask_classes=("cancer",)` to paint only the cancer boxes; the default paints
+both, since a benign lesion is still something to localise and benign patients are
+two thirds of the annotated set. `Class` is required: a CSV without it is rejected
+rather than treated as one undistinguished class. A completed run writes
+`manifest.json` beside the volumes (`lineage.py`) with the per-class counts, so the
+class balance of a corpus can be read without opening a single volume.
+
 The `imaging/` package then trains the U-Net: it reads the `.npz` volumes, splits
 them **by patient** (`case_id`) so no patient straddles train/val/test, serves axial
 slices, and optimises a combined BCE + soft-Dice loss. Metrics (**Dice**, **IoU**)

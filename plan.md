@@ -118,7 +118,7 @@ coupe de 1 − 0,914^(1/160) ≈ **0,056 %**, soit une spécificité par coupe d
 contre 0,03 % mesurée. L'agrégation multiplie l'exigence par ~160 : il faut une tête
 de décision **au niveau volume**, pas un seuil mieux choisi.
 
-**Ce que le corpus DBT contient déjà**, et que le code ignore :
+**Ce que le corpus DBT contient déjà** — ignoré jusqu'au 2026-09-12 :
 
 | | Lignes | Patients | Classes |
 |---|---:|---:|---|
@@ -126,11 +126,36 @@ de décision **au niveau volume**, pas un seuil mieux choisi.
 | `BCS-DBT-boxes-validation.csv` | 75 | 40 | benign 38 / cancer 37 |
 | **Pool** | **299** | **141** | **82 patients bénins / 59 cancers** |
 
-La colonne `Class` **n'est lue nulle part** : `preprocess_dbt_with_boxes` peint toute
-boîte dans le masque sans la regarder. Sur les **72 patients déjà prétraités**
-(147 `.npz`), **48 sont bénins et 24 cancéreux** — deux tiers des positifs actuels ne
-sont pas des cancers. C'est la mauvaise étiquette pour la cible, et c'est la bonne
-pour l'étape 2.
+La colonne `Class` n'était **lue nulle part** : `preprocess_dbt_with_boxes` peignait
+toute boîte dans le masque sans la regarder, donc « positif » voulait dire « une
+lésion », pas « un cancer ». Sur les **72 patients prétraités** (147 `.npz`),
+**48 sont bénins et 24 cancéreux** — deux tiers des positifs n'étaient pas des
+cancers. C'était la mauvaise étiquette pour la cible, et c'est la bonne pour
+l'étape 2.
+
+Corrigé le 2026-09-12 (voir Livré) : chaque `.npz` porte maintenant son
+`lesion_class` et un `label` 0/1, et le corpus a été reconstruit. Mesuré sur les
+fichiers, pas déclaré : **147 séries, 0 sans étiquette ; 100 bénignes / 47 cancers ;
+72 patients dont 48 bénins et 24 cancéreux, aucun patient mélangeant les deux
+classes** ; 0,55 Go, `manifest.json` écrit.
+
+**Ce que la reconstruction a fait apparaître** (2026-09-12, mesuré) :
+
+- **5 séries sur 147 ont un volume constant après recadrage** (`validation` les
+  signale : « nothing to learn from this series »), chez 3 patients — DBT-P00538
+  (cancer, **ses deux séries**, donc ce patient ne contribue rien d'exploitable, sur
+  24 cancers), DBT-P03677 (bénin, 2 séries), DBT-P02919 (bénin, 1). Le masque y
+  couvre pourtant 38 000 à 800 000 voxels : la boîte désigne une zone uniforme. Cause
+  non établie — convention de coordonnées, ou boîte hors du tissu. **Ouvert.**
+- **Une trame complète DBT pèse ~745 Mo en float16** (2457×1890 à 1996, 47 à 100
+  coupes). Le corpus recadré tient en 0,55 Go, médiane 37×252×253. Conséquence
+  directe pour la tête de décision : un volume recadré sur la lésion **présuppose la
+  réponse**, et `crop=False` demanderait ~100 Go. Il faudra sous-échantillonner le
+  plan (p. ex. 512×512), pas seulement changer le drapeau.
+- **115 des 262 séries sur disque n'ont aucune boîte** (62 patients), et cela ne veut
+  **pas** dire « examen normal » : le statut par étude (normal / actionable / benign /
+  cancer) vit dans `BCS-DBT-labels-*.csv`, qui **n'est pas téléchargé**. C'est le
+  premier obstacle du P1 « corpus à deux classes », avant tout téléchargement.
 
 ### Ce que la cible coûte en données
 
@@ -238,7 +263,6 @@ le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 | Priorité | Tâche | Critère de « fait » |
 |---|---|---|
 | P1 | Corpus DBT à deux classes, d'une seule source | Le filtre « patients annotés » de `download_annotated_dbt_series` est levé, des normaux sont téléchargés, l'étiquette patient est cancer / non-cancer, et le split par patient conserve la prévalence |
-| P1 | Lire la colonne `Class` des CSV de boîtes | `preprocess_dbt_with_boxes` distingue `cancer` de `benign` au lieu de peindre les deux dans le même masque (aujourd'hui : 48 bénins / 24 cancers sur les 72 patients prétraités) |
 | P1 | Tête de décision au niveau examen | Une probabilité par patient — pas une agrégation « une coupe s'allume », dont le §« Cible chiffrée » montre qu'elle exige 99,94 % de spécificité par coupe. **ROC-AUC patient avec IC bootstrap par patient** dans `eval_report.json` |
 | P1 | Choisir et publier le point de fonctionnement | Seuil fixé sur la **validation** pour Se = 82,8 % ; spécificité, VPP et **prévalence du jeu de test** rapportées sur le **test**, avec IC. Le panneau « Limites connues » cite Se/Sp/IC/prévalence au lieu du Dice |
 | P2 | Étape 2 en version image, depuis `Class` | Les 141 patients annotés (82 bénins / 59 cancers) entraînent un modèle bénin/malin mesuré, en complément de Wisconsin |
@@ -256,6 +280,7 @@ le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 
 | Tâche | Où | Ce qui la rend faite |
 |---|---|---|
+| P1 — lire la colonne `Class` des CSV de boîtes | `validation.py` (`LESION_CLASSES`, `lesion_class_label`), `TransformData.py` (`_read_boxes`, `save_preprocessed`, `preprocess_dbt_with_boxes`), `README.md` | Chaque `.npz` porte `lesion_class` (`benign`/`cancer`) et un `label` 0/1 ; le masque reste binaire, parce que la classe n'est pas peignable — une lésion bénigne peint les mêmes pixels qu'un cancer. `Class` est **exigée** (un CSV sans elle est refusé, pas traité comme une classe unique) et une valeur inconnue est refusée. `mask_classes` choisit ce qui est peint sans changer ce que dit l'étiquette ; par défaut les deux, les bénins étant deux tiers du corpus annoté. Étiquette d'examen : toute boîte cancer ⇒ examen cancer, mélange journalisé (jamais rencontré : 82 patients bénins purs, 59 cancers purs). Corpus reconstruit et **mesuré sur les fichiers** : 147 séries, 0 sans étiquette, 100 bénignes / 47 cancers, 72 patients (48 / 24), aucun patient mélangé, 0,55 Go, 27,7 min. 16 tests sur DICOM synthétiques, dont les cas que la vraie donnée ne fournit pas (série mélangée, classe inconnue, colonne absente) |
 | P0 — corriger les affirmations que le code contredit | `app/templates/result.html`, `app/templates/biopsy.html`, `app/templates/base.html`, `app/predictor.py`, `inference.py`, `app/README.md` | Trois affirmations retirées de l'écran. (1) La pastille « Confiance 100 % » et sa jauge remplie : `best_conf` est un maximum de probabilité **par pixel**, constant à 1,0000, pas un score d'examen — la valeur reste lisible dans le détail technique sous le nom « Probabilité max. par pixel (non calibrée) », et le panneau de limites dit que le verdict lui-même est constant (28/28 patients, 160/160 coupes). (2) La carte de `/biopsie` annonçait une mesure « sur 20 % des 569 cas tenus à l'écart de l'entraînement » : le modèle servi est ajusté sur 569/569 sans découpage, et les 97,7 % / 99,8 % décrivaient un autre modèle — aucun chiffre n'est plus affiché, l'absence de mesure hors échantillon est écrite. (3) `/biopsie` empruntait les pastilles Dice / sensibilité / faux positifs du modèle d'imagerie, sous un texte disant que ce modèle ne lit pas d'image : elles sont passées dans un bloc `limits_numbers` que la page neutralise. Vérifié dans l'app réelle (backend `dce_mri`, cas de démo 1 : coupe 52/176, probabilité par pixel 1,0000) et gardé par 9 tests de rendu (`tests/test_result_page_claims.py`) — 125 tests au total, ruff propre |
 
 **Livrés** (branche `amelioration-docker-preprocess-env`, commités le 2026-08-18) :
@@ -292,7 +317,7 @@ documentation, pas de code, et se décident une par une. Ce qu'un utilisateur vo
 | « mesurée sur 20 % des 569 cas **tenus à l'écart de l'entraînement** » — le modèle servi est ajusté sur 569/569, sans split. Les 97,67 % viennent d'un autre modèle, celui d'`AnalyzeData` | `app/templates/biopsy.html` vs `train_tabular_model.py` (`pipeline.fit(labelled)`) | Corrigé le 2026-09-12 |
 | Parité annoncée « sur les 569 lignes, écart max 1 × 10⁻¹⁵ » ; le test compare **5 lignes** à 1e-9, et le dit dans son propre commentaire | `plan.md`, docstring `inference.predict_tabular` vs `tests/test_tabular_export.py` | Ouvert |
 | Les métriques tabulaires renvoient à `reports/model_results.csv`, **absent du disque** — comme `pca_info.csv`, `feature_contributions.csv`, `scree_plot.png` | `Final_Report.md` | Ouvert |
-| « 87 tests, ~7 s » ; il y en a **125**, tous passants (116 à l'audit, plus les 9 du P0) | `README.md` §Development | Ouvert |
+| « 87 tests, ~7 s » ; il y en a **141**, tous passants (116 à l'audit, plus 9 pour le P0 et 16 pour la colonne `Class`) | `README.md` §Development | Ouvert |
 | « 0,76 s par volume, 4,5 ms par coupe » ; l'artefact dit **0,825 s** et **4,83 ms** | `plan.md` §4.3 et `DEMO.md` vs `eval_report.json` | Ouvert |
 | « temps de calcul ~110 ms » ; mesuré 69-73 ms à chaud, 585 ms au premier appel | `README.md`, `DEMO.md` | Ouvert |
 | Checkpoint par défaut documenté `results_mri_p2/unet_best.pt` ; c'est `models/dce_mri_p2_negfix/unet_best.pt` | docstring `inference.predict_dce_mri` | Ouvert |
