@@ -70,16 +70,31 @@ log = logging.getLogger(__name__)
 DEFAULT_OUTPUT_DIR = os.path.join(config.MODELS_DIR, "lesionclf")
 
 
-def lesion_slices(path, image_size=224):
-    """Every lesion-bearing slice of one ``.npz``, resized, plus its patient and label.
+def lesion_slices(path, image_size=256, window=640):
+    """Every lesion-bearing slice of one ``.npz``, windowed, plus its patient and label.
 
     Only slices the mask touches are kept. The volume is a crop around the box, so
     its other slices show the same region at another depth -- they carry the lesion's
     surroundings but not the lesion, and calling them benign or cancer would label
     tissue by what sits a few millimetres away.
 
+    ``window`` is a field of view in **native pixels**, centred on the lesion and
+    zero-padded where the stored crop is smaller (the volume is z-normalised, so zero
+    is roughly its mean and the padding adds no edge). It replaces stretching each
+    crop to the input size, which the first measurement did and which cost that
+    measurement dearly: the crops run from 97x149 to 710x505, so a common resize made
+    a small mass and a large one the same apparent size, and blurred the small one --
+    while size is among the first things that separate a benign lesion from a cancer.
+
+    A constant window in pixels is a constant window in millimetres only because the
+    detector geometry is constant across this collection (every series is 2457 rows by
+    1890 or 1996 columns); these DICOMs carry no pixel-spacing tag to check it
+    against, and that assumption is the price. 640 px holds 97.3 % of the annotated
+    boxes whole, against 91.0 % at 512 and 60.5 % at 256. ``window=None`` restores the
+    stretch, for reproducing the first measurement.
+
     Returns ``(images, patient, label)`` with ``images`` shaped ``(n, size, size)``
-    in float16: at ~7 lesion slices per series the whole corpus fits in memory, and
+    in float16: at ~5 lesion slices per series the whole corpus fits in memory, and
     paying the decompression once per run rather than once per epoch is what makes
     five folds cheap.
     """
@@ -98,7 +113,21 @@ def lesion_slices(path, image_size=224):
     if keep.size == 0:
         return np.zeros((0, image_size, image_size), dtype=np.float16), case_id, label
 
-    slices = torch.from_numpy(volume[keep].astype(np.float32))[:, None]
+    stack = volume[keep].astype(np.float32)
+    if window:
+        rows, cols = np.nonzero(mask.any(axis=0))
+        centre_y, centre_x = int(round(rows.mean())), int(round(cols.mean()))
+        half = window // 2
+        y0, x0 = centre_y - half, centre_x - half
+        pad = ((0, 0),
+               (max(0, -y0), max(0, y0 + window - stack.shape[1])),
+               (max(0, -x0), max(0, x0 + window - stack.shape[2])))
+        if any(sum(p) for p in pad):
+            stack = np.pad(stack, pad)
+            y0, x0 = y0 + pad[1][0], x0 + pad[2][0]
+        stack = stack[:, y0:y0 + window, x0:x0 + window]
+
+    slices = torch.from_numpy(np.ascontiguousarray(stack))[:, None]
     slices = F.interpolate(slices, size=(image_size, image_size),
                            mode="bilinear", align_corners=False)
     patient = case_id or default_patient_key(path)
@@ -114,15 +143,17 @@ class LesionSliceDataset(Dataset):
     out: the defaults documented in ``dataset`` keep it inside.
     """
 
-    def __init__(self, paths, image_size=224, augment=False, seed=0, preloaded=None):
+    def __init__(self, paths, image_size=256, augment=False, seed=0, preloaded=None,
+                 window=640):
         self.image_size = image_size
+        self.window = window
         self.augment = augment
         self.rng = np.random.default_rng(seed)
 
         chunks, patients, labels = [], [], []
         for path in paths:
             images, patient, label = (preloaded[path] if preloaded is not None
-                                      else lesion_slices(path, image_size))
+                                      else lesion_slices(path, image_size, window))
             if images.shape[0] == 0:
                 continue
             chunks.append(images)
@@ -182,9 +213,9 @@ def train_one_fold(train_paths, heldout_paths, args, device, preloaded, fold):
     """Train from scratch on ``train_paths``, then score the held-out patients."""
     train_set = LesionSliceDataset(train_paths, args.image_size,
                                    augment=not args.no_augment, seed=args.seed + fold,
-                                   preloaded=preloaded)
+                                   preloaded=preloaded, window=args.window)
     heldout_set = LesionSliceDataset(heldout_paths, args.image_size,
-                                     preloaded=preloaded)
+                                     preloaded=preloaded, window=args.window)
     loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True,
                         num_workers=args.num_workers, drop_last=len(train_set) > args.batch_size)
 
@@ -227,7 +258,7 @@ def cross_validate(args):
     # and once as held-out.
     preloaded = {}
     for path in sorted({p for train, held in folds for p in train + held}):
-        preloaded[path] = lesion_slices(path, args.image_size)
+        preloaded[path] = lesion_slices(path, args.image_size, args.window)
     n_slices = sum(v[0].shape[0] for v in preloaded.values())
     log.info(f"{len(preloaded)} series, {n_slices} lesion slices, "
              f"{len({v[1] for v in preloaded.values()})} patients")
@@ -259,6 +290,7 @@ def cross_validate(args):
                          f"{args.epochs} epochs fixed in advance, last epoch scored",
             "aggregation": "mean cancer probability over a patient's lesion slices",
             "epochs": args.epochs, "image_size": args.image_size,
+            "window_native_px": args.window,
             "base_channels": args.base_channels, "lr": args.lr, "seed": args.seed,
         },
         "corpus": {
@@ -312,6 +344,7 @@ def _smoke_report(args):
         args.data_dir = tmp
         args.output_dir = os.path.join(DEFAULT_OUTPUT_DIR, "smoke_test")
         args.epochs = min(args.epochs, 2)
+        args.window = min(args.window, 48) or None
         args.bootstrap = min(args.bootstrap, 200)
         return cross_validate(args)
 
@@ -328,7 +361,10 @@ def build_arg_parser():
     p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--dropout", type=float, default=0.3)
     p.add_argument("--base-channels", type=int, default=16)
-    p.add_argument("--image-size", type=int, default=224)
+    p.add_argument("--image-size", type=int, default=256)
+    p.add_argument("--window", type=int, default=640,
+                   help="Field of view in native pixels, centred on the lesion. "
+                        "0 stretches the whole crop instead, as the first run did.")
     p.add_argument("--grad-clip", type=float, default=1.0)
     p.add_argument("--bootstrap", type=int, default=10000)
     p.add_argument("--seed", type=int, default=42)

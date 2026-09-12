@@ -1,0 +1,46 @@
+{
+  "task": "benign vs cancer on an annotated DBT lesion crop (step 2, image side)",
+  "not_a_detection_model": "the volume is cropped around the annotated box, so the lesion's location is given; nothing here measures finding one in a screening exam",
+  "protocol": {
+    "folds": 5,
+    "selection": "no checkpoint or epoch chosen on held-out patients; 25 epochs fixed in advance, last epoch scored",
+    "aggregation": "mean cancer probability over a patient's lesion slices",
+    "epochs": 25,
+    "image_size": 256,
+    "window_native_px": 640,
+    "base_channels": 16,
+    "lr": 0.0003,
+    "seed": 42
+  },
+  "corpus": {
+    "series": 253,
+    "lesion_slices": 1366,
+    "patients": 130,
+    "cancer_patients": 55,
+    "benign_patients": 75
+  },
+  "auc_patient": {
+    "auc": 0.5132121212121212,
+    "lo": 0.41121665104132915,
+    "hi": 0.6149460607507397,
+    "n": 130,
+    "n_positive": 55,
+    "n_usable": 10000
+  },
+  "operating_point_0.5": {
+    "threshold": 0.5,
+    "sensitivity": 0.2727272727272727,
+    "specificity": 0.7333333333333333,
+    "ppv": 0.42857142857142855,
+    "npv": 0.5789473684210527,
+    "accuracy": 0.5384615384615384,
+    "prevalence": 0.4230769230769231,
+    "counts": {
+      "tp": 15,
+      "fp": 20,
+      "tn": 55,
+      "fn": 40
+    }
+  },
+  "always_benign_accuracy": 0.5769230769230769
+}

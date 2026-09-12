@@ -28,14 +28,21 @@ from imaging.metrics import bootstrap_auc, operating_point, roc_auc
 
 
 def write_case(directory, patient, label, series=0, depth=6, size=32,
-               lesion_slices_count=2, with_label=True):
-    """One preprocessed-looking ``.npz``: a crop, a mask on a few slices, a label."""
+               lesion_slices_count=2, with_label=True, lesion_px=12):
+    """One preprocessed-looking ``.npz``: a crop, a mask on a few slices, a label.
+
+    The lesion is a bright square of ``lesion_px`` on a side, in the mask and in the
+    pixels alike, so a test can measure how big it comes out the other end.
+    """
     os.makedirs(directory, exist_ok=True)
     rng = np.random.default_rng(abs(hash((patient, series))) % 2**31)
     mask = np.zeros((depth, size, size), dtype=np.uint8)
-    mask[1:1 + lesion_slices_count, 8:20, 8:20] = 1
+    lo = (size - lesion_px) // 2
+    mask[1:1 + lesion_slices_count, lo:lo + lesion_px, lo:lo + lesion_px] = 1
+    volume = rng.standard_normal((depth, size, size)).astype(np.float32) * 0.1
+    volume[mask > 0] = 5.0
     arrays = {
-        "volume": rng.standard_normal((depth, size, size)).astype(np.float16),
+        "volume": volume.astype(np.float16),
         "mask": mask,
         "crop_offset": np.zeros(3, dtype=np.int32),
         "case_id": np.asarray(patient),
@@ -197,7 +204,7 @@ def test_an_unlabelled_corpus_still_folds_but_says_it_cannot_stratify(tmp_path):
 def test_only_lesion_bearing_slices_are_used(tmp_path):
     """The crop's other slices show the same region without the lesion in it."""
     path = write_case(str(tmp_path), "P1", 1, depth=6, lesion_slices_count=2)
-    images, patient, label = lesion_slices(path, image_size=16)
+    images, patient, label = lesion_slices(path, image_size=16, window=24)
 
     assert images.shape == (2, 16, 16)       # 2 of the 6 slices carry mask
     assert (patient, label) == ("P1", 1)
@@ -206,7 +213,7 @@ def test_only_lesion_bearing_slices_are_used(tmp_path):
 def test_a_volume_without_a_label_is_refused_by_name(tmp_path):
     path = write_case(str(tmp_path), "P1", 1, with_label=False)
     with pytest.raises(KeyError, match="label"):
-        lesion_slices(path, image_size=16)
+        lesion_slices(path, image_size=16, window=24)
 
 
 def test_a_patient_score_is_the_mean_over_its_slices(tmp_path):
@@ -214,7 +221,7 @@ def test_a_patient_score_is_the_mean_over_its_slices(tmp_path):
     write_case(str(tmp_path), "P1", 1, series=1, lesion_slices_count=1)
     write_case(str(tmp_path), "P2", 0, series=0, lesion_slices_count=2)
     paths = sorted(os.path.join(str(tmp_path), f) for f in os.listdir(str(tmp_path)))
-    dataset = LesionSliceDataset(paths, image_size=16)
+    dataset = LesionSliceDataset(paths, image_size=16, window=24)
 
     import torch
 
@@ -247,6 +254,7 @@ def test_the_whole_cross_validation_runs_and_reports_what_it_measured(tmp_path, 
     args.data_dir = data_dir
     args.output_dir = str(tmp_path / "out")
     args.folds, args.epochs, args.image_size, args.bootstrap = 2, 1, 16, 50
+    args.window = 24
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -259,3 +267,47 @@ def test_the_whole_cross_validation_runs_and_reports_what_it_measured(tmp_path, 
     assert "not_a_detection_model" in report
     assert os.path.exists(os.path.join(args.output_dir, "cv_report.json"))
     assert os.path.exists(os.path.join(args.output_dir, "cv_predictions.csv"))
+
+
+# --------------------------------------------------------------------------- #
+# The window: what the first measurement's resize threw away
+# --------------------------------------------------------------------------- #
+
+def bright_pixels(images, threshold=2.0):
+    """Area of the lesion as it reaches the model, in input pixels."""
+    return float((images[0].astype(np.float32) > threshold).sum())
+
+
+def test_a_bigger_lesion_stays_bigger_through_the_window(tmp_path):
+    """Lesion size is a malignancy cue, so it has to survive the preprocessing."""
+    small = write_case(str(tmp_path / "a"), "P1", 0, size=64, lesion_px=8)
+    big = write_case(str(tmp_path / "b"), "P2", 1, size=64, lesion_px=24)
+
+    small_img, _p, _l = lesion_slices(small, image_size=64, window=64)
+    big_img, _p, _l = lesion_slices(big, image_size=64, window=64)
+    assert bright_pixels(big_img) > 4 * bright_pixels(small_img)
+
+
+def test_stretching_the_crop_instead_makes_them_the_same_size(tmp_path):
+    """Why ``window`` exists: two crops of different size, one apparent lesion size.
+
+    The stored crop is tight around the box, so its own size tracks the lesion's --
+    and resizing every crop to the input erases exactly that.
+    """
+    small = write_case(str(tmp_path / "a"), "P1", 0, size=16, lesion_px=8)
+    big = write_case(str(tmp_path / "b"), "P2", 1, size=48, lesion_px=24)
+
+    small_img, _p, _l = lesion_slices(small, image_size=64, window=None)
+    big_img, _p, _l = lesion_slices(big, image_size=64, window=None)
+    ratio = bright_pixels(big_img) / bright_pixels(small_img)
+    assert 0.8 < ratio < 1.25            # indistinguishable, which is the problem
+
+
+def test_a_crop_smaller_than_the_window_is_padded_not_stretched(tmp_path):
+    path = write_case(str(tmp_path), "P1", 1, size=32, lesion_px=8)
+    images, _p, _l = lesion_slices(path, image_size=96, window=96)
+
+    assert images.shape == (2, 96, 96)
+    # The 32 px crop sits in the middle of a 96 px window: the border is padding.
+    assert np.allclose(images[0, :8, :8].astype(np.float32), 0.0)
+    assert bright_pixels(images) == pytest.approx(64, rel=0.3)   # the 8x8 lesion

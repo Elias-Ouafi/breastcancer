@@ -301,6 +301,30 @@ python -m imaging.sliceclf --slice-bank data/curated_data/slice_bank_p2 --epochs
 It is selected on top-1 accuracy — "is the volume's highest-scoring slice really
 lesion-bearing?" — the metric the segmentation confidence scored 0 on.
 
+#### Lesion classifier (benign vs cancer, step 2 from the image)
+
+`imaging.lesionclf` answers step 2's question — is this lesion benign or malignant? —
+from the DBT crops instead of from a cytology form, using the `label` that
+`preprocess_dbt_with_boxes` stores:
+
+```bash
+python -m imaging.lesionclf --data-dir data/preprocessed_data/dbt --folds 5
+```
+
+It is **not** a detection model: the volume is cropped around the annotated box, so
+the lesion's location is given. Nothing it reports says anything about finding a
+cancer in a screening exam — that is the separate exam-level head, which needs full
+frames and normal exams.
+
+It cross-validates instead of holding out one test split, because 130 patients split
+15 % leaves about 8 cancers in test and an interval that would cover nearly
+everything; the folds are stratified by class over patients, and every patient is
+scored once by a model that never saw it. No checkpoint or epoch is chosen on the
+held-out patients. Writes `models/lesionclf/cv_report.json` (patient ROC-AUC with a
+patient-bootstrap CI, plus sensitivity/specificity/PPV **and the prevalence they were
+measured at**) and `cv_predictions.csv` (one row per patient). Validate the loop with
+no dataset via `python -m imaging.lesionclf --smoke-test`.
+
 ### Histopathology (BreakHis)
 ```bash
 python ExtractBreakHis.py

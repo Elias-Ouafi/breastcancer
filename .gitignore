@@ -116,6 +116,16 @@ models/sliceclf/*
 !models/sliceclf/sliceclf_metrics.csv
 !models/sliceclf/sliceclf_test_metrics.json
 
+# Lesion classifier (imaging.lesionclf): the reports, not the checkpoint. The reports
+# are the evidence for a *negative* result (plan.md section 4.5) and are 5 KB; the
+# checkpoint is a model that does not separate the two classes, and versioning it
+# would invite someone to serve it.
+!models/lesionclf/
+models/lesionclf/*
+!models/lesionclf/cv_report.json
+!models/lesionclf/cv_report_stretched.json
+!models/lesionclf/cv_predictions.csv
+
 # The tabular model, flattened by tabular_export: 13 KB of JSON, and the only copy
 # that can be served without a JVM. Versioned for the same reason as the checkpoints
 # above -- /biopsie has to answer on a fresh clone, and refitting it needs Spark,
