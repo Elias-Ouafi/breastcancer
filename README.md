@@ -240,8 +240,15 @@ preprocess_dbt_with_boxes(
 python -m imaging.train --data-dir data/preprocessed_data/dbt --epochs 25
 ```
 
-Step 2 matches each downloaded series to its boxes by **PatientID + view**
-(laterality from `FrameLaterality` + `ViewPosition`, e.g. `lmlo`), z-normalises the
+Step 2 matches each downloaded series to its boxes by **PatientID + view**, where
+the view is `laterality + ViewPosition` (e.g. `lmlo`). The laterality is read **from
+the pixels** — whichever edge of the image carries signal — and not from the DICOM
+tag, which the dataset's own reader calls unreliable and which reads `L` on all 262
+downloaded series while the pixels give 134 right and 128 left. A study stored
+rotated relative to the frame its boxes live in is flipped, as that reader does; the
+manifest records which cases were. Matching on the tag found 147 of 253 annotated
+series and left 23 masks on background instead of tissue (plan.md §4.4). It then
+z-normalises the
 image, paints the box(es) into a binary mask with `create_mask`, crops to the lesion
 region of interest, and stores the real `PatientID` inside the `.npz` (as `case_id`).
 

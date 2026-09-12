@@ -1,15 +1,23 @@
-"""The DBT preprocessing has to keep benign and cancer apart.
+"""What ``preprocess_dbt_with_boxes`` has to get right: which box, and whose.
 
-``Class`` shipped with the BCS-DBT box annotations from the start and nothing read
-it, so both kinds of box were painted into one mask: of the 72 patients preprocessed
-that way, 48 were benign and 24 cancers, and "positive" meant "some lesion". These
-tests pin the three things that has to mean now -- the column is required, the class
-reaches the ``.npz``, and choosing which classes to paint does not change what the
-label says.
+Two bugs lived here, and both were silent. ``Class`` -- benign or cancer -- shipped
+with the annotations and nothing read it, so both kinds of box went into one mask and
+"positive" meant "some lesion": of the 72 patients preprocessed that way, 48 were
+benign. And the series was matched to its box by the DICOM laterality tag, which
+reads ``L`` on all 262 downloaded series: 147 of 253 annotated series were found, and
+23 masks were painted on background instead of tissue.
+
+So these tests pin, on the class: the column is required, it reaches the ``.npz``, and
+choosing which classes to paint does not change what the label says. And on the
+match: laterality is taken from the pixels, the tag is ignored even when it lies, a
+study stored rotated relative to its annotation frame is flipped rather than
+mismatched, and a series whose patient has nothing annotated at its view position is
+dropped without paying to decode it.
 
 Synthetic multi-frame DICOMs stand in for the real series: 22 GB of tomosynthesis is
 not needed to check bookkeeping, and a fake series makes the awkward cases (a mixed
-series, an unknown class) constructible, which real data does not.
+series, an unknown class, a mirrored study, a lying tag) constructible, which real
+data does not.
 """
 from __future__ import annotations
 
@@ -23,20 +31,37 @@ from pydicom.dataset import FileDataset, FileMetaDataset
 from pydicom.uid import ExplicitVRLittleEndian, generate_uid
 
 import validation
-from TransformData import preprocess_dbt_with_boxes, save_preprocessed
+from TransformData import (
+    dbt_series_view,
+    image_laterality,
+    preprocess_dbt_with_boxes,
+    save_preprocessed,
+)
 
 BOX_COLUMNS = ["PatientID", "StudyUID", "View", "Subject", "Slice",
                "X", "Y", "Width", "Height", "Class", "AD"]
 
 
-def write_series(root, series_dir, patient_id, view="rmlo", depth=8, size=64):
-    """One synthetic multi-frame DBT series, readable by ``pydicom.dcmread``."""
+def write_series(root, series_dir, patient_id, view="rmlo", depth=8, size=64,
+                 stored_laterality=None):
+    """One synthetic multi-frame DBT series, readable by ``pydicom.dcmread``.
+
+    The laterality is carried by the *pixels*, since that is what the matching reads:
+    the breast is painted on the side ``stored_laterality`` names, defaulting to the
+    side ``view`` implies. The DICOM tag is set to ``L`` whatever the pixels say --
+    which is exactly what the real collection does on all 262 series, and what these
+    tests need it to do.
+    """
     folder = os.path.join(root, series_dir)
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, "1-1.dcm")
 
     rng = np.random.default_rng(len(patient_id) + depth)
-    pixels = (rng.random((depth, size, size)) * 4000).astype(np.uint16)
+    pixels = rng.integers(0, 60, size=(depth, size, size), dtype=np.uint16)
+    laterality = (stored_laterality or view[0]).upper()
+    breast = slice(size // 2, size) if laterality == "R" else slice(0, size // 2)
+    pixels[:, :, breast] = rng.integers(2000, 4000, size=(depth, size, size // 2),
+                                        dtype=np.uint16)
 
     meta = FileMetaDataset()
     meta.TransferSyntaxUID = ExplicitVRLittleEndian
@@ -47,7 +72,7 @@ def write_series(root, series_dir, patient_id, view="rmlo", depth=8, size=64):
 
     ds = FileDataset(path, {}, file_meta=meta, preamble=b"\0" * 128)
     ds.PatientID = patient_id
-    ds.ImageLaterality = view[0].upper()      # 'r' -> 'R'
+    ds.ImageLaterality = "L"                  # wrong on purpose: so does the real data
     ds.ViewPosition = view[1:].upper()        # 'mlo' -> 'MLO'
     ds.Rows, ds.Columns, ds.NumberOfFrames = size, size, depth
     ds.SamplesPerPixel = 1
@@ -259,3 +284,104 @@ def test_the_manifest_separates_the_two_reasons_for_skipping(tmp_path, corpus):
     parameters = lineage.read_manifest(out)["parameters"]
     assert parameters["skipped_unannotated"] == 1   # DBT-P09999, not in the CSV
     assert parameters["skipped_unpainted"] == 1     # the benign patient
+
+
+# --------------------------------------------------------------------------- #
+# Which series a box belongs to
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("laterality", ["R", "L"])
+def test_laterality_comes_from_the_side_that_carries_signal(laterality):
+    frame = np.zeros((16, 16), dtype=np.uint16)
+    breast = slice(8, 16) if laterality == "R" else slice(0, 8)
+    frame[:, breast] = 3000
+    assert image_laterality(frame) == laterality
+
+
+def test_the_view_ignores_a_lying_laterality_tag(tmp_path):
+    """The real collection tags all 262 series 'L'; 134 of them are right breasts."""
+    import pydicom
+
+    folder = write_series(str(tmp_path), "s", "DBT-P1", view="rmlo")
+    ds = pydicom.dcmread(os.path.join(folder, "1-1.dcm"))
+    assert ds.ImageLaterality == "L"                     # the tag says left
+    assert dbt_series_view(ds, ds.pixel_array[0]) == "rmlo"   # the pixels say right
+
+
+def test_a_right_breast_series_gets_its_own_box_not_the_left_one(tmp_path):
+    """Nine series were matched to the other breast's box: same patient, both views."""
+    root = tmp_path / "tcia"
+    write_series(str(root), "series-right", "DBT-P00500", view="rmlo")
+    write_series(str(root), "series-left", "DBT-P00500", view="lmlo")
+    boxes = write_boxes(tmp_path / "both.csv", [
+        ("DBT-P00500", "rmlo", 3, "cancer"),
+        ("DBT-P00500", "lmlo", 4, "benign"),
+    ])
+    out = str(tmp_path / "out")
+
+    saved, skipped = preprocess_dbt_with_boxes(root_dir=str(root), boxes_csv=boxes,
+                                               output_dir=out)
+    assert (saved, skipped) == (2, 0)
+    # Each series took the box of its own side, so each carries its own class.
+    assert int(load(out, "series-right")["label"]) == 1
+    assert int(load(out, "series-left")["label"]) == 0
+
+
+def test_a_study_stored_rotated_is_flipped_rather_than_mismatched(tmp_path):
+    """Seven patients, left-only boxes, both series reading right by pixels."""
+    import lineage
+
+    root = tmp_path / "tcia"
+    # Pixels on the right, annotation on the left, and no right-side box anywhere.
+    write_series(str(root), "series-mirrored", "DBT-P02471", view="lmlo",
+                 stored_laterality="R")
+    boxes = write_boxes(tmp_path / "left_only.csv",
+                        [("DBT-P02471", "lmlo", 3, "cancer")])
+    out = str(tmp_path / "out")
+
+    saved, skipped = preprocess_dbt_with_boxes(root_dir=str(root), boxes_csv=boxes,
+                                               output_dir=out)
+    assert (saved, skipped) == (1, 0)
+    assert load(out, "series-mirrored")["mask"].sum() > 0
+
+    manifest = lineage.read_manifest(out)
+    assert manifest["parameters"]["mirrored_series"] == 1
+    assert manifest["cases"]["series-mirrored"]["mirrored"] is True
+
+
+def test_a_matched_series_is_not_recorded_as_mirrored(corpus):
+    import lineage
+
+    root, boxes, out = corpus
+    preprocess_dbt_with_boxes(root_dir=root, boxes_csv=boxes, output_dir=out)
+
+    manifest = lineage.read_manifest(out)
+    assert manifest["parameters"]["mirrored_series"] == 0
+    assert all(case["mirrored"] is False for case in manifest["cases"].values())
+
+
+def test_an_unannotated_view_position_is_dropped_without_decoding(tmp_path, monkeypatch):
+    """Pixels cost 7-17 s and ~100 MB per series; the header settles this one."""
+    import pydicom
+
+    root = tmp_path / "tcia"
+    write_series(str(root), "series-cc", "DBT-P00700", view="rcc")
+    write_series(str(root), "series-mlo", "DBT-P00700", view="rmlo")
+    # Annotated at the MLO position only.
+    boxes = write_boxes(tmp_path / "mlo_only.csv",
+                        [("DBT-P00700", "rmlo", 3, "cancer")])
+
+    real_dcmread = pydicom.dcmread
+    with_pixels = []
+
+    def counting_dcmread(path, *args, **kwargs):
+        if not kwargs.get("stop_before_pixels"):
+            with_pixels.append(str(path))
+        return real_dcmread(path, *args, **kwargs)
+
+    monkeypatch.setattr("TransformData.pydicom.dcmread", counting_dcmread)
+    saved, skipped = preprocess_dbt_with_boxes(root_dir=str(root), boxes_csv=boxes,
+                                               output_dir=str(tmp_path / "out"))
+
+    assert (saved, skipped) == (1, 1)
+    assert len(with_pixels) == 1 and "series-mlo" in with_pixels[0]

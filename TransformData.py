@@ -466,34 +466,73 @@ def delete_dicom_source(dicom_dir, npz_path):
         return False
 
 
-def dbt_series_view(ds):
-    """Return the BCS-DBT view key (e.g. ``'lmlo'``) for a DBT DICOM dataset.
+def dbt_view_position(ds):
+    """``'cc'`` or ``'mlo'`` from the header -- the half of the view key that holds.
 
-    Laterality lives either in the top-level ``ImageLaterality``/``Laterality`` tag
-    or, for multi-frame DBT, in
-    ``SharedFunctionalGroupsSequence -> FrameAnatomySequence -> FrameLaterality``.
-    Combined with ``ViewPosition`` (CC/MLO) this yields the ``l/r`` + ``cc/mlo`` key
-    used in the annotation boxes CSV.
+    ``ViewPosition`` is reliable in this collection; the laterality tags beside it are
+    not (see :func:`image_laterality`), so they are read from the pixels instead.
     """
-    lat = getattr(ds, "ImageLaterality", "") or getattr(ds, "Laterality", "")
-    if not lat:
-        sfg = getattr(ds, "SharedFunctionalGroupsSequence", None)
-        if sfg:
-            fas = getattr(sfg[0], "FrameAnatomySequence", None)
-            if fas:
-                lat = getattr(fas[0], "FrameLaterality", "")
-    view = getattr(ds, "ViewPosition", "")
-    return f"{lat}{view}".lower()
+    return str(getattr(ds, "ViewPosition", "")).lower()
 
 
-def _boxes_for_series(ds, boxes_df):
-    """Rows of ``boxes_df`` matching this DICOM's PatientID and view."""
-    patient = getattr(ds, "PatientID", None)
-    view = dbt_series_view(ds)
-    if patient is None or not view:
+def image_laterality(frame):
+    """``'R'`` or ``'L'`` for one DBT frame, decided by which edge carries signal.
+
+    A mammogram has the chest wall on one side and air on the other, so the edge
+    sums separate the two. This is how the dataset's own reader decides laterality
+    (``mazurowski-lab/duke-dbt-data``, ``duke_dbt_data.py``), whose helper for the
+    DICOM tag is labelled "Unreliable - DICOM laterality is incorrect for some cases".
+
+    Measured here, that understates it: the tag reads ``L`` on **all 262** downloaded
+    series, while the pixels give 134 R and 128 L. Trusting the tag matched 147 of 253
+    annotated series and pointed 23 masks at background instead of tissue -- the box
+    region averaged 86 with a peak-to-peak of 119 as painted, against 399 and 378
+    after the correction (the 124 correctly matched series read 416/467 as painted).
+    """
+    frame = np.asarray(frame)
+    return "R" if frame[:, 0].sum() < frame[:, -1].sum() else "L"
+
+
+def dbt_series_view(ds, frame):
+    """The BCS-DBT view key (e.g. ``'rmlo'``) for a DBT series: laterality + position.
+
+    ``frame`` is one slice of the volume; laterality comes from it rather than from
+    the header, for the reason spelled out in :func:`image_laterality`.
+    """
+    return f"{image_laterality(frame)}{dbt_view_position(ds)}".lower()
+
+
+def _candidate_boxes(boxes_df, patient, view_position):
+    """Box rows for this patient at this view position, **either** laterality.
+
+    This is the cheap half of the match: it needs no pixels, so a series whose
+    patient has nothing annotated at its view position is skipped before paying for
+    the decode. Which laterality applies is decided afterwards, from the pixels.
+    """
+    if patient is None or not view_position:
         return boxes_df.iloc[0:0]
     return boxes_df[(boxes_df["PatientID"] == patient)
-                    & (boxes_df["View"].str.lower() == view)]
+                    & (boxes_df["View"].str.lower().str[1:] == view_position)]
+
+
+def _select_boxes(candidates, view):
+    """Return ``(rows, mirrored)``: the boxes for ``view``, or the flip that gets them.
+
+    The boxes are annotated in the frame where the image laterality *matches the
+    view's* laterality. When a patient's only boxes at this view position are for the
+    other side, the study is stored rotated relative to that frame and the reference
+    reader flips the image (``np.flip(..., axis=(-1, -2))``, both in-plane axes) --
+    which is what ``mirrored`` asks the caller to do.
+
+    Measured on this corpus: 239 of 262 series match their own view directly, 14 need
+    the flip (7 patients, all with left-only boxes, both of whose series read right by
+    pixels -- so they are left studies stored rotated, not unannotated right ones),
+    and 9 have no box either way.
+    """
+    rows = candidates[candidates["View"].str.lower() == view]
+    if not rows.empty:
+        return rows, False
+    return candidates, not candidates.empty
 
 
 # The column that says what an annotated box actually is. It shipped with the
@@ -556,6 +595,13 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
     mask from the matching box rows by reusing :func:`create_mask`. Volumes are
     written as compressed ``.npz`` via :func:`save_preprocessed`.
 
+    **The view is read from the pixels.** Matching on the DICOM laterality tag, as
+    this did until 2026-09-12, reached 147 of the 253 annotated series -- the tag
+    reads ``L`` on all 262 downloaded series -- and left 23 masks sitting on
+    background instead of tissue. Laterality now comes from :func:`image_laterality`,
+    and a study stored rotated relative to its annotation frame is flipped, both as
+    the dataset's own reader does. :func:`_select_boxes` carries the counts.
+
     **The class is read, and it is stored.** ``Class`` says whether a box is a
     ``benign`` finding or a ``cancer``; for a long time nothing read it, so both were
     painted into one mask and a "positive" volume meant "some lesion" -- on the 72
@@ -612,7 +658,7 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
 
     saved, skipped, summary = 0, 0, {}
     saved_by_class = {name: 0 for name in validation.LESION_CLASSES}
-    skipped_unannotated, skipped_unpainted = 0, 0
+    skipped_unannotated, skipped_unpainted, mirrored_count = 0, 0, 0
     for name in sorted(os.listdir(root_dir)):
         folder = os.path.join(root_dir, name)
         if not os.path.isdir(folder):
@@ -621,14 +667,36 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
         if not dcm_files:
             continue
 
-        # The header carries PatientID and view, which is all the box match needs --
-        # and the match is what decides whether this series is wanted at all. Reading
-        # the pixels first meant decoding every unannotated series (7-17 s and ~100 MB
-        # each on the real collection, 115 of 262 series) only to drop it.
+        # The header gives PatientID and the view position, which is enough to know
+        # whether this patient has anything annotated at this position -- on either
+        # side. Deciding that before decoding matters: the pixels cost 7-17 s and
+        # ~100 MB per series on the real collection. Which laterality applies needs
+        # the pixels, so it is settled after the decode, below.
         path = os.path.join(folder, dcm_files[0])
         ds = pydicom.dcmread(path, stop_before_pixels=True)
+        patient = getattr(ds, "PatientID", None)
+        candidates = _candidate_boxes(boxes, patient, dbt_view_position(ds))
+        if skip_empty and candidates.empty:
+            skipped += 1
+            skipped_unannotated += 1
+            continue
 
-        rows = _boxes_for_series(ds, boxes)
+        volume = pydicom.dcmread(path).pixel_array.astype(np.float32)
+        if volume.ndim == 2:
+            volume = volume[None]  # (1, rows, cols)
+
+        view = dbt_series_view(ds, volume[0])
+        rows, mirrored = _select_boxes(candidates, view)
+        if mirrored:
+            # The stored study is rotated relative to the frame its boxes live in.
+            # The volume is flipped rather than the coordinates, so everything after
+            # this point -- mask, crop offset, what lands in the .npz -- is in one
+            # single frame, the one the annotation uses.
+            volume = np.flip(volume, axis=(-1, -2))
+            log.info(f"[DBT] {name}: image laterality {view[0]!r} against "
+                     f"{sorted(set(candidates['View'].str.lower()))} boxes; "
+                     "reading it as a mirrored study (180 deg, as the reference does).")
+
         present = tuple(sorted(set(rows[BOX_CLASS_COLUMN]))) if len(rows) else ()
         # Any cancer box makes the exam a cancer exam: at the level the decision is
         # taken, one missed cancer is not offset by a correctly called benign.
@@ -640,15 +708,8 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
         painted = rows[rows[BOX_CLASS_COLUMN].isin(mask_classes)]
         if skip_empty and painted.empty:
             skipped += 1
-            if present:
-                skipped_unpainted += 1
-            else:
-                skipped_unannotated += 1
+            skipped_unpainted += 1
             continue
-
-        volume = pydicom.dcmread(path).pixel_array.astype(np.float32)
-        if volume.ndim == 2:
-            volume = volume[None]  # (1, rows, cols)
 
         mask = np.zeros(volume.shape, dtype=np.uint8)
         for _, r in painted.iterrows():
@@ -672,9 +733,14 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
 
         volume = normalize_intensity(volume)
         save_preprocessed(name, volume, mask, output_dir, crop=crop,
-                          case_id=getattr(ds, "PatientID", name),
+                          case_id=patient if patient is not None else name,
                           lesion_class=lesion_class, summary=summary)
+        # Provenance of the geometry, not a property of the volume: the manifest is
+        # where a reader asks how a case was built.
+        if name in summary:
+            summary[name]["mirrored"] = bool(mirrored)
         saved += 1
+        mirrored_count += int(mirrored)
         if lesion_class is not None:
             saved_by_class[lesion_class] += 1
         log.info(f"[DBT] {name}: {len(painted)}/{len(rows)} box(es) painted, "
@@ -694,6 +760,7 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
             "skip_empty": skip_empty,
             "mask_classes": list(mask_classes),
             "saved_by_class": saved_by_class,
+            "mirrored_series": mirrored_count,
             "skipped_unannotated": skipped_unannotated,
             "skipped_unpainted": skipped_unpainted,
         },
@@ -702,7 +769,8 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
     )
 
     log.info(f"[DBT] Saved {saved} series "
-             f"({saved_by_class['cancer']} cancer, {saved_by_class['benign']} benign), "
+             f"({saved_by_class['cancer']} cancer, {saved_by_class['benign']} benign, "
+             f"{mirrored_count} read as mirrored), "
              f"skipped {skipped} ({skipped_unannotated} without any box, "
              f"{skipped_unpainted} annotated but empty for classes {list(mask_classes)}).")
     return saved, skipped

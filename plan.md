@@ -146,10 +146,10 @@ DICOM à décoder.
 
 - **5 séries sur 147 ont un volume constant après recadrage** (`validation` les
   signale : « nothing to learn from this series »), chez 3 patients — DBT-P00538
-  (cancer, **ses deux séries**, donc ce patient ne contribue rien d'exploitable, sur
-  24 cancers), DBT-P03677 (bénin, 2 séries), DBT-P02919 (bénin, 1). Le masque y
-  couvre pourtant 38 000 à 800 000 voxels : la boîte désigne une zone uniforme. Cause
-  non établie — convention de coordonnées, ou boîte hors du tissu. **Ouvert.**
+  (cancer, **ses deux séries**), DBT-P03677 (bénin, 2 séries), DBT-P02919 (bénin, 1).
+  Le masque y couvre pourtant 38 000 à 800 000 voxels : la boîte désigne une zone
+  uniforme. **Élucidé le même jour, et c'était plus large que ces 5 séries : voir
+  §4.4.** Le masque était posé sur le mauvais sein.
 - **Une trame complète DBT pèse ~745 Mo en float16** (2457×1890 à 1996, 47 à 100
   coupes). Le corpus recadré tient en 0,55 Go, médiane 37×252×253. Conséquence
   directe pour la tête de décision : un volume recadré sur la lésion **présuppose la
@@ -283,6 +283,7 @@ le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 
 | Tâche | Où | Ce qui la rend faite |
 |---|---|---|
+| P1 — apparier les boîtes par la latéralité des pixels, pas par le tag DICOM | `TransformData.py` (`image_laterality`, `dbt_view_position`, `dbt_series_view`, `_candidate_boxes`, `_select_boxes`, `preprocess_dbt_with_boxes`), `tests/test_dbt_preprocessing.py` | Le tag lit `L` sur les 262 séries ; les pixels donnent 134 R / 128 L. L'appariement trouvait 147 séries annotées sur 253 et posait 23 masques sur du fond. Corrigé selon la sémantique du lecteur officiel du jeu de données, avec les deux cas distingués par la mesure et non par choix (9 mal appariées, 14 études stockées en miroir). Vérifié sur 11 séries réelles couvrant chaque cas avant relance, 0 avertissement de validation contre 2. Détail et chiffres : §4.4 |
 | P1 — lire la colonne `Class` des CSV de boîtes | `validation.py` (`LESION_CLASSES`, `lesion_class_label`), `TransformData.py` (`_read_boxes`, `save_preprocessed`, `preprocess_dbt_with_boxes`), `README.md` | Chaque `.npz` porte `lesion_class` (`benign`/`cancer`) et un `label` 0/1 ; le masque reste binaire, parce que la classe n'est pas peignable — une lésion bénigne peint les mêmes pixels qu'un cancer. `Class` est **exigée** (un CSV sans elle est refusé, pas traité comme une classe unique) et une valeur inconnue est refusée. `mask_classes` choisit ce qui est peint sans changer ce que dit l'étiquette ; par défaut les deux, les bénins étant deux tiers du corpus annoté. Étiquette d'examen : toute boîte cancer ⇒ examen cancer, mélange journalisé (jamais rencontré : 82 patients bénins purs, 59 cancers purs). Corpus reconstruit et **mesuré sur les fichiers** : 147 séries, 0 sans étiquette, 100 bénignes / 47 cancers, 72 patients (48 / 24), aucun patient mélangé, 0,55 Go, 27 à 53 min par passe. Manifeste vérifié : 147 cas, un par fichier, révision `cdde11e`, 5 avertissements. 16 tests sur DICOM synthétiques, dont les cas que la vraie donnée ne fournit pas (série mélangée, classe inconnue, colonne absente) |
 | P0 — corriger les affirmations que le code contredit | `app/templates/result.html`, `app/templates/biopsy.html`, `app/templates/base.html`, `app/predictor.py`, `inference.py`, `app/README.md` | Trois affirmations retirées de l'écran. (1) La pastille « Confiance 100 % » et sa jauge remplie : `best_conf` est un maximum de probabilité **par pixel**, constant à 1,0000, pas un score d'examen — la valeur reste lisible dans le détail technique sous le nom « Probabilité max. par pixel (non calibrée) », et le panneau de limites dit que le verdict lui-même est constant (28/28 patients, 160/160 coupes). (2) La carte de `/biopsie` annonçait une mesure « sur 20 % des 569 cas tenus à l'écart de l'entraînement » : le modèle servi est ajusté sur 569/569 sans découpage, et les 97,7 % / 99,8 % décrivaient un autre modèle — aucun chiffre n'est plus affiché, l'absence de mesure hors échantillon est écrite. (3) `/biopsie` empruntait les pastilles Dice / sensibilité / faux positifs du modèle d'imagerie, sous un texte disant que ce modèle ne lit pas d'image : elles sont passées dans un bloc `limits_numbers` que la page neutralise. Vérifié dans l'app réelle (backend `dce_mri`, cas de démo 1 : coupe 52/176, probabilité par pixel 1,0000) et gardé par 9 tests de rendu (`tests/test_result_page_claims.py`) — 125 tests au total, ruff propre |
 
@@ -334,7 +335,7 @@ documentation, pas de code, et se décident une par une. Ce qu'un utilisateur vo
 | « mesurée sur 20 % des 569 cas **tenus à l'écart de l'entraînement** » — le modèle servi est ajusté sur 569/569, sans split. Les 97,67 % viennent d'un autre modèle, celui d'`AnalyzeData` | `app/templates/biopsy.html` vs `train_tabular_model.py` (`pipeline.fit(labelled)`) | Corrigé le 2026-09-12 |
 | Parité annoncée « sur les 569 lignes, écart max 1 × 10⁻¹⁵ » ; le test compare **5 lignes** à 1e-9, et le dit dans son propre commentaire | `plan.md`, docstring `inference.predict_tabular` vs `tests/test_tabular_export.py` | Ouvert |
 | Les métriques tabulaires renvoient à `reports/model_results.csv`, **absent du disque** — comme `pca_info.csv`, `feature_contributions.csv`, `scree_plot.png` | `Final_Report.md` | Ouvert |
-| « 87 tests, ~7 s » ; il y en a **147**, tous passants (116 à l'audit, plus 9 pour le P0, 16 pour la colonne `Class` et 6 pour le split stratifié) | `README.md` §Development | Ouvert |
+| « 87 tests, ~7 s » ; il y en a **154**, tous passants (116 à l'audit, plus 9 pour le P0, 16 pour la colonne `Class`, 6 pour le split stratifié et 7 pour l'appariement) | `README.md` §Development | Ouvert |
 | « 0,76 s par volume, 4,5 ms par coupe » ; l'artefact dit **0,825 s** et **4,83 ms** | `plan.md` §4.3 et `DEMO.md` vs `eval_report.json` | Ouvert |
 | « temps de calcul ~110 ms » ; mesuré 69-73 ms à chaud, 585 ms au premier appel | `README.md`, `DEMO.md` | Ouvert |
 | Checkpoint par défaut documenté `results_mri_p2/unet_best.pt` ; c'est `models/dce_mri_p2_negfix/unet_best.pt` | docstring `inference.predict_dce_mri` | Ouvert |
@@ -733,3 +734,69 @@ honnête et utile, contrairement à un top-1 à 43 % présenté comme une répon
 faible pour une tâche de tri), exploiter le contexte 3D (une lésion s'étend sur plusieurs coupes
 consécutives — un modèle 2,5D avec ±2 coupes en entrée est peu coûteux), et calibrer sur la
 validation plutôt que de prendre l'arg-max brut.
+
+### 4.4 Appariement boîte ↔ série DBT : le tag DICOM de latéralité est faux (2026-09-12)
+
+Parti d'un détail — 5 séries sur 147 au volume constant après recadrage (§ ci-dessus) —
+et arrivé à un défaut qui touchait l'ensemble du corpus DBT.
+
+**Ce que dit la source.** Le lecteur officiel du jeu de données
+(`mazurowski-lab/duke-dbt-data`, `duke_dbt_data.py`, récupéré via
+`raw.githubusercontent.com`) déduit la latéralité **des pixels** — quel bord porte du
+signal — et documente son propre accès au tag DICOM par
+« *Unreliable - DICOM laterality is incorrect for some cases* ». Il retourne ensuite
+l'image de 180° (`np.flip(..., axis=(-1, -2))`) quand la latéralité de l'image ne
+correspond pas à celle de la vue annotée, parce que les boîtes vivent dans ce
+repère-là. Notre `dbt_series_view` appariait **par ce tag**, et ne retournait jamais rien.
+
+**Ce que ça coûtait, mesuré sur nos 262 séries** (décodage complet, 23 min) :
+
+| | |
+|---|---:|
+| Latéralité par le tag DICOM | `L` sur les **262** séries — constante, donc fausse |
+| Latéralité par les pixels | R 134 / L 128 |
+| Groupes boîte (patient + vue) jamais appariés, patient présent sur disque | **123 / 260** dont 58 `rmlo`, 54 `rcc` |
+| Séries annotées trouvées | **147** au lieu de 253 |
+| Masques posés sur du fond au lieu du tissu | **23 / 147** |
+
+Le test décisif est l'intensité dans la boîte : sur les 124 séries concordantes, la
+région annotée fait 416 de moyenne et 467 d'étendue (du tissu) et le retournement
+l'enverrait à 90 / 155 (du fond) ; sur les 23 discordantes **c'est exactement
+l'inverse** — 86 / 119 telles que peintes, 399 / 378 après correction. Les 5 volumes
+constants sont tous dans ce lot.
+
+**Les 23 se séparent en deux cas, et la distinction est tranchée par les données, pas
+choisie.** 9 séries ont une boîte pour la vue déduite des pixels : ce sont des séries
+droites appariées à la boîte gauche du même patient, et la correction est d'apparier
+la bonne. Les 14 autres appartiennent à **7 patients dont toutes les boîtes sont
+gauches** (`lcc`, `lmlo`), qui ont exactement 2 séries sur disque (cc et mlo) et dont
+**les deux lisent « droite » en pixels** — zéro boîte droite. Ce sont donc des études
+du sein gauche stockées en miroir, le cas que le lecteur officiel traite par le
+retournement. L'hypothèse concurrente — séries droites non annotées, séries gauches
+non téléchargées — demanderait que le téléchargement ait pris les 2 séries sans
+annotation et laissé les 2 annotées, pour 7 patients indépendants, alors que la liste
+de patients est justement construite depuis le CSV de boîtes.
+
+**Décision.** La latéralité vient des pixels (`image_laterality`), l'incidence du
+header (`dbt_view_position` — `ViewPosition` est fiable), et une étude stockée en
+miroir est retournée plutôt que mal appariée. C'est la sémantique du lecteur officiel,
+reconstruite sans `BCS-DBT-file-paths-*.csv` — qui donnerait l'appariement
+série ↔ boîte de façon autoritative, et qui est sur l'hôte injoignable. Le retournement
+est appliqué au **volume** et non aux coordonnées, pour que masque, `crop_offset` et
+`.npz` soient tous dans un seul repère, celui de l'annotation. Le manifeste porte
+`mirrored` par cas et `mirrored_series` au total : c'est une propriété de la
+construction du cas, pas du volume.
+
+**Vérifié sur les vraies données avant de relancer**, sur 11 séries choisies pour
+couvrir chaque cas (2 miroirs, 2 séries droites jusque-là invisibles, les 4 séries de
+DBT-P00538, 1 déjà correcte, 2 sans annotation) : 9 sauvées, 2 miroirs, 2 ignorées —
+conforme à la prédiction, et **0 avertissement de validation** là où le même
+échantillon en produisait 2. Les deux séries de DBT-P00538 sortent désormais avec
+173 830 et 38 025 voxels de lésion sur du tissu, classées `cancer`.
+
+**Ce qui reste ouvert ici.** 12 lignes de boîtes portent une vue suffixée (`lmlo1`,
+`rmlo1`, `lcc1`, `lcc2`, `rcc1`) qu'aucune de nos séries ne peut réclamer sans savoir
+laquelle des acquisitions répétées elle est ; elles restent non appariées. Et
+`inference.load_dbt_dicom` ne normalise aucune latéralité : si un modèle DBT est
+réentraîné sur ce corpus, l'inférence devra appliquer la même règle, sinon une moitié
+des examens arrivera dans le mauvais repère.
