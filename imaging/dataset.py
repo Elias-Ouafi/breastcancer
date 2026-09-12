@@ -156,6 +156,61 @@ def split_npz_by_patient(data_dir, val_frac=0.15, test_frac=0.15, seed=42,
     return train, val, test
 
 
+def kfold_by_patient(data_dir, n_splits=5, seed=42, patient_key=default_patient_key,
+                     patient_label=default_patient_label):
+    """Yield ``(train_paths, heldout_paths)`` for each of ``n_splits`` folds.
+
+    Folds are built over *patients* and, when the corpus carries exam-level labels,
+    **within each class**, so every fold holds roughly the corpus prevalence. Every
+    patient is held out exactly once, so the pooled out-of-fold predictions cover the
+    whole corpus -- which is the point of using cross-validation here rather than one
+    split. On 130 patients a single 15 % test split leaves ~20 patients and ~8
+    cancers, an interval so wide that any result would be compatible with chance;
+    pooling folds evaluates all 130 while never scoring a patient with a model that
+    saw it.
+
+    It buys coverage, not independence: the folds share a corpus, a preprocessing and
+    a hyper-parameter choice, so the interval it supports is narrower than a fresh
+    external test set would give, and nothing here replaces one.
+    """
+    paths = sorted(glob(os.path.join(data_dir, "*.npz")))
+    if not paths:
+        raise FileNotFoundError(f"No .npz files found in {data_dir!r}.")
+    if n_splits < 2:
+        raise ValueError(f"n_splits must be at least 2; got {n_splits}")
+
+    groups = OrderedDict()
+    for p in paths:
+        groups.setdefault(patient_key(p), []).append(p)
+    if len(groups) < n_splits:
+        raise ValueError(f"{len(groups)} patients cannot make {n_splits} folds")
+
+    labels = _patient_labels(groups, patient_label)
+    rng = np.random.default_rng(seed)
+
+    # Deal each class round-robin into the folds: the largest and smallest fold then
+    # differ by at most one patient of each class, which no random assignment
+    # guarantees on a class of 55 against one of 75.
+    folds = [[] for _ in range(n_splits)]
+    classes = [None] if labels is None else sorted(set(labels.values()))
+    for offset, value in enumerate(classes):
+        keys = ([k for k in groups] if labels is None
+                else [k for k in groups if labels[k] == value])
+        keys = list(keys)
+        rng.shuffle(keys)
+        for i, key in enumerate(keys):
+            folds[(i + offset) % n_splits].append(key)
+
+    for i in range(n_splits):
+        heldout_keys = set(folds[i])
+        heldout = [p for k in folds[i] for p in groups[k]]
+        train = [p for k in groups if k not in heldout_keys for p in groups[k]]
+        if not heldout or not train:
+            warnings.warn(f"Fold {i} is degenerate: "
+                          f"{len(heldout)} held-out and {len(train)} training files.")
+        yield train, heldout
+
+
 def _gamma_jitter(img, rng, gamma_range=(0.8, 1.25)):
     """Apply a random monotonic gamma curve to intensities, mask untouched.
 
