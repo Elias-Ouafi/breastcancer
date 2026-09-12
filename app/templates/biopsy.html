@@ -21,6 +21,13 @@
     prélèvement, ni le cytopathologiste qui produit ces mesures.</p>
 {% endblock %}
 
+{# Les pastilles de base.html (Dice, sensibilité lésion, faux positifs par volume)
+   décrivent le modèle d'imagerie. Affichées ici, sous un texte qui dit « ce modèle ne
+   lit pas d'image », elles se lisaient comme les performances du modèle servi sur cette
+   page. Celui-ci n'a aucune mesure hors échantillon à afficher (voir la carte « Ce que
+   vaut ce chiffre ») : donc aucune pastille, plutôt que celles d'un autre modèle. #}
+{% block limits_numbers %}{% endblock %}
+
 {% block side %}
   {% if result %}
     <div class="card elev-sm" style="background: {{ 'var(--color-accent-100)' if malignant else 'var(--color-ok-100)' }};
@@ -51,16 +58,26 @@
     </div>
 
     <div class="card elev-sm">
+      {# Cette carte annonçait « mesurée sur 20 % des 569 cas tenus à l'écart de
+         l'entraînement », avec 97,7 % et 99,8 %. Le modèle servi ici est ajusté sur
+         569/569 sans découpage (`train_tabular_model.py`, `pipeline.fit(labelled)`) et
+         ne persiste aucune métrique ; les deux chiffres venaient d'un autre modèle,
+         celui d'`AnalyzeData`, dont le préprocessing est ajusté avant le split. Aucun
+         nombre n'est donc affiché : un chiffre in-sample lu comme une performance est
+         pire que pas de chiffre. #}
       <div class="card-kicker">Ce que vaut ce chiffre</div>
       <p class="card-body" style="opacity: 1;">
-        Régression logistique sur 10 composantes principales, mesurée sur 20 % des
-        569 cas de la base Wisconsin tenus à l'écart de l'entraînement :
-        <strong>97,7 % d'exactitude</strong>, ROC-AUC <strong>99,8 %</strong>.
-        Un test de 114 cas — l'intervalle de confiance est large, et cette base est
-        ancienne, propre et non représentative d'un flux clinique réel.
+        Régression logistique sur 10 composantes principales, ajustée sur
+        <strong>les 569 cas</strong> de la base Wisconsin — la totalité, sans jeu de test
+        tenu à l'écart. Ce modèle-ci n'a donc <strong>aucune performance hors échantillon
+        mesurée</strong> : les taux d'exactitude et de ROC-AUC cités ailleurs dans le
+        dépôt décrivent un autre modèle, entraîné à part, et son préprocessing a été
+        ajusté avant le découpage — ce qui les rend optimistes. Lui donner sa propre
+        mesure est une tâche ouverte.
         La probabilité affichée sature aux deux extrêmes : les classes y sont presque
         linéairement séparables, donc elle sépare bien mais ne se lit pas comme un
-        degré de certitude calibré.
+        degré de certitude calibré. Cette base est par ailleurs ancienne, propre et non
+        représentative d'un flux clinique réel.
       </p>
     </div>
   {% else %}

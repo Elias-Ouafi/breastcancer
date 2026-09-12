@@ -8,7 +8,8 @@ without re-running the batch training scripts:
   predicted diagnosis and, for the logistic model, a malignancy probability.
 * :func:`predict_dbt` — runs the trained 2D U-Net (``models/dbt/unet_best.pt``) over
   a preprocessed DBT ``.npz`` volume (or a raw volume array) and returns the localised
-  lesion: best slice, bounding box, and a detection confidence.
+  lesion: best slice, bounding box, and the max per-pixel lesion probability -- which
+  is not a calibrated detection score, see :func:`_localize_lesion`.
 
 Neither entry point retrains anything; both load saved artefacts, and neither needs
 a JVM: the tabular path reads the flattened export written by ``tabular_export``
@@ -334,6 +335,12 @@ def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_off
         # detection -- the limitation is documented, so it should also be visible.
         "slice_preselected": forced_slice is not None,
         "slice_selector": selector,
+        # Max per-pixel lesion probability on the winning slice. NOT an exam-level
+        # detection score: with the served DCE-MRI checkpoint it is 1.0000 on 28/28
+        # test patients and on 160/160 slices of Breast_MRI_001 -- 136 of which hold
+        # no lesion -- so ``lesion_detected`` above is a constant, and the UI reports
+        # this value under its own name rather than as a "confidence". An exam-level
+        # decision head is tracked in plan.md.
         "confidence": best_conf,
         "best_slice": best_slice + crop_offset[0],
         "box_xywh": box,

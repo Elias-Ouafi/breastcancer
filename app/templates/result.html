@@ -33,22 +33,37 @@
       Cette méthode <strong>ne fonctionne pas</strong> (0/186 sur les patients de test) :
       la localisation affichée n'a pas de valeur.</p>
   {% endif %}
+
+  {% if backend != "mock" %}
+    {# Le verdict binaire vient de `best_conf >= 0.5`, et `best_conf` est saturé. Tant
+       qu'aucune tête de décision d'examen n'existe, l'écran doit le dire : sinon le
+       lecteur prend une constante pour un résultat. #}
+    <p class="limits-lead" style="margin-top: var(--space-2);">
+      Le verdict lui-même n'est pas une détection mesurée : la sortie du modèle est
+      <strong>constante</strong> sur les données de test — « suspect » sur 28/28 patients
+      et sur 160/160 coupes, y compris celles sans lésion. Il n'y a donc ni sensibilité
+      ni spécificité au niveau de l'examen à afficher ici.</p>
+  {% endif %}
 {% endblock %}
 
 {% block side %}
   <!-- Le verdict réel du modèle, réduit à ce qui se lit d'un coup d'œil : l'état,
-       la confiance, le temps. Le reste est dans le dépliant technique. -->
+       la coupe, le temps. Le reste est dans le dépliant technique. -->
   <div class="card elev-sm" style="background: {{ 'var(--color-accent-100)' if detected else 'var(--color-ok-100)' }};
                                    border-left: 3px solid {{ verdict_color }};">
     <div class="card-kicker" style="color: {{ verdict_color }};">Résultat</div>
     <div class="card-title" style="color: {{ verdict_color }}; font-size: 16px;">
       {{ 'Zone de réhaussement suspecte' if detected else 'Aucune zone suspecte détectée' }}
     </div>
-    <div style="height: 6px; background: var(--color-neutral-300); overflow: hidden;">
-      <div style="height: 100%; width: {{ result.confidence * 100 }}%; background: {{ verdict_color }};"></div>
-    </div>
+    {# `result.confidence` n'est pas une confiance de détection : c'est le maximum de
+       probabilité par pixel sur la coupe retenue, et avec le checkpoint servi il vaut
+       1,0000 partout — 28/28 patients du split test, 160/160 coupes de Breast_MRI_001
+       dont les 136 sans lésion. Affiché en « Confiance 100 % », il donnait à une
+       constante l'apparence d'une mesure, et sa jauge remplie l'apparence d'une
+       certitude. La valeur brute reste dans le détail technique, sous son vrai nom ;
+       un score au niveau de l'examen est à construire (plan.md, « Tête de décision au
+       niveau examen »). #}
     <div class="metrics" style="margin-top: 0;">
-      <span class="metric">Confiance <b>{{ '%.0f'|format(result.confidence * 100) }} %</b></span>
       {% if result.best_slice is not none %}
         <span class="metric">Coupe <b>{{ result.best_slice }}{% if result.n_slices %}/{{ result.n_slices }}{% endif %}</b></span>
       {% endif %}
@@ -83,6 +98,12 @@
                       'segmentation_confidence': 'confiance de segmentation'}
                      .get(result.slice_selector,
                           'imposée (cas de démo)' if result.slice_preselected else 'balayage du volume') }}</td></tr>
+        {% endif %}
+        {% if backend != "mock" and result.confidence is not none %}
+          {# Sous son vrai nom : un maximum de probabilité par pixel, pas un score
+             d'examen. Il sature à 1,0000 — c'est justement ce qu'il faut pouvoir lire. #}
+          <tr><td class="text-muted">Probabilité max. par pixel (non calibrée)</td>
+              <td>{{ ('%.4f'|format(result.confidence))|replace('.', ',') }}</td></tr>
         {% endif %}
         {% if result.box_xywh %}
           <tr><td class="text-muted">Cadre (x, y, l, h)</td><td>{{ result.box_xywh|join(', ') }}</td></tr>
@@ -162,7 +183,7 @@
       {% endif %}
     </div>
     <p class="text-muted" style="font-size: 11px; margin: var(--space-2) 0 0;">
-      Cadre = zone de plus forte confiance. Image recadrée pour la lisibilité.
+      Cadre = zone de plus forte probabilité par pixel. Image recadrée pour la lisibilité.
     </p>
     </div>
   {% endif %}

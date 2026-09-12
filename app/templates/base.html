@@ -389,6 +389,10 @@
                 fixée à l'avance ; un autre volume ne donnera pas un résultat fiable.</p>
             {% endblock %}
 
+            {# Ces trois chiffres sont ceux du modèle d'imagerie. Un écran qui sert un
+               autre modèle les remplace ou les retire — sinon ils se lisent comme les
+               siens (cf. biopsy.html). #}
+            {% block limits_numbers %}
             <div class="metrics">
               <span class="metric" title="Dice sur 28 patients de test, IC95 0,47–0,59">Dice <b>0,53</b></span>
               <span class="metric" title="Lésion trouvée une fois la bonne coupe montrée, IC95 82–93">Sensibilité <b>88 %</b></span>
@@ -407,6 +411,7 @@
                   test, jamais une performance clinique.</li>
               </ul>
             </details>
+            {% endblock %}
           </div>
 
           {% block how_link %}

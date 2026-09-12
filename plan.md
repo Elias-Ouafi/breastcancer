@@ -99,8 +99,10 @@ Mesuré dans ce dépôt, pas repris de la documentation.
 `inference._localize_lesion` décide par `best_conf >= 0.5`, et `best_conf` vaut
 **1,0000** partout : 28/28 patients du split test, et 160/160 coupes de
 `Breast_MRI_001` dont les 136 sans lésion (moyenne 1,0000, minimum 1,0000). La sortie
-binaire est une constante, et l'app l'affiche comme « Confiance 100 % ». La branche
-« aucune zone suspecte » des gabarits est inatteignable.
+binaire est une constante. L'app l'affichait en « Confiance 100 % », jauge remplie :
+elle ne l'affiche plus depuis le 2026-09-12 (voir Livrés), et la valeur brute
+n'apparaît plus que dans le détail technique, nommée pour ce qu'elle est. La branche
+« aucune zone suspecte » des gabarits reste inatteignable avec ce checkpoint.
 
 **Ce qui reste valide, et qui relève de la localisation** (28 patients test, IC 95 %
 bootstrap par patient, `models/dce_mri_p2_negfix/eval_report.json`) : Dice 0,533
@@ -235,7 +237,6 @@ le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 
 | Priorité | Tâche | Critère de « fait » |
 |---|---|---|
-| P0 | Corriger les affirmations que le code contredit | L'app n'affiche plus « Confiance 100 % » pour une constante ; `biopsy.html` ne dit plus que le modèle servi a été mesuré hors échantillon (il est ajusté sur 569/569) |
 | P1 | Corpus DBT à deux classes, d'une seule source | Le filtre « patients annotés » de `download_annotated_dbt_series` est levé, des normaux sont téléchargés, l'étiquette patient est cancer / non-cancer, et le split par patient conserve la prévalence |
 | P1 | Lire la colonne `Class` des CSV de boîtes | `preprocess_dbt_with_boxes` distingue `cancer` de `benign` au lieu de peindre les deux dans le même masque (aujourd'hui : 48 bénins / 24 cancers sur les 72 patients prétraités) |
 | P1 | Tête de décision au niveau examen | Une probabilité par patient — pas une agrégation « une coupe s'allume », dont le §« Cible chiffrée » montre qu'elle exige 99,94 % de spécificité par coupe. **ROC-AUC patient avec IC bootstrap par patient** dans `eval_report.json` |
@@ -250,6 +251,12 @@ le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 | P3 | Exécuter le lineage sur le corpus | Aucun `manifest.json` n'existe sous `data/preprocessed_data/` : le code est écrit et testé, jamais passé sur les données réelles |
 | P3 | Registre de traitement RGPD | Une page : base légale, nature des données, finalité, conservation, sécurité |
 | P3 | Nom de produit + logo | Choisi et intégré au header de l'app |
+
+**Livré** (branche `ameliore-le-mvp`, le 2026-09-12) :
+
+| Tâche | Où | Ce qui la rend faite |
+|---|---|---|
+| P0 — corriger les affirmations que le code contredit | `app/templates/result.html`, `app/templates/biopsy.html`, `app/templates/base.html`, `app/predictor.py`, `inference.py`, `app/README.md` | Trois affirmations retirées de l'écran. (1) La pastille « Confiance 100 % » et sa jauge remplie : `best_conf` est un maximum de probabilité **par pixel**, constant à 1,0000, pas un score d'examen — la valeur reste lisible dans le détail technique sous le nom « Probabilité max. par pixel (non calibrée) », et le panneau de limites dit que le verdict lui-même est constant (28/28 patients, 160/160 coupes). (2) La carte de `/biopsie` annonçait une mesure « sur 20 % des 569 cas tenus à l'écart de l'entraînement » : le modèle servi est ajusté sur 569/569 sans découpage, et les 97,7 % / 99,8 % décrivaient un autre modèle — aucun chiffre n'est plus affiché, l'absence de mesure hors échantillon est écrite. (3) `/biopsie` empruntait les pastilles Dice / sensibilité / faux positifs du modèle d'imagerie, sous un texte disant que ce modèle ne lit pas d'image : elles sont passées dans un bloc `limits_numbers` que la page neutralise. Vérifié dans l'app réelle (backend `dce_mri`, cas de démo 1 : coupe 52/176, probabilité par pixel 1,0000) et gardé par 9 tests de rendu (`tests/test_result_page_claims.py`) — 125 tests au total, ruff propre |
 
 **Livrés** (branche `amelioration-docker-preprocess-env`, commités le 2026-08-18) :
 
@@ -276,23 +283,27 @@ et savoir qu'ils ont dérivé une fois dit où regarder la prochaine fois.
 
 ### Relevés le 2026-09-12
 
-Audit du dépôt contre la cible produit. Tous **ouverts** : ce sont des corrections de
-documentation, pas de code, et elles se décident une par une.
+Audit du dépôt contre la cible produit. Presque tous sont des corrections de
+documentation, pas de code, et se décident une par une. Ce qu'un utilisateur voyait
+à l'écran a été traité en premier (P0, voir Livrés) ; le reste est ouvert.
 
-| Constat | Où |
-|---|---|
-| « mesurée sur 20 % des 569 cas **tenus à l'écart de l'entraînement** » — le modèle servi est ajusté sur 569/569, sans split. Les 97,67 % viennent d'un autre modèle, celui d'`AnalyzeData` | `app/templates/biopsy.html` vs `train_tabular_model.py` (`pipeline.fit(labelled)`) |
-| Parité annoncée « sur les 569 lignes, écart max 1 × 10⁻¹⁵ » ; le test compare **5 lignes** à 1e-9, et le dit dans son propre commentaire | `plan.md`, docstring `inference.predict_tabular` vs `tests/test_tabular_export.py` |
-| Les métriques tabulaires renvoient à `reports/model_results.csv`, **absent du disque** — comme `pca_info.csv`, `feature_contributions.csv`, `scree_plot.png` | `Final_Report.md` |
-| « 87 tests, ~7 s » ; il y en a **116**, tous passants | `README.md` §Development |
-| « 0,76 s par volume, 4,5 ms par coupe » ; l'artefact dit **0,825 s** et **4,83 ms** | `plan.md` §4.3 et `DEMO.md` vs `eval_report.json` |
-| « temps de calcul ~110 ms » ; mesuré 69-73 ms à chaud, 585 ms au premier appel | `README.md`, `DEMO.md` |
-| Checkpoint par défaut documenté `results_mri_p2/unet_best.pt` ; c'est `models/dce_mri_p2_negfix/unet_best.pt` | docstring `inference.predict_dce_mri` |
-| Backend `unet` présenté comme disponible ; son checkpoint n'existe plus | `app/README.md`, `app/predictor.py` |
-| Logs annonçant `data/transformed_data.csv`, `data/pca_info.csv`, `data/scree_plot.png` ; le code écrit dans `reports/` et `plots/` | `TransformData.transform_data` |
-| IC 95 % top-1 `[25,0 – 60,7]` : aucun code ni artefact versionné ne la produit | `plan.md` §4.3 |
-| Fuite de préprocessing : imputation, scaler et PCA ajustés sur les 569 lignes **avant** le `randomSplit`, donc les 97,67 % / 99,89 % sont optimistes | `TransformData.transform_data` → `AnalyzeData.prepare_data` |
-| Étape 2 annoncée « livrée » ; la branche `ameliore-le-mvp` est locale, absente d'`origin` | `plan.md` §Livrés |
+| Constat | Où | État |
+|---|---|---|
+| « mesurée sur 20 % des 569 cas **tenus à l'écart de l'entraînement** » — le modèle servi est ajusté sur 569/569, sans split. Les 97,67 % viennent d'un autre modèle, celui d'`AnalyzeData` | `app/templates/biopsy.html` vs `train_tabular_model.py` (`pipeline.fit(labelled)`) | Corrigé le 2026-09-12 |
+| Parité annoncée « sur les 569 lignes, écart max 1 × 10⁻¹⁵ » ; le test compare **5 lignes** à 1e-9, et le dit dans son propre commentaire | `plan.md`, docstring `inference.predict_tabular` vs `tests/test_tabular_export.py` | Ouvert |
+| Les métriques tabulaires renvoient à `reports/model_results.csv`, **absent du disque** — comme `pca_info.csv`, `feature_contributions.csv`, `scree_plot.png` | `Final_Report.md` | Ouvert |
+| « 87 tests, ~7 s » ; il y en a **125**, tous passants (116 à l'audit, plus les 9 du P0) | `README.md` §Development | Ouvert |
+| « 0,76 s par volume, 4,5 ms par coupe » ; l'artefact dit **0,825 s** et **4,83 ms** | `plan.md` §4.3 et `DEMO.md` vs `eval_report.json` | Ouvert |
+| « temps de calcul ~110 ms » ; mesuré 69-73 ms à chaud, 585 ms au premier appel | `README.md`, `DEMO.md` | Ouvert |
+| Checkpoint par défaut documenté `results_mri_p2/unet_best.pt` ; c'est `models/dce_mri_p2_negfix/unet_best.pt` | docstring `inference.predict_dce_mri` | Ouvert |
+| Backend `unet` présenté comme disponible ; son checkpoint n'existe plus | `app/README.md`, `app/predictor.py` | Ouvert |
+| Logs annonçant `data/transformed_data.csv`, `data/pca_info.csv`, `data/scree_plot.png` ; le code écrit dans `reports/` et `plots/` | `TransformData.transform_data` | Ouvert |
+| IC 95 % top-1 `[25,0 – 60,7]` : aucun code ni artefact versionné ne la produit | `plan.md` §4.3 | Ouvert |
+| Fuite de préprocessing : imputation, scaler et PCA ajustés sur les 569 lignes **avant** le `randomSplit`, donc les 97,67 % / 99,89 % sont optimistes | `TransformData.transform_data` → `AnalyzeData.prepare_data` | Ouvert |
+| Étape 2 annoncée « livrée » ; la branche `ameliore-le-mvp` est locale, absente d'`origin` | `plan.md` §Livrés | Ouvert |
+| `/biopsie` affichait les pastilles Dice 0,53 / sensibilité 88 % / faux positifs 99,97 % — les chiffres du modèle d'imagerie, sous un texte disant que ce modèle-ci ne lit pas d'image | `app/templates/base.html` (bloc de limites partagé) | Corrigé le 2026-09-12 |
+| La pastille de moteur du bandeau est **vide** sur `/biopsie` : la route ne passe pas `backend` au gabarit, que `base.html` attend | `app/server.py` (`biopsy_form`, `biopsy_predict`) vs `base.html` | Ouvert — cosmétique, aucune affirmation fausse |
+| Un `cudaErrorIllegalAddress` sur `/demo/1` dans le serveur Flask, **observé une fois, non reproduit** : le même appel passe en direct (coupe 52/176, 1,0000) et le GPU calcule normalement juste après. Noté parce qu'un plantage de service ne doit pas rester sans trace, pas parce qu'il est caractérisé | `app/predictor.py` (`DceMriUNetPredictor`) | Ouvert — à re-observer avant d'enquêter |
 
 ---
 
