@@ -1,0 +1,45 @@
+{
+  "task": "cancer / no-cancer on a full DBT exam (step 1, exam-level decision head)",
+  "protocol": {
+    "folds": 5,
+    "selection": "no checkpoint or epoch chosen on held-out patients; 25 epochs fixed in advance, last epoch scored",
+    "aggregation": "max slice probability per exam, then max exam score per patient (one suspicious slice/view is enough)",
+    "bag_size": 16,
+    "epochs": 25,
+    "image_size": 224,
+    "base_channels": 16,
+    "lr": 0.0003,
+    "seed": 42
+  },
+  "corpus": {
+    "exams": 870,
+    "slices": 59529,
+    "patients": 272,
+    "cancer_patients": 56,
+    "noncancer_patients": 216
+  },
+  "auc_patient": {
+    "auc": 0.4565558862433862,
+    "lo": 0.3690185161487085,
+    "hi": 0.5435172581141718,
+    "n": 272,
+    "n_positive": 56,
+    "n_usable": 10000
+  },
+  "operating_point_0.5": {
+    "threshold": 0.5,
+    "sensitivity": 0.0,
+    "specificity": 1.0,
+    "ppv": NaN,
+    "npv": 0.7941176470588235,
+    "accuracy": 0.7941176470588235,
+    "prevalence": 0.20588235294117646,
+    "counts": {
+      "tp": 0,
+      "fp": 0,
+      "tn": 216,
+      "fn": 56
+    }
+  },
+  "always_negative_accuracy": 0.7941176470588235
+}

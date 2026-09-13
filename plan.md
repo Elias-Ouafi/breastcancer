@@ -280,7 +280,7 @@ le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 | Priorité | Tâche | Critère de « fait » |
 |---|---|---|
 | P1 | Corpus DBT à deux classes, d'une seule source | **Fait le 2026-09-13**, voir Livré : le filtre « patients annotés » est levé, **150 patients normaux sont téléchargés** (660 séries, 46,8 Go mesurés — 312 Mo par patient, pas les ~200 Mo qu'un premier patient laissait croire), l'étiquette vient du statut par vue, et `preprocess_dbt_exams` écrit les deux classes dans **une seule géométrie**. Reste à publier les chiffres du corpus construit — la passe sur 926 séries tourne |
-| P1 | Tête de décision au niveau examen | Une probabilité par patient — pas une agrégation « une coupe s'allume », dont le §« Cible chiffrée » montre qu'elle exige 99,94 % de spécificité par coupe. **ROC-AUC patient avec IC bootstrap par patient** dans `eval_report.json`. **Débloqué le 2026-09-13** : le corpus existe enfin (`dbt_exams`, deux classes, une géométrie) et les briques de mesure aussi (`imaging.metrics.bootstrap_auc`, `operating_point`, `dataset.split_npz_by_patient` stratifié). Point d'attention avant d'écrire la boucle : un volume 384×384×60 en float16 pèse 17 Mo décompressé, donc les ~926 volumes ne tiennent pas en mémoire comme `lesionclf` les y met — il faut streamer (banc de coupes, comme `imaging/slicebank.py` pour la DCE-MRI) |
+| P1 | Tête de décision au niveau examen | Mesurée le 2026-09-13 et négative, voir Livré : ROC-AUC patient 0,457 [0,369 – 0,544] sur 870 examens / 272 patients / 56 cancers, IC contenant 0,5, 0 cancer détecté au seuil 0,5. Diagnostic, chiffres et pistes au §4.7 |
 | P1 | Choisir et publier le point de fonctionnement | Seuil fixé sur la **validation** pour Se = 82,8 % ; spécificité, VPP et **prévalence du jeu de test** rapportées sur le **test**, avec IC. Le panneau « Limites connues » cite Se/Sp/IC/prévalence au lieu du Dice |
 | P2 | Reprendre l'étape 2 en version image **si le corpus grossit** | Mesurée le 2026-09-12 et négative : ROC-AUC patient 0,513 [0,411 – 0,615] sur 130 patients, l'IC contient le hasard (§4.5). Le levier identifié est le nombre de patients, pas le modèle. Le réseau n'est plus l'obstacle (2026-09-13) : ce qui reste à décider est le volume disque. Le plus court chemin est désormais chiffré — les boîtes du **split test** de la collection existent (`BCS-DBT-boxes-test`, 136 lignes, 60 patients, 30 cancers) et n'ont jamais été utilisées ici : pooler les trois splits porte le corpus annoté de 141 à **201 patients, dont 89 cancers**, soit tous les cancers annotés de la collection |
 | P2 | Donner à l'étape 2 tabulaire une mesure qui lui appartienne | `train_tabular_model.py` fait un split (ou une VC) et persiste les métriques du modèle **servi** ; `AnalyzeData` ajuste imputation/scaler/PCA **après** le split ; `reports/model_results.csv` recommité |
@@ -301,6 +301,7 @@ le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 | P1 — rendre les tables BCS-DBT téléchargeables depuis un clone | `ExtractData.download_dbt_tables`, `config.py` (`DBT_FILE_PATHS*`, `DBT_LABELS_*`, `DBT_BOXES_TEST`) | Les **9 tables** (boîtes, labels par vue, inventaire `file-paths`, pour les trois splits) se téléchargent en une fonction ; deux d'entre elles sont **identiques octet pour octet** aux copies posées à la main le 2026-09-13. Jusqu'ici un clone ne pouvait pas prétraiter DBT du tout, puisque la jointure exige l'inventaire. Un nom publié ne suit pas le nom local (`BCS-DBT-boxes-validation-v2-PHASE-2-Jan-2024.csv`) : la table le dit |
 | P1 — lire le statut par vue, seule source du mot « normal » | `TransformData.read_dbt_labels`, `TransformData.dbt_patient_status`, 4 tests | Un patient est lu **à sa pire vue** (un cancer ⇒ examen cancer), une ligne sans aucun drapeau n'est pas comptée normale, et une table amputée d'une colonne est refusée. Reproduit depuis les fichiers les chiffres jusque-là repris de la documentation : 4 581 normaux / 278 actionable / 112 bénins / **89 cancers**, 5 060 patients |
 | P1 — télécharger des examens sans cancer | `ExtractData.download_normal_dbt_series`, `ExtractData.download_dbt_series_for` | Le filtre « patients annotés » est levé : la sélection vient du statut par vue, un patient n'est pris que si **toutes** ses vues sont normales, et l'échantillon est tiré avec une graine plutôt que par ID croissant (les ID suivent le site et la date). Cap exprimé en **volume ajouté par l'appel** et non en taille totale du dossier — l'ancien cap se déclenchait immédiatement sur un dossier partagé avec Duke. Coût mesuré : ~200 Mo par patient normal (4 vues) |
+| P1 — tête de décision au niveau examen, sur l'étape 1 enfin mesurable | `imaging/exambank.py`, `imaging/examclf.py`, `models/examclf/cv_report.json` | Entraînée et **mesurée** sur les deux classes réunies pour la première fois : ROC-AUC patient 0,457 [0,369 – 0,544] sur 870 examens, 272 patients, 56 cancers. L'IC contient 0,5 et le modèle ne détecte aucun des 56 cancers au seuil 0,5 : le résultat est **négatif**, et c'est ce qui est publié. Protocole, diagnostic et pistes au §4.7. Fait au sens du critère — un modèle mesuré — pas au sens d'un modèle utilisable |
 
 **Livré** (branche `ameliore-le-mvp`, le 2026-09-12) :
 
@@ -1004,3 +1005,79 @@ latéralité par les pixels reste (`image_laterality`), pour le retournement.
 latéralité : un modèle réentraîné sur ce corpus verra une moitié des examens dans le
 mauvais repère si l'inférence n'applique pas la même règle. C'était déjà la dernière
 ligne du §4.4 ; la jointure ne la traite pas.
+
+### 4.7 Tête de décision au niveau examen : mesurée, et elle n'apprend rien (2026-09-13)
+
+`imaging.examclf` pose enfin la vraie question de l'étape 1 — cancer ou pas, sur un
+**examen entier**, pas un recadrage déjà centré sur une lésion comme `lesionclf`
+(§4.5). C'est la première mesure jamais faite sur les deux classes ensemble : jusqu'ici
+aucun corpus ne contenait de négatif, donc aucune spécificité, VPP ou ROC-AUC patient
+n'était calculable du tout (voir « Cible chiffrée »). `TransformData.preprocess_dbt_exams`
+a levé ce blocage (P1 du 2026-09-13, ci-dessus) ; ce paragraphe en publie la première
+mesure.
+
+**Protocole.** Agrégation par multi-instance learning : l'étiquette est au niveau
+examen mais le signal ne l'est pas — la plupart des coupes d'un examen cancer ne
+montrent rien — donc le score d'un sac est le **maximum** sur les coupes échantillonnées
+à l'entraînement (`--bag-size 16`, tirées sans remise si l'examen en a assez) et sur
+**toutes** les coupes de l'examen à l'évaluation, jamais la moyenne (qui diluerait la
+minorité qui compte, la même faille documentée dans `sliceclf`). Score patient : le
+maximum sur les examens du patient, une seule vue suspecte suffit. Encodeur
+`sliceclf.SliceClassifier`, réentraîné de zéro. Même discipline de validation croisée
+que `lesionclf` : 5 plis stratifiés par patient, budget de 25 époques fixé d'avance,
+dernière époque évaluée, aucune sélection sur les patients tenus à l'écart.
+
+**Le corpus.** 870 examens, 59 529 coupes, 272 patients, **56 cancers**. Mesuré dans
+la banque de coupes : un examen cancer porte en moyenne **5,4 coupes peintes** (médiane
+5) sur une profondeur moyenne de 71 — le signal utile est **moins de 1 %** des 59 529
+coupes de tout le corpus.
+
+**Le résultat.**
+
+| Mesure | Valeur |
+|---|---:|
+| ROC-AUC patient | **0,457 [0,369 – 0,544]** |
+| Sensibilité à 0,5 | **0,0 %** |
+| Spécificité à 0,5 | 100 % |
+| VPP à 0,5 | non définie (0 positif prédit) |
+| Exactitude | 79,4 % |
+| « Toujours pas de cancer » | 79,4 % |
+
+**L'IC contient 0,5, et le modèle ne prédit jamais un cancer** : au seuil 0,5, les 272
+patients — les 56 cancers compris — sont tous classés négatifs. L'exactitude est
+exactement celle de la règle triviale. Rapport et prédictions versionnés
+(`models/examclf/cv_report.json`, `cv_predictions.csv`) ; le checkpoint ne l'est pas.
+
+**Diagnostic, différent de celui du §4.5.** Là où `lesionclf` mémorisait ses coupes
+d'entraînement (perte tombée à 0,27 pendant que l'AUC restait au hasard), ici la
+perte **ne descend dans aucun des 5 plis** : elle oscille entre 1,25 et 1,58 sur les
+25 époques, aussi bruitée à l'époque 25 qu'à l'époque 5. Le modèle n'apprend pas même
+à sur-ajuster ses propres sacs d'entraînement. Un facteur mesuré y contribue : un sac
+aléatoire de 16 coupes tirées parmi les ~71 d'un examen cancer **manque toutes ses
+coupes peintes une fois sur quatre** (25 % en moyenne, calculé sur les 107 examens
+cancer) — un quart des pas de gradient sur un sac positif pousse donc une coupe qui ne
+contient rien, un signal contradictoire pur. Ce facteur ne suffit pas à tout expliquer
+(75 % des pas restent informatifs) : la tâche elle-même — une trame entière de 224 px,
+sans a priori de position, un encodeur entraîné de zéro sur 56 patients cancer — est
+plus dure que celle de `lesionclf`, qui échouait déjà en partant d'une lésion déjà
+localisée.
+
+**Arrêté à une mesure**, pour la même raison qu'au §4.5 : régler les hyper-paramètres
+contre cette même validation croisée jusqu'à ce que le chiffre monte viderait le
+protocole de son sens. Pistes, par ordre de rapport attendu, pas de promesses :
+
+- **Plus de patients cancer.** 56 sur les 89 de toute la collection (§ »reste ouvert«,
+  ligne P2 étape 2 image) — le même levier qu'au §4.5, pas encore tiré ici non plus.
+- **Un sac plus grand ou plus intelligent** : monter `--bag-size` au-delà de 16 réduit
+  mécaniquement le quart de pas sans signal ci-dessus ; échantillonner en excès les
+  coupes voisines d'une coupe déjà suspecte (curriculum) est une autre piste, non
+  tentée pour ne pas ajouter un paramètre de plus à cette même validation croisée.
+- **Des features pré-entraînées**, écartées pour les mêmes raisons d'accès qu'au §4.1
+  et au §4.5.
+- **Une agrégation top-k plutôt que max pur**, moins sensible à une seule coupe bruitée
+  que le max, sans diluer la minorité comme le ferait une moyenne.
+
+**Ce que ça ne bloque pas.** La démo sert toujours le modèle DCE-MRI pour la
+localisation et le tabulaire Wisconsin pour l'étape 2 ; aucun des deux ne dépend de
+cette tête. Son échec mesuré est la première fois que l'étape 1 a un chiffre du tout —
+et c'est ce chiffre qui est publié, pas un chiffre plus flatteur obtenu en cherchant.

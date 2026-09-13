@@ -134,7 +134,7 @@ cannot drift apart.
 ```bash
 pip install -e ".[dev]"
 ruff check .        # lint
-pytest              # 215 tests, ~30 s, no GPU or dataset needed
+pytest              # 232 tests, ~100 s, no GPU or dataset needed
 ```
 
 [CI](.github/workflows/ci.yml) runs both on every push and pull request. The suite
@@ -377,6 +377,30 @@ held-out patients. Writes `models/lesionclf/cv_report.json` (patient ROC-AUC wit
 patient-bootstrap CI, plus sensitivity/specificity/PPV **and the prevalence they were
 measured at**) and `cv_predictions.csv` (one row per patient). Validate the loop with
 no dataset via `python -m imaging.lesionclf --smoke-test`.
+
+#### Exam classifier (cancer / no-cancer, step 1 from the image)
+
+`imaging.examclf` is step 1's actual decision head: cancer or not, from a **full**
+DBT exam rather than a crop already centred on a lesion, using the label
+`TransformData.preprocess_dbt_exams` writes for every series, annotated or not:
+
+```bash
+python -m imaging.examclf --data-dir data/preprocessed_data/dbt_exams --folds 5
+```
+
+The label is exam-level but the signal is not — most slices of a cancer exam show
+nothing — so a bag's score is the **max** over a sample of its slices at training
+time and over every one of its slices at evaluation (multiple-instance learning,
+`imaging.exambank` paying the decompression cost of ~870 full exams once). Same
+cross-validation discipline as the lesion classifier: 5 folds stratified by patient,
+no checkpoint chosen on held-out patients, a patient's score is the max over their
+own exams. Writes `models/examclf/cv_report.json` and `cv_predictions.csv`; validate
+the loop with no dataset via `python -m imaging.examclf --smoke-test`.
+
+**Measured on 870 exams, 272 patients, 56 with a cancer, and it does not work**:
+patient ROC-AUC 0.457 [0.369-0.544], and at threshold 0.5 the model calls every
+single patient negative (sensitivity 0.0) — the same accuracy as always answering
+"no cancer". Detail, diagnosis and leads: `plan.md` §4.7.
 
 ### Histopathology (BreakHis)
 ```bash
