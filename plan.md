@@ -276,7 +276,8 @@ le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 
 | Priorité | Tâche | Critère de « fait » |
 |---|---|---|
-| P1 | Corpus DBT à deux classes, d'une seule source | Le filtre « patients annotés » de `download_annotated_dbt_series` est levé, des normaux sont téléchargés, l'étiquette patient est cancer / non-cancer, et le split par patient conserve la prévalence. **Avancement au 2026-09-12** : l'étiquette patient est faite (colonne `Class`, voir Livré) et le split stratifié aussi (`imaging.dataset.split_npz_by_patient`, prévalence conservée dans les trois splits, aucune classe arrondie hors de l'entraînement, répartition DCE-MRI inchangée et testée comme telle). Il manque les normaux, et ils sont **bloqués** : voir ci-dessous |
+| P1 | Corpus DBT à deux classes, d'une seule source | Le filtre « patients annotés » de `download_annotated_dbt_series` est levé, des normaux sont téléchargés, l'étiquette patient est cancer / non-cancer, et le split par patient conserve la prévalence. **Avancement au 2026-09-13** : l'étiquette patient est faite (colonne `Class`, voir Livré), le split stratifié aussi (`imaging.dataset.split_npz_by_patient`), et les labels par étude sont téléchargés — 4 581 normaux disponibles. Reste le téléchargement lui-même : ~400 Mo par patient (4 vues), donc un volume à décider, et 22,4 Go sont déjà pris par 134 patients |
+| P1 | Apparier les boîtes depuis `file-paths` plutôt que par inférence | `BCS-DBT-file-paths-*.csv` donne la vue de chaque série : 260 séries annotées contre 253 appariées aujourd'hui, et 4 masques posés depuis la mauvaise acquisition répétée. La latéralité des pixels ne sert plus qu'à décider du retournement (voir l'incident réseau ci-dessus) |
 | P1 | Tête de décision au niveau examen | Une probabilité par patient — pas une agrégation « une coupe s'allume », dont le §« Cible chiffrée » montre qu'elle exige 99,94 % de spécificité par coupe. **ROC-AUC patient avec IC bootstrap par patient** dans `eval_report.json` |
 | P1 | Choisir et publier le point de fonctionnement | Seuil fixé sur la **validation** pour Se = 82,8 % ; spécificité, VPP et **prévalence du jeu de test** rapportées sur le **test**, avec IC. Le panneau « Limites connues » cite Se/Sp/IC/prévalence au lieu du Dice |
 | P2 | Reprendre l'étape 2 en version image **si le corpus grossit** | Mesurée le 2026-09-12 et négative : ROC-AUC patient 0,513 [0,411 – 0,615] sur 130 patients, l'IC contient le hasard (§4.5). Le levier identifié est le nombre de patients (134 téléchargés sur 5 060), pas le modèle — donc cette ligne attend le déblocage du réseau |
@@ -322,19 +323,65 @@ et savoir qu'ils ont dérivé une fois dit où regarder la prochaine fois.
 | `Final_Report.md` pointait `data/model_results.csv` ; le code écrit `reports/model_results.csv` | `Final_Report.md` vs `config.py` (`TABULAR_RESULTS_CSV`) | Corrigé le 2026-08-18 |
 | `models/dce_mri_p2_negfix/` nomme une expérience, pas une couche — contredit la règle « layers, not experiments » posée dans `config.py` | `config.py` | Ouvert — un renommage casse les chemins versionnés dont dépend la démo |
 
-### Obstacle relevé le 2026-09-12 : TCIA injoignable depuis cette machine
+### Incident réseau du 2026-09-12, et ce que les labels ont appris (2026-09-13)
 
-`BCS-DBT-labels-*.csv` porte le statut par étude (normal / actionable / benign /
-cancer) et c'est le seul moyen de savoir qu'un examen est normal — « absent du CSV de
-boîtes » ne le dit pas. Il n'est pas sur le disque, et il ne peut pas y arriver d'ici :
-tous les hôtes de `cancerimagingarchive.net` sont en **timeout TCP**, bac à sable
-désactivé compris, comme `github.com` et `sites.duke.edu`. `pypi.org`, `google.com`,
-`zenodo.org`, `huggingface.co` et `raw.githubusercontent.com` répondent — donc la
-machine a un accès réseau, filtré. Ce n'est pas un problème de code, et aucun code ne
-le contourne.
+**L'obstacle était transitoire, et il a été rapporté comme permanent — c'est
+l'erreur à retenir.** Entre ~18 h 30 et ~20 h le 2026-09-12, tous les hôtes de
+`cancerimagingarchive.net` sortaient en timeout TCP, bac à sable désactivé compris,
+comme `github.com` et `sites.duke.edu`, alors que `pypi.org`, `zenodo.org`,
+`huggingface.co` et `raw.githubusercontent.com` répondaient. La conclusion tirée sur
+le moment — « cette machine ne joint pas TCIA » — décrivait une fenêtre de temps, pas
+une propriété de la machine : le 2026-09-13 tous ces hôtes répondent et les fichiers
+sont téléchargés. Un blocage réseau se re-teste avant d'être écrit au présent.
 
-Décision (2026-09-12) : les normaux attendent. Le corpus à deux classes reste ouvert,
-et ce qu'on peut faire des 147 séries déjà étiquetées passe devant.
+**Ce que portent les labels.** `BCS-DBT-labels-*.csv` donne le statut par étude, et
+c'est le seul moyen de savoir qu'un examen est normal — « absent du CSV de boîtes » ne
+le dit pas. Téléchargés (train, validation PHASE-2, test PHASE-2) avec les
+`BCS-DBT-file-paths-*.csv` :
+
+| Collection entière | Patients |
+|---|---:|
+| **normal** | **4 581** |
+| actionable | 278 |
+| benign | 112 |
+| **cancer** | **89** |
+| **Total** | **5 060** |
+
+Les 82 bénins / 59 cancers du pool train+validation recoupent exactement ce qui avait
+été dérivé des boîtes seules : l'étiquetage du §« Livré » tient.
+
+**Et ces chiffres plafonnent la cible.** Le § « Ce que la cible coûte en données »
+demande ~220 patients avec cancer **dans le seul jeu de test** pour mesurer une
+sensibilité à ±5 points. La collection en contient **89 en tout**, entraînement
+compris. Conséquence à assumer plutôt qu'à découvrir plus tard :
+
+- la **spécificité** est mesurable finement (4 581 normaux disponibles) ;
+- la **sensibilité** ne le sera pas. Un test à 20 % laisserait ~18 cancers, soit un IC
+  de l'ordre de ±17 points ; même en consacrant les 89 cancers au seul test — ce qui
+  n'entraînerait plus rien — on resterait vers ±8 points.
+
+BCS-DBT ne peut donc pas départager 82,8 % de 76 % ou de 94 %. Ce n'est pas une raison
+de ne pas construire la tête de décision : c'est la raison d'annoncer son IC avant de
+l'entraîner, et de ne jamais présenter le point obtenu comme une comparaison au
+programme national.
+
+**Ce que `file-paths` change pour le §4.4.** Ce CSV donne (PatientID, StudyUID, View)
+par fichier, et le nom de dossier de série s'y lit dans `classic_path` : l'appariement
+série ↔ boîte devient une jointure, plus une inférence. Confronté à nos 262 séries —
+retrouvées **262/262**, PatientID concordant **262/262** :
+
+| | |
+|---|---:|
+| Vue déduite des pixels = vue vraie | **237 / 262** |
+| Écarts de latéralité | **14** — les 7 patients « miroir » × 2 vues, **confirmés** |
+| Écarts de suffixe (`lmlo1`, `rcc1`, `lcc2`) | 11 — vues répétées, laissées de côté au §4.4 |
+| Séries annotées selon la vérité | **260** (le code en apparie 253) |
+| Séries appariées à une mauvaise boîte | **4** (une acquisition répétée prise pour l'autre) |
+
+L'inférence du §4.4 était donc juste là où elle était risquée — les 14 miroirs — et
+incomplète sur les vues répétées. **Ouvert** : brancher `file-paths` comme source
+d'appariement, la latéralité des pixels ne servant plus qu'à décider du retournement,
+comme dans le lecteur officiel. Gain attendu : 253 → 260 séries et 4 masques corrigés.
 
 ### Relevés le 2026-09-12
 
