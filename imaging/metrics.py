@@ -1,9 +1,13 @@
-"""Segmentation losses and metrics for the MRI lesion-detection pipeline.
+"""Losses and metrics for the imaging pipelines.
 
-All functions operate on PyTorch tensors shaped ``(N, 1, H, W)``. The metric
-helpers (`dice_coeff`, `iou_score`) expect **binary** masks (0/1): threshold the
-sigmoid output at 0.5 before calling them. `DiceBCELoss` takes raw **logits** and
-uses the soft (un-thresholded) probabilities so gradients flow.
+Two families live here. The **segmentation** ones operate on PyTorch tensors shaped
+``(N, 1, H, W)``: the metric helpers (`dice_coeff`, `iou_score`) expect **binary**
+masks (0/1), so threshold the sigmoid output at 0.5 before calling them, while
+`DiceBCELoss` takes raw **logits** and uses the soft probabilities so gradients flow.
+The **classification** ones (`roc_auc`, `bootstrap_auc`, `operating_point`) take plain
+numpy arrays of one score per case, because that is the shape a decision at the level
+of a patient has -- and they resample patients, never slices, for the reason
+`bootstrap_auc` spells out.
 
 Localisation caveat
 -------------------
@@ -22,6 +26,7 @@ a model that has learnt nothing — this is exactly what made the old
 """
 from __future__ import annotations
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -160,3 +165,102 @@ class FocalTverskyLoss(nn.Module):
             probs = torch.sigmoid(logits)
             tversky = tversky_index(probs, target, self.alpha, self.beta, self.eps)
             return (1.0 - tversky).clamp_min(self.eps) ** self.gamma
+
+
+# --------------------------------------------------------------------------- #
+# Classification, at the level a decision is taken: one score per case
+# --------------------------------------------------------------------------- #
+
+def roc_auc(labels, scores):
+    """Area under the ROC curve, as ``P(score of a positive > score of a negative)``.
+
+    Computed from the rank sum (the Mann-Whitney U identity) rather than by
+    integrating a sampled curve: it is exact, ties count as half a win, and there is
+    no threshold grid to choose. Returns ``nan`` when either class is missing -- an
+    AUC of a single class is not 0.5, it is undefined, and saying so beats printing a
+    number that looks like chance.
+    """
+    labels = np.asarray(labels).astype(float).ravel()
+    scores = np.asarray(scores, dtype=float).ravel()
+    n_pos = int((labels > 0).sum())
+    n_neg = int(labels.size - n_pos)
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+
+    order = np.argsort(scores, kind="mergesort")
+    ranks = np.empty(scores.size, dtype=float)
+    ranks[order] = np.arange(1, scores.size + 1, dtype=float)
+    # Average the ranks of tied scores, so a model that cannot separate two cases
+    # gets no credit for the order they happen to sit in.
+    sorted_scores = scores[order]
+    start = 0
+    for i in range(1, sorted_scores.size + 1):
+        if i == sorted_scores.size or sorted_scores[i] != sorted_scores[start]:
+            if i - start > 1:
+                ranks[order[start:i]] = ranks[order[start:i]].mean()
+            start = i
+    return float((ranks[labels > 0].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
+
+
+def bootstrap_auc(labels, scores, n_resamples=10000, alpha=0.05, seed=0):
+    """Percentile bootstrap CI for :func:`roc_auc`, resampling **cases**.
+
+    One case is one patient. Resampling slices instead would treat slices of the same
+    breast as independent evidence and shrink the interval to a width the data does
+    not support -- the same rule the segmentation evaluation follows.
+
+    Resamples that draw a single class carry no AUC and are dropped; ``n_usable``
+    says how many remained, so a corpus too small to support the interval shows it
+    here rather than in a footnote.
+    """
+    labels = np.asarray(labels).astype(float).ravel()
+    scores = np.asarray(scores, dtype=float).ravel()
+    point = roc_auc(labels, scores)
+    if np.isnan(point):
+        return {"auc": point, "lo": float("nan"), "hi": float("nan"),
+                "n": int(labels.size), "n_usable": 0}
+
+    rng = np.random.default_rng(seed)
+    picks = rng.integers(0, labels.size, size=(n_resamples, labels.size))
+    draws = np.array([roc_auc(labels[p], scores[p]) for p in picks], dtype=float)
+    usable = draws[~np.isnan(draws)]
+    return {
+        "auc": point,
+        "lo": float(np.percentile(usable, 100 * alpha / 2)) if usable.size else float("nan"),
+        "hi": float(np.percentile(usable, 100 * (1 - alpha / 2))) if usable.size else float("nan"),
+        "n": int(labels.size),
+        "n_positive": int((labels > 0).sum()),
+        "n_usable": int(usable.size),
+    }
+
+
+def operating_point(labels, scores, threshold=0.5):
+    """Sensitivity, specificity, PPV, NPV and accuracy at one threshold.
+
+    The prevalence of the evaluated set is returned alongside, and not as decoration:
+    sensitivity and specificity are properties of the model at this threshold, while
+    PPV and NPV are not -- they move with prevalence. A PPV quoted without the
+    prevalence it was measured at is a number without a unit (plan.md, "Ce qu'on ne
+    vise pas : la VPP").
+    """
+    labels = np.asarray(labels).astype(float).ravel() > 0
+    positive = np.asarray(scores, dtype=float).ravel() >= threshold
+
+    tp = int((positive & labels).sum())
+    fp = int((positive & ~labels).sum())
+    tn = int((~positive & ~labels).sum())
+    fn = int((~positive & labels).sum())
+
+    def ratio(num, den):
+        return float(num / den) if den else float("nan")
+
+    return {
+        "threshold": float(threshold),
+        "sensitivity": ratio(tp, tp + fn),
+        "specificity": ratio(tn, tn + fp),
+        "ppv": ratio(tp, tp + fp),
+        "npv": ratio(tn, tn + fn),
+        "accuracy": ratio(tp + tn, labels.size),
+        "prevalence": ratio(tp + fn, labels.size),
+        "counts": {"tp": tp, "fp": fp, "tn": tn, "fn": fn},
+    }

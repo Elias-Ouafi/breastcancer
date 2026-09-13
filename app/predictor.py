@@ -13,7 +13,9 @@ The result contract is aligned with ``inference.predict_dbt`` so the future
         "lesion_detected": bool,      # cancer / lesion present?
         "slice_preselected": bool,    # was the slice pinned by a human, not found?
         "slice_selector": str,        # pinned | classifier | segmentation_confidence
-        "confidence": float,          # 0..1 detection confidence
+        "confidence": float,          # max per-pixel lesion probability on the
+                                      # scored slice -- NOT a calibrated detection
+                                      # score (see inference._localize_lesion)
         "best_slice": int | None,     # slice index of the finding (imaging)
         "box_xywh": [x, y, w, h] | None,
         "n_slices": int | None,

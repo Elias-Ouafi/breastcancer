@@ -13,11 +13,23 @@ import pytest
 
 import config
 
+
 # Every public path constant, discovered rather than listed, so a new one added to
-# config.py is covered without touching this file.
+# config.py is covered without touching this file. A constant may also be a *group* of
+# paths (``DBT_FILE_PATHS`` is the train + validation pair passed as one argument);
+# each member is checked, so grouping does not buy an exemption from the contract.
+def _path_members(name):
+    value = getattr(config, name)
+    if isinstance(value, str):
+        return [(name, value)]
+    if isinstance(value, tuple) and value and all(isinstance(v, str) for v in value):
+        return [(f"{name}[{i}]", v) for i, v in enumerate(value)]
+    return []
+
+
 PATH_CONSTANTS = sorted(
-    name for name in dir(config)
-    if name.isupper() and isinstance(getattr(config, name), str)
+    member for name in dir(config) if name.isupper()
+    for member in _path_members(name)
 )
 
 
@@ -26,14 +38,13 @@ def test_there_are_path_constants_to_check():
     assert len(PATH_CONSTANTS) > 10, PATH_CONSTANTS
 
 
-@pytest.mark.parametrize("name", PATH_CONSTANTS)
-def test_paths_are_absolute_and_inside_the_repo(name):
+@pytest.mark.parametrize("name,value", PATH_CONSTANTS)
+def test_paths_are_absolute_and_inside_the_repo(name, value):
     """A relative path would resolve against the caller's cwd, not the project.
 
     That is exactly the bug this module was introduced to remove: ``--data-dir
     preprocessed_data`` only worked when you happened to run from the repo root.
     """
-    value = getattr(config, name)
     assert os.path.isabs(value), f"{name} is relative: {value}"
     assert os.path.commonpath([config.ROOT, value]) == config.ROOT, \
         f"{name} escapes the repo: {value}"

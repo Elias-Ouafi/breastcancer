@@ -43,10 +43,34 @@ BREAKHIS_DIR = os.path.join(RAW_DATA_DIR, "breakhis")
 # Annotation tables live beside the series they describe.
 DBT_BOXES_TRAIN = os.path.join(TCIA_DIR, "BCS-DBT-boxes-train.csv")
 DBT_BOXES_VALIDATION = os.path.join(TCIA_DIR, "BCS-DBT-boxes-validation.csv")
+# The collection's own test split: annotated too, and untouched by this project so far.
+DBT_BOXES_TEST = os.path.join(TCIA_DIR, "BCS-DBT-boxes-test.csv")
 MRI_ANNOTATION_BOXES = os.path.join(TCIA_DIR, "Annotation_Boxes.xlsx")
+
+# The inventory: which patient, study and view each BCS-DBT series folder holds. It is
+# what matches a box to a series (`TransformData.preprocess_dbt_with_boxes`), so it is
+# needed to preprocess DBT at all -- `ExtractData.download_dbt_tables` fetches it.
+DBT_FILE_PATHS_TRAIN = os.path.join(TCIA_DIR, "BCS-DBT-file-paths-train-v2.csv")
+DBT_FILE_PATHS_VALIDATION = os.path.join(TCIA_DIR, "BCS-DBT-file-paths-validation-v2.csv")
+DBT_FILE_PATHS_TEST = os.path.join(TCIA_DIR, "BCS-DBT-file-paths-test-v2.csv")
+# The pair the preprocessing defaults to: the splits whose boxes this project pools.
+DBT_FILE_PATHS = (DBT_FILE_PATHS_TRAIN, DBT_FILE_PATHS_VALIDATION)
+
+# The per-view status: normal / actionable / benign / cancer. This is the only place
+# that says an exam is *normal* -- absent from the boxes CSV does not say it -- so an
+# exam-level cancer / no-cancer target is built from here.
+DBT_LABELS_TRAIN = os.path.join(TCIA_DIR, "BCS-DBT-labels-train-v2.csv")
+DBT_LABELS_VALIDATION = os.path.join(
+    TCIA_DIR, "BCS-DBT-labels-validation-PHASE-2-Jan-2024.csv")
+DBT_LABELS_TEST = os.path.join(TCIA_DIR, "BCS-DBT-labels-test-PHASE-2.csv")
 
 # --- Preprocessed: z-normalised volumes + masks, one .npz per series --------
 DBT_PREPROCESSED_DIR = os.path.join(PREPROCESSED_DATA_DIR, "dbt")
+# Two DBT corpora, because they answer different questions and cannot share a geometry.
+# `dbt/` is lesion-cropped: it holds only annotated exams and serves localisation.
+# `dbt_exams/` holds every listed series at one fixed in-plane size, cancer and
+# no-cancer alike, which is what an exam-level decision can be measured on.
+DBT_EXAMS_PREPROCESSED_DIR = os.path.join(PREPROCESSED_DATA_DIR, "dbt_exams")
 DCE_MRI_PREPROCESSED_DIR = os.path.join(PREPROCESSED_DATA_DIR, "dce_mri_p2")
 WISCONSIN_PREPROCESSED_DIR = os.path.join(PREPROCESSED_DATA_DIR, "wisconsin")
 

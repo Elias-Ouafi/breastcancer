@@ -58,6 +58,7 @@ py-modules = [
     "ExtractBreakHis",
     "TransformData",
     "AnalyzeData",
+    "tabular_export",
     "train_tabular_model",
     "run_demo",
 ]

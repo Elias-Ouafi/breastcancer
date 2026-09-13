@@ -31,10 +31,13 @@ RUN pip install --no-cache-dir "Flask>=3.0" "numpy>=1.26,<2" "Pillow>=10.2,<11"
 
 # Source last: it changes on every commit, the layers above almost never do.
 COPY config.py logging_setup.py inference.py run_demo.py validation.py lineage.py ./
+COPY tabular_export.py ./
 COPY app/ ./app/
 COPY imaging/ ./imaging/
 COPY models/dce_mri_p2_negfix/ ./models/dce_mri_p2_negfix/
 COPY models/sliceclf/ ./models/sliceclf/
+# 13 KB of JSON, and the whole of step 2's serving path -- no Spark, no JVM.
+COPY models/tabular/ ./models/tabular/
 COPY data/curated_data/demo_cases/ ./data/curated_data/demo_cases/
 
 # Nothing here needs root. If the image is ever run with a bind mount, this is what

@@ -341,6 +341,81 @@ def _read_boxes(boxes_csv):
     return pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
 
 
+# The BCS-DBT tables, published beside the images rather than through the NBIA API, so
+# `nbia` cannot fetch them. They were downloaded by hand until 2026-09-13, which meant a
+# clone could not preprocess DBT at all: the inventory is now required for the box match.
+# The published file name is not the local one: the collection page links
+# `BCS-DBT-boxes-validation-v2-PHASE-2-Jan-2024.csv` for what this repo keeps as
+# `BCS-DBT-boxes-validation.csv` (checked byte-for-byte against the copy on disk).
+DBT_TABLE_URLS = {
+    config.DBT_BOXES_TRAIN: "BCS-DBT-boxes-train",
+    config.DBT_BOXES_VALIDATION: "BCS-DBT-boxes-validation-v2-PHASE-2-Jan-2024",
+    config.DBT_BOXES_TEST: "BCS-DBT-boxes-test-v2-PHASE-2-Jan-2024",
+    config.DBT_FILE_PATHS_TRAIN: "BCS-DBT-file-paths-train-v2",
+    config.DBT_FILE_PATHS_VALIDATION: "BCS-DBT-file-paths-validation-v2",
+    config.DBT_FILE_PATHS_TEST: "BCS-DBT-file-paths-test-v2",
+    config.DBT_LABELS_TRAIN: "BCS-DBT-labels-train-v2",
+    config.DBT_LABELS_VALIDATION: "BCS-DBT-labels-validation-PHASE-2-Jan-2024",
+    config.DBT_LABELS_TEST: "BCS-DBT-labels-test-PHASE-2",
+}
+DBT_TABLE_BASE_URL = "https://www.cancerimagingarchive.net/wp-content/uploads"
+
+
+def download_dbt_tables(dest_dir=None, overwrite=False, base_url=DBT_TABLE_BASE_URL):
+    """Fetch the BCS-DBT annotation tables: boxes, per-view labels, and file paths.
+
+    Three kinds of table, and the project needs all three. The **boxes** give lesion
+    coordinates and the ``Class`` (benign / cancer) that makes a positive a cancer. The
+    **file paths** are the inventory that matches a box to a series folder -- without
+    it, :func:`TransformData.preprocess_dbt_with_boxes` cannot say which box belongs to
+    which series. The **labels** carry the per-view status, and are the only place that
+    says an exam is *normal*: 4 581 of the 5 060 patients, against 89 with a cancer.
+
+    Each response is checked to carry a ``PatientID`` header line before it is written:
+    a wrong name answers 404 here (measured), but a CMS that answers a styled 200 page
+    instead would otherwise land on disk as a ``.csv`` and fail much later, somewhere
+    that says nothing about the download. Existing files are kept unless ``overwrite``.
+
+    Returns the list of paths present afterwards.
+    """
+    if requests is None:
+        raise ImportError("requests is required to download the BCS-DBT tables")
+    dest_dir = dest_dir or config.TCIA_DIR
+    os.makedirs(dest_dir, exist_ok=True)
+
+    present = []
+    for default_path, stem in DBT_TABLE_URLS.items():
+        path = os.path.join(dest_dir, os.path.basename(default_path))
+        if os.path.exists(path) and not overwrite:
+            log.info(f"{os.path.basename(path)} already here; keeping it.")
+            present.append(path)
+            continue
+        url = f"{base_url}/{stem}.csv"
+        try:
+            response = requests.get(url, timeout=120)
+            response.raise_for_status()
+            text = response.content.decode("utf-8-sig")
+        except Exception as e:
+            log.error(f"{stem}: download failed ({e})")
+            continue
+        header = text.split("\n", 1)[0]
+        if "PatientID" not in header:
+            log.error(f"{stem}: the response is not a BCS-DBT table (first line: "
+                      f"{header[:80]!r}); not written.")
+            continue
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+        rows = text.count("\n")
+        log.info(f"{os.path.basename(path)}: {rows} rows -> {path}")
+        present.append(path)
+
+    missing = [os.path.basename(p) for p in DBT_TABLE_URLS
+               if not os.path.exists(os.path.join(dest_dir, os.path.basename(p)))]
+    if missing:
+        log.warning(f"Still missing: {missing}")
+    return present
+
+
 def download_annotated_dbt_series(boxes_csv, max_patients=3, download_dir=DOWNLOAD_DIR,
                                   collection="Breast-Cancer-Screening-DBT", max_gb=None):
     """Download the DBT series for the first `max_patients` annotated patients.
@@ -356,19 +431,50 @@ def download_annotated_dbt_series(boxes_csv, max_patients=3, download_dir=DOWNLO
     `download_dir` reaches `max_gb` gigabytes (if set), so you can cap the total
     volume regardless of the patient count.
     """
-    os.makedirs(download_dir, exist_ok=True)
     boxes = _read_boxes(boxes_csv)
     patients = list(dict.fromkeys(boxes["PatientID"].tolist()))[:max_patients]
     log.info(f"Annotated patients to fetch: {len(patients)} (cap: {max_gb} GB)")
+    return download_dbt_series_for(patients, download_dir=download_dir,
+                                   collection=collection, max_gb=max_gb)
 
+
+def download_dbt_series_for(patients, download_dir=DOWNLOAD_DIR,
+                            collection="Breast-Cancer-Screening-DBT",
+                            max_gb=None, max_gb_added=None):
+    """Download every series of each patient in `patients`, series by series.
+
+    Two different caps, because they answer different questions. `max_gb` is the size
+    the whole `download_dir` may reach -- the historical behaviour, and a trap when the
+    folder already holds other collections. `max_gb_added` caps what *this call* adds,
+    which is what you want when the destination is shared. Either stops the run cleanly
+    between series, leaving a partial but usable set.
+
+    The size is measured once and then tracked by the bytes each series writes: walking
+    the tree per series meant re-reading tens of thousands of files on every step.
+    Returns the number of new series downloaded.
+    """
+    os.makedirs(download_dir, exist_ok=True)
     existing = {name for name in os.listdir(download_dir)
                 if os.path.isdir(os.path.join(download_dir, name))}
+    start_bytes = dir_size_bytes(download_dir)
+    total_bytes = start_bytes
     max_bytes = int(max_gb * 1024 ** 3) if max_gb else None
+    added_limit = int(max_gb_added * 1024 ** 3) if max_gb_added else None
+
+    def over_budget():
+        if max_bytes is not None and total_bytes >= max_bytes:
+            log.info(f"Reached the {max_gb} GB total cap "
+                     f"({total_bytes / 1024 ** 3:.1f} GB). Stopping downloads.")
+            return True
+        if added_limit is not None and total_bytes - start_bytes >= added_limit:
+            log.info(f"Added {(total_bytes - start_bytes) / 1024 ** 3:.1f} GB, the cap "
+                     f"for this run being {max_gb_added} GB. Stopping downloads.")
+            return True
+        return False
 
     downloaded = 0
     for pid in patients:
-        if max_bytes is not None and dir_size_bytes(download_dir) >= max_bytes:
-            log.info(f"Reached {max_gb} GB cap. Stopping downloads.")
+        if over_budget():
             break
         try:
             series = nbia.getSeries(collection=collection, patientId=pid)
@@ -376,8 +482,7 @@ def download_annotated_dbt_series(boxes_csv, max_patients=3, download_dir=DOWNLO
             log.error(f"getSeries failed for {pid}: {e}")
             continue
         for s in series:
-            if max_bytes is not None and dir_size_bytes(download_dir) >= max_bytes:
-                log.info(f"Reached {max_gb} GB cap. Stopping downloads.")
+            if over_budget():
                 break
             uid = s.get("SeriesInstanceUID")
             if uid in existing:
@@ -386,12 +491,52 @@ def download_annotated_dbt_series(boxes_csv, max_patients=3, download_dir=DOWNLO
                 log.info(f"{pid} series {uid} -> {download_dir}")
                 nbia.downloadSeries([s], path=download_dir)
                 downloaded += 1
+                existing.add(uid)
+                total_bytes += dir_size_bytes(os.path.join(download_dir, uid))
             except Exception as e:
                 log.error(f"download {uid} failed: {e}")
 
-    total_gb = dir_size_bytes(download_dir) / 1024 ** 3
-    log.info(f"Downloaded {downloaded} new series into {download_dir} ({total_gb:.1f} GB total).")
+    log.info(f"Downloaded {downloaded} new series into {download_dir} "
+             f"({(total_bytes - start_bytes) / 1024 ** 3:.1f} GB added, "
+             f"{total_bytes / 1024 ** 3:.1f} GB total).")
     return downloaded
+
+
+def download_normal_dbt_series(labels_csv=None, max_patients=150,
+                               download_dir=DOWNLOAD_DIR,
+                               collection="Breast-Cancer-Screening-DBT",
+                               max_gb_added=50, seed=0):
+    """Download the series of patients whose every view is labelled **normal**.
+
+    This is the half of the corpus the project never had. Everything downloaded so far
+    came from the boxes CSVs, so 100 % of the patients on disk carry a lesion, and a
+    specificity cannot be measured on a corpus without negatives (plan.md, "Cible
+    chiffrée"). The per-view labels table is what says an exam is normal: 4 581 of the
+    5 060 patients, against 89 with a cancer.
+
+    A patient is taken only if its **worst** status over every view of every study is
+    ``normal`` (`TransformData.dbt_patient_status`), so a patient with one actionable
+    view is not counted as a negative. The sample is drawn with `seed` rather than by
+    ascending PatientID: the IDs are ordered by site and date, so the first N would be
+    one corner of the collection. Downloading stops at `max_gb_added` gigabytes added by
+    this call -- roughly 340 MB per patient (4 views) on what is on disk here.
+
+    Returns the number of new series downloaded.
+    """
+    import random
+
+    import TransformData
+
+    labels_csv = labels_csv or [config.DBT_LABELS_TRAIN, config.DBT_LABELS_VALIDATION,
+                                config.DBT_LABELS_TEST]
+    status = TransformData.dbt_patient_status(labels_csv)
+    normals = sorted(pid for pid, value in status.items() if value == "normal")
+    random.Random(seed).shuffle(normals)
+    chosen = normals[:max_patients]
+    log.info(f"Normal patients available: {len(normals)}; fetching {len(chosen)} "
+             f"(cap: {max_gb_added} GB added, seed {seed}).")
+    return download_dbt_series_for(chosen, download_dir=download_dir,
+                                   collection=collection, max_gb_added=max_gb_added)
 
 
 def download_dce_mri_series(patient_ids=None, max_patients=10,

@@ -36,18 +36,73 @@ log = logging.getLogger(__name__)
 # Real data sits at 448-512, so this leaves a factor of 3.5 of headroom.
 MIN_IN_PLANE = 128
 
+# BCS-DBT labels every annotated box ``benign`` or ``cancer``. Which one it is cannot
+# be recovered from the mask afterwards -- a benign lesion paints exactly the same
+# kind of pixels as a cancer -- so the class has to travel with the volume. It is
+# stored beside it as ``lesion_class`` (the word) and ``label`` (0/1, the exam-level
+# target a detection head is scored against). This map is the only place the encoding
+# is written down; 1 is cancer, so "positive" means what it says.
+LESION_CLASSES = {"benign": 0, "cancer": 1}
+
+# The exam-level vocabulary, from ``BCS-DBT-labels-*.csv``. It is wider than the box
+# classes -- an exam can be normal, or recalled without a biopsy (``actionable``) -- and
+# it maps onto the same ``label``: **1 means cancer**, and nothing else does. A benign
+# biopsy, a recall and a normal exam are all 0, because the question the decision head
+# is scored on is "is there a cancer", not "is there something". The raw word travels
+# with the volume as ``exam_status`` so a later run can move that line (treating
+# ``actionable`` as positive, say) without decoding 22 GB of DICOM again.
+EXAM_STATUSES = {"normal": 0, "actionable": 0, "benign": 0, "cancer": 1}
+
 
 class VolumeValidationError(ValueError):
     """A preprocessed volume violates a contract the rest of the pipeline relies on."""
 
 
-def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_frame=True):
+def lesion_class_label(lesion_class):
+    """Return ``(canonical class, label)`` for one lesion class, or raise.
+
+    Case and whitespace are normalised, so a CSV that spells it ``"Cancer"`` still
+    lands on 1. Anything else raises: an unrecognised class stored as a
+    plausible-looking 0 would be trained on without a word.
+    """
+    key = str(lesion_class).strip().lower()
+    if key not in LESION_CLASSES:
+        raise VolumeValidationError(
+            f"lesion_class must be one of {sorted(LESION_CLASSES)}; got {lesion_class!r}")
+    return key, LESION_CLASSES[key]
+
+
+def exam_status_label(exam_status):
+    """Return ``(canonical status, label)`` for one exam status, or raise.
+
+    Same choke point as :func:`lesion_class_label`, for the wider vocabulary of
+    :data:`EXAM_STATUSES`. The two agree wherever they overlap: ``cancer`` is 1,
+    ``benign`` is 0.
+    """
+    key = str(exam_status).strip().lower()
+    if key not in EXAM_STATUSES:
+        raise VolumeValidationError(
+            f"exam_status must be one of {sorted(EXAM_STATUSES)}; got {exam_status!r}")
+    return key, EXAM_STATUSES[key]
+
+
+def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_frame=True,
+                             lesion_class=None, exam_status=None, expect_lesion=True):
     """Check one volume/mask pair. Raises on a broken contract, warns on a smell.
 
     Returns the list of warnings raised, so a caller can count them across a run.
 
     ``expect_full_frame=False`` turns off the crop check, for the DBT pipeline and the
     demo cases, where a cropped volume is the intended output rather than an accident.
+
+    ``lesion_class``, when given, is checked against :data:`LESION_CLASSES` here --
+    the same single choke point as the rest, so a typo cannot reach the disk. So is
+    ``exam_status`` against :data:`EXAM_STATUSES`.
+
+    ``expect_lesion=False`` drops the empty-mask warning. An exam-level corpus holds
+    negatives on purpose -- a normal screening exam *has* no lesion to localise -- and a
+    warning raised once per negative would bury the ones that mean something: on the
+    4 581 normal patients of BCS-DBT there would be thousands.
     """
     volume = np.asarray(volume)
     mask = np.asarray(mask)
@@ -75,6 +130,11 @@ def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_fram
             f"{where}volume holds {bad} non-finite value(s) out of {volume.size}. "
             "Intensity normalisation failed, or an unnormalised volume overflowed float16")
 
+    if lesion_class is not None:
+        lesion_class_label(lesion_class)  # raises on anything unrecognised
+    if exam_status is not None:
+        exam_status_label(exam_status)
+
     unique = np.unique(mask)
     if not np.isin(unique, (0, 1)).all():
         raise VolumeValidationError(
@@ -97,7 +157,7 @@ def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_fram
             "crop is intended")
 
     lesion_voxels = int((mask > 0).sum())
-    if lesion_voxels == 0:
+    if lesion_voxels == 0 and expect_lesion:
         warnings.append(f"{where}mask is empty — no lesion to localise in this volume")
 
     for message in warnings:
@@ -105,15 +165,27 @@ def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_fram
     return warnings
 
 
-def summarise(volume, mask):
-    """Descriptive stats for the lineage manifest. Assumes validation already passed."""
+def summarise(volume, mask, lesion_class=None, exam_status=None):
+    """Descriptive stats for the lineage manifest. Assumes validation already passed.
+
+    ``lesion_class`` is carried through when known, so the manifest says how many
+    cases of each class a run wrote -- the count a reader would otherwise have to
+    re-derive by opening every file.
+    """
     volume = np.asarray(volume)
     mask = np.asarray(mask) > 0
     positive_slices = int(mask.reshape(mask.shape[0], -1).any(axis=1).sum())
-    return {
+    stats = {
         "shape": list(volume.shape),
         "dtype": str(volume.dtype),
         "lesion_voxels": int(mask.sum()),
         "lesion_slices": positive_slices,
         "lesion_slice_fraction": round(positive_slices / volume.shape[0], 4),
     }
+    if lesion_class is not None:
+        key, label = lesion_class_label(lesion_class)
+        stats["lesion_class"], stats["label"] = key, label
+    if exam_status is not None:
+        key, label = exam_status_label(exam_status)
+        stats["exam_status"], stats["label"] = key, label
+    return stats

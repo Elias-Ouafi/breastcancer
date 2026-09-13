@@ -1,8 +1,10 @@
 # MRI Cancer-Detection Web App
 
-A small Flask app: upload a breast **MRI/DBT** study, get a cancer-detection verdict
-(present/absent + confidence). Ships with a **mock** backend so it runs *before* any
-model is connected.
+A small Flask app: upload a breast **MRI/DBT** study, get a lesion verdict
+(present/absent + the localised slice and box). The verdict carries no calibrated
+exam-level score: `confidence` is a max per-pixel probability, saturated at 1.0 with
+the served checkpoint, and the UI reports it under that name. Ships with a **mock**
+backend so it runs *before* any model is connected.
 
 ## Run
 

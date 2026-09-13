@@ -223,6 +223,16 @@
     .btn-secondary:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
     .btn-block { width: 100%; margin-top: var(--space-2); justify-content: center; }
 
+    /* Un libellé lisible par un lecteur d'écran, invisible à l'œil. La grille de
+       saisie de /biopsie a trente champs dont l'en-tête de ligne et de colonne
+       suffisent visuellement, mais qui seraient trente « champ texte » sans nom
+       à l'oreille. clip-path plutôt que display:none, qui les retirerait aussi de
+       l'arbre d'accessibilité. */
+    .visually-hidden {
+      position: absolute; width: 1px; height: 1px; overflow: hidden;
+      clip-path: inset(50%); white-space: nowrap;
+    }
+
     .table { width: 100%; border-collapse: collapse; font-size: 13px; }
     .table td { padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
     .table tr:last-child td { border-bottom: 0; }
@@ -379,6 +389,10 @@
                 fixée à l'avance ; un autre volume ne donnera pas un résultat fiable.</p>
             {% endblock %}
 
+            {# Ces trois chiffres sont ceux du modèle d'imagerie. Un écran qui sert un
+               autre modèle les remplace ou les retire — sinon ils se lisent comme les
+               siens (cf. biopsy.html). #}
+            {% block limits_numbers %}
             <div class="metrics">
               <span class="metric" title="Dice sur 28 patients de test, IC95 0,47–0,59">Dice <b>0,53</b></span>
               <span class="metric" title="Lésion trouvée une fois la bonne coupe montrée, IC95 82–93">Sensibilité <b>88 %</b></span>
@@ -397,6 +411,7 @@
                   test, jamais une performance clinique.</li>
               </ul>
             </details>
+            {% endblock %}
           </div>
 
           {% block how_link %}

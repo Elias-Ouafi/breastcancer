@@ -1,11 +1,14 @@
 """Dataset and patient-level splitting for MRI lesion segmentation.
 
 Reads the compressed ``.npz`` files produced by
-``TransformData.save_preprocessed`` (keys: ``volume``, ``mask``, ``crop_offset``)
-and serves 2D axial slices as ``(image, mask)`` tensor pairs for a 2D U-Net.
+``TransformData.save_preprocessed`` (keys: ``volume``, ``mask``, ``crop_offset``,
+and, where the source says so, ``label``) and serves 2D axial slices as
+``(image, mask)`` tensor pairs for a 2D U-Net.
 
 Splitting is done at the *case* level (all slices of one case stay in the same
-split) to avoid optimistic leakage between train/val/test.
+split) to avoid optimistic leakage between train/val/test, and -- on a corpus that
+carries exam-level labels -- *within each class*, so that the prevalence a metric is
+read against is the same in train, validation and test.
 """
 from __future__ import annotations
 
@@ -40,13 +43,78 @@ def default_patient_key(path):
     return os.path.splitext(os.path.basename(path))[0]
 
 
+def default_patient_label(path):
+    """The exam-level label stored beside the volume, or ``None`` if it has none.
+
+    ``preprocess_dbt_with_boxes`` writes ``label`` (0 benign, 1 cancer) because the
+    class cannot be read off the mask. The DCE-MRI collection publishes no such
+    column, so its files have no label and ``None`` says exactly that.
+    """
+    try:
+        with np.load(path) as data:
+            if "label" in data.files:
+                return int(data["label"])
+    except Exception:
+        pass
+    return None
+
+
+def _patient_labels(groups, patient_label):
+    """One label per patient, or ``None`` when the corpus is not labelled throughout.
+
+    A patient contributing both a benign and a cancer exam is counted as a cancer
+    patient -- the same rule preprocessing applies to a series, and for the same
+    reason: at the level where the decision is taken, one missed cancer is not offset
+    by a correctly called benign. It is warned about rather than tolerated silently,
+    since in this collection it does not happen (82 benign-only and 59 cancer-only
+    patients across the pooled BCS-DBT box CSVs).
+    """
+    labels = {}
+    for key, files in groups.items():
+        values = {patient_label(p) for p in files}
+        if None in values:
+            warnings.warn(
+                f"{key!r} has no exam-level label: splitting without stratification, "
+                "so the class prevalence of each split is left to chance.")
+            return None
+        if len(values) > 1:
+            warnings.warn(f"{key!r} has exams labelled {sorted(values)}; "
+                          "counting the patient as the highest class.")
+        labels[key] = max(values)
+    return labels
+
+
+def _allocate(keys, val_frac, test_frac):
+    """Cut an (already shuffled) list of patients into (train, val, test)."""
+    n = len(keys)
+    n_test = int(round(n * test_frac))
+    n_val = int(round(n * val_frac))
+    # Always keep at least one training case.
+    n_val = min(n_val, max(0, n - n_test - 1))
+    n_test = min(n_test, max(0, n - n_val - 1))
+    return keys[n_test + n_val:], keys[n_test:n_test + n_val], keys[:n_test]
+
+
 def split_npz_by_patient(data_dir, val_frac=0.15, test_frac=0.15, seed=42,
-                         patient_key=default_patient_key):
+                         patient_key=default_patient_key,
+                         patient_label=default_patient_label, stratify=True):
     """Split ``data_dir/*.npz`` into (train, val, test) lists of file paths.
 
     Whole cases (groups) are assigned to a single split. With very few cases the
     val/test fractions are honoured only as far as leaving at least one training
     case; a warning is emitted when a split ends up empty.
+
+    When every patient carries an exam-level label, the fractions are applied
+    **within each class**. Two things follow, and both matter for the target this
+    project is aimed at: each split keeps the corpus prevalence up to rounding -- and
+    a specificity or a PPV is only readable next to the prevalence it was measured at
+    -- and no class can be rounded out of the training set, which is what would happen
+    to 24 cancer patients against 48 benign ones on an unlucky seed.
+
+    A corpus with no labels (the DCE-MRI one) falls back to a single shuffle, with a
+    warning. That path is bit-for-bit the allocation used before stratification
+    existed, which is what keeps the published 28-patient DCE-MRI test split
+    reproducible.
     """
     paths = sorted(glob(os.path.join(data_dir, "*.npz")))
     if not paths:
@@ -59,20 +127,23 @@ def split_npz_by_patient(data_dir, val_frac=0.15, test_frac=0.15, seed=42,
     for p in paths:
         groups.setdefault(patient_key(p), []).append(p)
 
-    keys = list(groups.keys())
+    labels = _patient_labels(groups, patient_label) if stratify else None
     rng = np.random.default_rng(seed)
-    rng.shuffle(keys)
 
-    n = len(keys)
-    n_test = int(round(n * test_frac))
-    n_val = int(round(n * val_frac))
-    # Always keep at least one training case.
-    n_val = min(n_val, max(0, n - n_test - 1))
-    n_test = min(n_test, max(0, n - n_val - 1))
-
-    test_keys = keys[:n_test]
-    val_keys = keys[n_test:n_test + n_val]
-    train_keys = keys[n_test + n_val:]
+    if labels is None:
+        keys = list(groups.keys())
+        rng.shuffle(keys)
+        train_keys, val_keys, test_keys = _allocate(keys, val_frac, test_frac)
+    else:
+        train_keys, val_keys, test_keys = [], [], []
+        # Sorted, so the draw depends on the seed and not on directory order.
+        for value in sorted(set(labels.values())):
+            keys = [k for k in groups if labels[k] == value]
+            rng.shuffle(keys)
+            train_c, val_c, test_c = _allocate(keys, val_frac, test_frac)
+            train_keys += train_c
+            val_keys += val_c
+            test_keys += test_c
 
     def collect(ks):
         return [p for k in ks for p in groups[k]]
@@ -83,6 +154,61 @@ def split_npz_by_patient(data_dir, val_frac=0.15, test_frac=0.15, seed=42,
     if not test:
         warnings.warn("Test split is empty (too few cases).")
     return train, val, test
+
+
+def kfold_by_patient(data_dir, n_splits=5, seed=42, patient_key=default_patient_key,
+                     patient_label=default_patient_label):
+    """Yield ``(train_paths, heldout_paths)`` for each of ``n_splits`` folds.
+
+    Folds are built over *patients* and, when the corpus carries exam-level labels,
+    **within each class**, so every fold holds roughly the corpus prevalence. Every
+    patient is held out exactly once, so the pooled out-of-fold predictions cover the
+    whole corpus -- which is the point of using cross-validation here rather than one
+    split. On 130 patients a single 15 % test split leaves ~20 patients and ~8
+    cancers, an interval so wide that any result would be compatible with chance;
+    pooling folds evaluates all 130 while never scoring a patient with a model that
+    saw it.
+
+    It buys coverage, not independence: the folds share a corpus, a preprocessing and
+    a hyper-parameter choice, so the interval it supports is narrower than a fresh
+    external test set would give, and nothing here replaces one.
+    """
+    paths = sorted(glob(os.path.join(data_dir, "*.npz")))
+    if not paths:
+        raise FileNotFoundError(f"No .npz files found in {data_dir!r}.")
+    if n_splits < 2:
+        raise ValueError(f"n_splits must be at least 2; got {n_splits}")
+
+    groups = OrderedDict()
+    for p in paths:
+        groups.setdefault(patient_key(p), []).append(p)
+    if len(groups) < n_splits:
+        raise ValueError(f"{len(groups)} patients cannot make {n_splits} folds")
+
+    labels = _patient_labels(groups, patient_label)
+    rng = np.random.default_rng(seed)
+
+    # Deal each class round-robin into the folds: the largest and smallest fold then
+    # differ by at most one patient of each class, which no random assignment
+    # guarantees on a class of 55 against one of 75.
+    folds = [[] for _ in range(n_splits)]
+    classes = [None] if labels is None else sorted(set(labels.values()))
+    for offset, value in enumerate(classes):
+        keys = ([k for k in groups] if labels is None
+                else [k for k in groups if labels[k] == value])
+        keys = list(keys)
+        rng.shuffle(keys)
+        for i, key in enumerate(keys):
+            folds[(i + offset) % n_splits].append(key)
+
+    for i in range(n_splits):
+        heldout_keys = set(folds[i])
+        heldout = [p for k in folds[i] for p in groups[k]]
+        train = [p for k in groups if k not in heldout_keys for p in groups[k]]
+        if not heldout or not train:
+            warnings.warn(f"Fold {i} is degenerate: "
+                          f"{len(heldout)} held-out and {len(train)} training files.")
+        yield train, heldout
 
 
 def _gamma_jitter(img, rng, gamma_range=(0.8, 1.25)):

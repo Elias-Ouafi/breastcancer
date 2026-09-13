@@ -1,8 +1,10 @@
 # plan.md — décisions de conception et journal des mesures
 
-> **Modalité** : IRM mammaire multiphase (DCE-MRI, DICOM).
-> **Outil visé** : deux étapes — (1) une IRM en entrée, dire s'il y a un cancer ;
+> **Outil visé** : deux étapes — (1) un examen en entrée, dire s'il y a un cancer ;
 > (2) les retours de la biopsie en entrée, dire si c'est malin ou bénin.
+> **Modalités** : étape 1 sur **DBT / mammographie** (`Breast-Cancer-Screening-DBT`),
+> décision du 2026-09-12, voir la section suivante. L'IRM multiphase (DCE-MRI, DICOM)
+> reste la modalité de la brique de **localisation**, qui s'active après l'étape 1.
 > **Cible** : démo / portfolio. **Pas d'usage clinique, pas de certification.**
 > **Mention obligatoire, partout** : *Research Use Only — Not for diagnostic use*.
 
@@ -11,12 +13,189 @@ l'app (Partie 3) et le journal daté de ce qui a été mesuré, y compris les é
 (§4.1 à §4.3). Le reste — comment lancer la démo, où vivent les données, comment
 tourne le pipeline — est dans [README.md](README.md), au plus près du code.
 
+## Cible chiffrée et voie retenue (2026-09-12)
+
+Jusqu'ici l'étape 1 n'avait pas de cible chiffrée : « dire s'il y a un cancer » ne dit
+pas à quel taux. Elle en a une maintenant, prise sur le programme national de
+dépistage organisé, et elle change la modalité de l'étape 1.
+
+### La cible
+
+Point de fonctionnement visé, **au niveau patient**, un examen entrant, une décision
+sortante :
+
+| Mesure | Cible | Source |
+|---|---:|---|
+| Sensibilité | **82,8 %** | Santé publique France, dépistage organisé 50-74 ans |
+| Spécificité | **91,4 %** | idem |
+| Sensibilité selon la tranche d'âge | 76 – 88 % | idem |
+| Sensibilité à 1 an (cancers d'intervalle inclus) | 94,2 % | idem |
+
+Ce couple (Se, Sp) correspond, sous hypothèse binormale, à une **ROC-AUC patient de
+l'ordre de 0,95** — c'est l'objectif à porter dans `eval_report.json`, avec son IC.
+
+Repères de contexte, pas des cibles : faux négatifs > 15 % (MSD), 85 à 90 % des
+anomalies détectées ne sont pas des cancers (MSD), VPP 11,3 % en 2020 contre 7,8 % en
+2008 (SpF).
+
+### Ce qu'on ne vise pas : la VPP
+
+La sensibilité et la spécificité sont des propriétés du modèle à un seuil donné. **La
+VPP n'en est pas une** : elle dépend de la prévalence. Au taux de détection du
+programme (~6,7 cancers pour 1 000 dépistées), Se 82,8 % et Sp 91,4 % donnent
+
+    0,0067 × 0,828 / (0,0067 × 0,828 + 0,9933 × 0,086) = 6,1 %
+
+et non 11,3 %. Obtenir 11,3 % à cette prévalence et cette sensibilité demanderait une
+spécificité de 95,6 % : les deux chiffres publiés ne décrivent pas le même point de
+fonctionnement (années, définition du « test positif », dénominateurs). Aucun des deux
+n'est faux ; ils ne s'additionnent simplement pas.
+
+Conséquence opérationnelle : sur un jeu de test équilibré, le même modèle afficherait
+une VPP de ~90 %, ce qui ne prouverait rien. **On fixe (Se, Sp), et on publie la
+prévalence du jeu de test à côté de la VPP qui en découle.** Une VPP citée sans sa
+prévalence est un chiffre sans unité.
+
+### La voie retenue : bascule de l'étape 1 sur DBT / mammographie
+
+Trois raisons, indépendantes l'une de l'autre, rendaient la cible inatteignable sur le
+corpus DCE-MRI :
+
+1. **Mauvaise modalité pour la comparaison.** Les chiffres visés sont ceux de la
+   mammographie de dépistage. Un modèle IRM comparé à eux, même au bon niveau, compare
+   deux choses différentes.
+2. **Mauvaise population.** Duke-Breast-Cancer-MRI est une cohorte diagnostique :
+   prévalence 100 %, et `preprocess_dce_mri_with_boxes` écarte en plus tout patient
+   sans boîte. Une spécificité ne se mesure pas sur un corpus sans négatifs.
+3. **Le piège de la solution évidente.** Positifs chez Duke + négatifs ailleurs donne
+   un modèle qui apprend la source — scanner, protocole, centre — et une AUC de 0,99
+   qui ne vaut rien. Les deux classes doivent venir de la **même collection**.
+
+`Breast-Cancer-Screening-DBT` lève les trois d'un coup : c'est une collection de
+dépistage, **majoritairement normale** — le docstring de
+`ExtractData.download_annotated_dbt_series` le dit lui-même, juste avant d'exclure
+délibérément les patients non annotés. Le code de téléchargement, de prétraitement et
+d'appariement boîte ↔ série existe déjà et tourne.
+
+**Ce que la bascule ne fait pas** : elle n'annule pas le travail DCE-MRI. Le U-Net
+garde sa fonction — localiser une lésion une fois l'examen déclaré suspect — et ses
+mesures restent valides pour cette fonction-là. Il quitte le chemin critique de
+l'étape 1, il ne quitte pas le projet.
+
+### Les chiffres actuels — ligne de base au 2026-09-12
+
+Mesuré dans ce dépôt, pas repris de la documentation.
+
+**Étape 1, ce que produit l'app aujourd'hui :**
+
+| Mesure | Cible | Actuel |
+|---|---:|---|
+| Sensibilité patient | 82,8 % | **100 %**, trivialement : la sortie est constante |
+| Spécificité patient | 91,4 % | **0 %**, et non mesurable — zéro patient sain au corpus |
+| ROC-AUC patient | ≈ 0,95 | **non mesurable**, proxy le plus proche 0,50 |
+| Spécificité par coupe | — | **0,03 %** (99,97 % des coupes saines alarment) |
+| VPP | 11,3 % @ p ≈ 0,7 % | indéfinie (p = 100 %) |
+
+`inference._localize_lesion` décide par `best_conf >= 0.5`, et `best_conf` vaut
+**1,0000** partout : 28/28 patients du split test, et 160/160 coupes de
+`Breast_MRI_001` dont les 136 sans lésion (moyenne 1,0000, minimum 1,0000). La sortie
+binaire est une constante. L'app l'affichait en « Confiance 100 % », jauge remplie :
+elle ne l'affiche plus depuis le 2026-09-12 (voir Livrés), et la valeur brute
+n'apparaît plus que dans le détail technique, nommée pour ce qu'elle est. La branche
+« aucune zone suspecte » des gabarits reste inatteignable avec ce checkpoint.
+
+**Ce qui reste valide, et qui relève de la localisation** (28 patients test, IC 95 %
+bootstrap par patient, `models/dce_mri_p2_negfix/eval_report.json`) : Dice 0,533
+[0,473 – 0,593] ; sensibilité lésion IoU ≥ 0,1 88,0 % [81,9 – 93,4] ; 222,2 faux
+positifs par volume [204,7 – 237,4] ; 0,825 s par volume. Classifieur de coupe :
+top-1 42,9 % (12/28, reproduit à travers `predict_dce_mri`), AUC **intra-volume**
+0,803 — un pouvoir de tri entre coupes d'un même patient, à ne pas lire comme une AUC
+de détection.
+
+**Pourquoi « durcir le seuil » ne marcherait pas.** Si la décision patient était « au
+moins une coupe s'allume » sur ~160 coupes, il faudrait un taux de faux positifs par
+coupe de 1 − 0,914^(1/160) ≈ **0,056 %**, soit une spécificité par coupe de 99,94 %
+contre 0,03 % mesurée. L'agrégation multiplie l'exigence par ~160 : il faut une tête
+de décision **au niveau volume**, pas un seuil mieux choisi.
+
+**Ce que le corpus DBT contient déjà** — ignoré jusqu'au 2026-09-12 :
+
+| | Lignes | Patients | Classes |
+|---|---:|---:|---|
+| `BCS-DBT-boxes-train.csv` | 224 | 101 | benign 137 / cancer 87 |
+| `BCS-DBT-boxes-validation.csv` | 75 | 40 | benign 38 / cancer 37 |
+| **Pool** | **299** | **141** | **82 patients bénins / 59 cancers** |
+
+La colonne `Class` n'était **lue nulle part** : `preprocess_dbt_with_boxes` peignait
+toute boîte dans le masque sans la regarder, donc « positif » voulait dire « une
+lésion », pas « un cancer ». Sur les **72 patients prétraités** (147 `.npz`),
+**48 sont bénins et 24 cancéreux** — deux tiers des positifs n'étaient pas des
+cancers. C'était la mauvaise étiquette pour la cible, et c'est la bonne pour
+l'étape 2.
+
+Corrigé le 2026-09-12 (voir Livré) : chaque `.npz` porte maintenant son
+`lesion_class` et un `label` 0/1, et le corpus a été reconstruit — deux fois, la
+seconde après la correction d'appariement du §4.4. Mesuré sur les fichiers, pas
+déclaré :
+
+| | Étiquetage seul | Latéralité par les pixels (§4.4) | Jointure `file-paths` (§4.6) |
+|---|---:|---:|---:|
+| Séries | 147 | 253 | **260** |
+| Séries bénignes / cancers | 100 / 47 | 151 / 102 | **153 / 107** |
+| Patients | 72 | 130 | **132** |
+| Patients bénins / cancéreux | 48 / 24 | 75 / 55 | **76 / 56** |
+| Patients mélangeant les deux classes | 0 | 0 | **0** |
+| Avertissements de validation | 5 | 0 | **0** |
+| Taille | 0,55 Go | 1,06 Go | **1,00 Go** |
+
+Le `manifest.json` couvre les 260 fichiers, un par série, porte la révision qui l'a
+produit (`git_revision`), la vue et l'étude de chaque cas, et compte 14 séries lues
+comme miroir. Durée d'une passe complète : 27 à 56 min pour 22,4 Go de DICOM à décoder
+— la première passe, qui écartait 115 séries sur l'en-tête, était la plus rapide ; la
+dernière, qui en décode 260, la plus lente.
+
+**Ce que la reconstruction a fait apparaître** (2026-09-12, mesuré) :
+
+- **5 séries sur 147 ont un volume constant après recadrage** (`validation` les
+  signale : « nothing to learn from this series »), chez 3 patients — DBT-P00538
+  (cancer, **ses deux séries**), DBT-P03677 (bénin, 2 séries), DBT-P02919 (bénin, 1).
+  Le masque y couvre pourtant 38 000 à 800 000 voxels : la boîte désigne une zone
+  uniforme. **Élucidé le même jour, et c'était plus large que ces 5 séries : voir
+  §4.4.** Le masque était posé sur le mauvais sein.
+- **Une trame complète DBT pèse ~745 Mo en float16** (2457×1890 à 1996, 47 à 100
+  coupes). Le corpus recadré tient en 0,55 Go, médiane 37×252×253. Conséquence
+  directe pour la tête de décision : un volume recadré sur la lésion **présuppose la
+  réponse**, et `crop=False` demanderait ~100 Go. Il faudra sous-échantillonner le
+  plan (p. ex. 512×512), pas seulement changer le drapeau.
+- **115 des 262 séries sur disque n'ont aucune boîte** (62 patients), et cela ne veut
+  **pas** dire « examen normal » : le statut par étude (normal / actionable / benign /
+  cancer) vit dans `BCS-DBT-labels-*.csv`, qui **n'est pas téléchargé**. *(Téléchargé
+  depuis le 2026-09-13, et la jointure du §4.6 ramène ces 115 à **2** séries sans
+  boîte : les 113 autres en avaient une, que l'inférence ne trouvait pas.)* C'est le
+  premier obstacle du P1 « corpus à deux classes », avant tout téléchargement.
+
+### Ce que la cible coûte en données
+
+Pour **mesurer** ces taux, dans le jeu de test seul :
+
+| Objectif de mesure | ± 5 points | ± 3 points |
+|---|---:|---:|
+| Sensibilité 82,8 % → patients avec cancer | ~220 | ~610 |
+| Spécificité 91,4 % → patients sans cancer | ~121 | ~335 |
+
+Le split test actuel compte 28 patients, tous positifs : l'IC sur une sensibilité y
+serait de **± 14 points**, incapable de distinguer 82,8 % de 76 % ou de 94 %. C'est le
+même problème que celui déjà visible sur le classifieur de coupe (42,9 %, IC 25 – 61).
+La contrainte principale du projet n'est pas le modèle, c'est le volume d'examens
+annotés.
+
 ## Où en est le projet (2026-08-18)
 
 > **Relu contre la cible produit**, énoncée ici pour la première fois : (1) une IRM en
 > entrée, dire s'il y a un cancer ; (2) les retours de la biopsie en entrée, dire si
 > c'est malin ou bénin. Les mesures ci-dessous étaient justes ; c'est leur lecture qui
-> change. Aucune ne répond à l'étape 1, et l'étape 2 ne sort pas du disque.
+> change. Aucune ne répond à l'étape 1. L'étape 2, elle, ne sortait pas du disque —
+> c'est corrigé depuis le 2026-08-18.
 
 **Ce qui est mesuré.** U-Net 2D entraîné sur 186 patients Duke-Breast-Cancer-MRI, servi
 sur le volume de soustraction 2ᵉ phase post-injection. Sur 28 patients de test jamais
@@ -58,12 +237,29 @@ dans le docstring de la fonction qui les exclut), puis une tête de classificati
 niveau **volume/patient**, jugée sur sensibilité/spécificité/ROC-AUC. Pas sur du Dice :
 le Dice répond à « où », une fois que « si » est répondu.
 
-**Étape 2 — faite, mesurée, débranchée.** Wisconsin Diagnostic *est* l'étape 2 : 30
+**Étape 2 — branchée le 2026-08-18.** Wisconsin Diagnostic *est* l'étape 2 : 30
 features morphologiques mesurées sur une cytoponction, 569 cas, label M/B, ROC-AUC
-99,89 % (`Final_Report.md`). `train_tabular_model.py` persiste un `PipelineModel` unique
-dans `models/tabular/`, et `inference.predict_tabular` sait scorer 30 features brutes.
-Mais `app/` n'appelle jamais `predict_tabular` : pas de route, pas de formulaire, pas de
-template. La moitié la plus performante du projet est un moteur sans pédale.
+99,89 % (`Final_Report.md`). Elle est désormais servie à `/biopsie` : dix mesures ×
+trois statistiques, deux exemples cliquables, verdict malin/bénin et probabilité.
+
+Ce qui bloquait n'était pas le modèle mais le fait de le servir. `predict_tabular`
+démarrait une session Spark et relisait un `PipelineModel` à chaque appel — des
+secondes de JVM pour trente flottants, dans une image qui n'embarque volontairement
+ni Spark ni JVM. Or ce pipeline est entièrement affine (impute → standardise → PCA →
+standardise → logistique) : `tabular_export.py` en extrait les constantes dans
+13 Ko de JSON qui reproduisent le modèle Spark **à 1,0 × 10⁻¹⁵ près, 0 désaccord de
+label sur les 569 lignes**. Spark reste l'outil d'entraînement, il sort du chemin de
+requête. L'artefact est versionné, comme les checkpoints, pour que `/biopsie` réponde
+depuis un clone.
+
+Deux choses corrigées au passage. `models/tabular/` ne contenait pas de
+`metadata.json` : le modèle persisté était inutilisable, et personne ne s'en était
+aperçu puisque rien ne l'ouvrait. Et `_get_spark` ne pointait pas vers le `winutils`
+pourtant fourni dans le venv, donc le pipeline tabulaire ne démarrait que pour qui
+avait posé `HADOOP_HOME` à la main dans son shell.
+
+La probabilité affichée est bornée à « > 99,9 % » plutôt qu'arrondie : le modèle rend
+0,9999999999991 sur l'exemple malin, et « 100,0 % » se lirait comme une certitude.
 
 **BreakHis est une branche morte.** `ExtractBreakHis.py` télécharge et extrait ;
 `BREAKHIS_DIR` n'apparaît nulle part ailleurs que dans `config.py`. Zéro modèle, zéro
@@ -72,25 +268,48 @@ la biopsie. À assumer comme pendant image du Wisconsin, ou à retirer.
 
 **Le dépôt, lui, tient.** Données en couches sous `data/` (raw → preprocessed →
 curated), chemins centralisés dans `config.py`, checkpoints dans `models/`, pipeline
-exécutable et reprenable via `python -m pipelines.dce_mri`, **87 tests** (~7 s, sans GPU
-ni dataset) et ruff en CI. Docker, validation de schéma et manifeste de lineage sont
+exécutable et reprenable via `python -m pipelines.dce_mri`, **116 tests** (~7 s hors
+parité Spark, sans GPU ni dataset) et ruff en CI. Docker, validation de schéma et manifeste de lineage sont
 écrits, testés et commités le 2026-08-18.
 
 ## Ce qui reste ouvert
 
-Ordonné par ce qui rapproche de la cible en deux étapes, pas par facilité.
+Ordonné par ce qui rapproche de la cible en deux étapes, pas par facilité. Réordonné
+le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 
 | Priorité | Tâche | Critère de « fait » |
 |---|---|---|
-| P0 | Commiter Docker + validation + lineage | Les trois chantiers ci-dessous sont sur `main` ; un relecteur les voit |
-| P1 | Brancher l'étape 2 dans l'app | Une route et un formulaire 30 champs (ou upload CSV) appellent `inference.predict_tabular` et affichent malin/bénin avec sa probabilité |
-| P1 | Acquérir des examens négatifs | Le corpus contient des patients sans lésion ; un split conserve la proportion |
-| P1 | Tête de détection au niveau volume | Sensibilité, **spécificité** et ROC-AUC patient publiées avec IC, comme §4.3 l'a fait pour la localisation |
-| P2 | Trancher le sort de BreakHis | Un modèle bénin/malin entraîné et mesuré, ou le script et `BREAKHIS_DIR` supprimés |
-| P2 | Trancher le sort du pipeline tabulaire Spark | Assumé et documenté comme démo Spark, ou retiré — aujourd'hui il impose une JVM à tout le dépôt pour 569 lignes |
-| P2 | Bug NaN fp16 non résolu | La divergence (§4.2, repoussée époque 11 → 15) est localisée dans le forward pass et corrigée, ou documentée comme acceptée |
+| P1 | Corpus DBT à deux classes, d'une seule source | **Fait le 2026-09-13**, voir Livré : le filtre « patients annotés » est levé, **150 patients normaux sont téléchargés** (660 séries, 46,8 Go mesurés — 312 Mo par patient, pas les ~200 Mo qu'un premier patient laissait croire), l'étiquette vient du statut par vue, et `preprocess_dbt_exams` écrit les deux classes dans **une seule géométrie**. Reste à publier les chiffres du corpus construit — la passe sur 926 séries tourne |
+| P1 | Tête de décision au niveau examen | Une probabilité par patient — pas une agrégation « une coupe s'allume », dont le §« Cible chiffrée » montre qu'elle exige 99,94 % de spécificité par coupe. **ROC-AUC patient avec IC bootstrap par patient** dans `eval_report.json`. **Débloqué le 2026-09-13** : le corpus existe enfin (`dbt_exams`, deux classes, une géométrie) et les briques de mesure aussi (`imaging.metrics.bootstrap_auc`, `operating_point`, `dataset.split_npz_by_patient` stratifié). Point d'attention avant d'écrire la boucle : un volume 384×384×60 en float16 pèse 17 Mo décompressé, donc les ~926 volumes ne tiennent pas en mémoire comme `lesionclf` les y met — il faut streamer (banc de coupes, comme `imaging/slicebank.py` pour la DCE-MRI) |
+| P1 | Choisir et publier le point de fonctionnement | Seuil fixé sur la **validation** pour Se = 82,8 % ; spécificité, VPP et **prévalence du jeu de test** rapportées sur le **test**, avec IC. Le panneau « Limites connues » cite Se/Sp/IC/prévalence au lieu du Dice |
+| P2 | Reprendre l'étape 2 en version image **si le corpus grossit** | Mesurée le 2026-09-12 et négative : ROC-AUC patient 0,513 [0,411 – 0,615] sur 130 patients, l'IC contient le hasard (§4.5). Le levier identifié est le nombre de patients, pas le modèle. Le réseau n'est plus l'obstacle (2026-09-13) : ce qui reste à décider est le volume disque. Le plus court chemin est désormais chiffré — les boîtes du **split test** de la collection existent (`BCS-DBT-boxes-test`, 136 lignes, 60 patients, 30 cancers) et n'ont jamais été utilisées ici : pooler les trois splits porte le corpus annoté de 141 à **201 patients, dont 89 cancers**, soit tous les cancers annotés de la collection |
+| P2 | Donner à l'étape 2 tabulaire une mesure qui lui appartienne | `train_tabular_model.py` fait un split (ou une VC) et persiste les métriques du modèle **servi** ; `AnalyzeData` ajuste imputation/scaler/PCA **après** le split ; `reports/model_results.csv` recommité |
+| P2 | Trancher le sort de BreakHis | Un modèle bénin/malin entraîné et mesuré, ou le script et `BREAKHIS_DIR` supprimés. Rétrogradé de fait : `Class` fournit un pendant image moins cher |
+| P3 | Trancher le sort du pipeline tabulaire Spark | Assumé et documenté comme démo Spark, ou retiré. Rétrogradé de P2 : depuis l'export, la JVM n'est plus qu'une dépendance d'entraînement, plus une condition pour servir |
+| P3 | Bug NaN fp16 non résolu | La divergence (§4.2, repoussée époque 11 → 15) est localisée dans le forward pass et corrigée, ou documentée comme acceptée. Rétrogradé de P2 : le U-Net DCE-MRI quitte le chemin critique de l'étape 1. Le checkpoint servi reste un instantané pré-divergence (époque ≤ 14 sur 30) |
+| P3 | Retirer le code mort | `app/run_unet.py`, `DbtUNetPredictor` et `predict_dbt` pointent un checkpoint qui n'existe plus (`models/dbt/unet_best.pt`, écrasé par un smoke test, §4.1). À réécrire pour la nouvelle tête DBT ou à supprimer, pas à laisser documenté comme disponible dans `app/README.md` |
+| P3 | Réparer le paquet | `pyproject.toml` omet `logging_setup`, `validation` et `lineage` de `py-modules` : hors du répertoire du dépôt, `import inference` échoue. Masqué parce qu'on lance toujours depuis la racine |
+| P3 | Exécuter le lineage sur le corpus | Aucun `manifest.json` n'existe sous `data/preprocessed_data/` : le code est écrit et testé, jamais passé sur les données réelles |
 | P3 | Registre de traitement RGPD | Une page : base légale, nature des données, finalité, conservation, sécurité |
 | P3 | Nom de produit + logo | Choisi et intégré au header de l'app |
+
+**Livré** (branche `ameliore-le-mvp`, le 2026-09-13) :
+
+| Tâche | Où | Ce qui la rend faite |
+|---|---|---|
+| P1 — apparier les boîtes depuis `file-paths` au lieu de les inférer | `TransformData.py` (`series_uid_from_classic_path`, `view_position_of`, `_read_file_paths`, `BOX_JOIN_COLUMNS`, `preprocess_dbt_with_boxes`), `tests/test_dbt_preprocessing.py` | L'appariement est une **jointure** sur `(PatientID, StudyUID, View)` ; les trois helpers d'inférence sont supprimés et les pixels ne décident plus que du retournement. Corpus reconstruit et **mesuré sur les fichiers** : 260 séries (contre 253), 132 patients, 153 bénignes / 107 cancers, 76 / 56 patients, 0 masque vide, 0 avertissement, 1,00 Go, 56,1 min. Diff contre l'ancien corpus : +7 séries, 0 perdue, **exactement 4 masques déplacés** — les 4 acquisitions répétées que le §4.4 annonçait mal appariées — et 14 miroirs conservés. Les 11 séries à vue répétée (`lmlo1`, `rcc1`, `lcc2`…) sont appariées pour la première fois. Détail au §4.6 |
+| P1 — rendre les tables BCS-DBT téléchargeables depuis un clone | `ExtractData.download_dbt_tables`, `config.py` (`DBT_FILE_PATHS*`, `DBT_LABELS_*`, `DBT_BOXES_TEST`) | Les **9 tables** (boîtes, labels par vue, inventaire `file-paths`, pour les trois splits) se téléchargent en une fonction ; deux d'entre elles sont **identiques octet pour octet** aux copies posées à la main le 2026-09-13. Jusqu'ici un clone ne pouvait pas prétraiter DBT du tout, puisque la jointure exige l'inventaire. Un nom publié ne suit pas le nom local (`BCS-DBT-boxes-validation-v2-PHASE-2-Jan-2024.csv`) : la table le dit |
+| P1 — lire le statut par vue, seule source du mot « normal » | `TransformData.read_dbt_labels`, `TransformData.dbt_patient_status`, 4 tests | Un patient est lu **à sa pire vue** (un cancer ⇒ examen cancer), une ligne sans aucun drapeau n'est pas comptée normale, et une table amputée d'une colonne est refusée. Reproduit depuis les fichiers les chiffres jusque-là repris de la documentation : 4 581 normaux / 278 actionable / 112 bénins / **89 cancers**, 5 060 patients |
+| P1 — télécharger des examens sans cancer | `ExtractData.download_normal_dbt_series`, `ExtractData.download_dbt_series_for` | Le filtre « patients annotés » est levé : la sélection vient du statut par vue, un patient n'est pris que si **toutes** ses vues sont normales, et l'échantillon est tiré avec une graine plutôt que par ID croissant (les ID suivent le site et la date). Cap exprimé en **volume ajouté par l'appel** et non en taille totale du dossier — l'ancien cap se déclenchait immédiatement sur un dossier partagé avec Duke. Coût mesuré : ~200 Mo par patient normal (4 vues) |
+
+**Livré** (branche `ameliore-le-mvp`, le 2026-09-12) :
+
+| Tâche | Où | Ce qui la rend faite |
+|---|---|---|
+| P2 — étape 2 en version image, depuis `Class` | `imaging/lesionclf.py`, `imaging/metrics.py` (`roc_auc`, `bootstrap_auc`, `operating_point`), `imaging/dataset.py` (`kfold_by_patient`), `models/lesionclf/cv_report*.json` | Entraîné et **mesuré** : ROC-AUC patient 0,591 [0,491 – 0,693] puis 0,513 [0,411 – 0,615] après correction d'un défaut d'échelle, sur 130 patients dont 55 cancers. Les deux IC contiennent 0,5 et aucune exactitude ne bat « toujours bénin » : le résultat est **négatif**, et c'est ce qui est publié. Protocole, diagnostic et pistes au §4.5. Fait au sens du critère — un modèle mesuré — pas au sens d'un modèle utilisable |
+| P1 — apparier les boîtes par la latéralité des pixels, pas par le tag DICOM | `TransformData.py` (`image_laterality`, `dbt_view_position`, `dbt_series_view`, `_candidate_boxes`, `_select_boxes`, `preprocess_dbt_with_boxes`), `tests/test_dbt_preprocessing.py` | Le tag lit `L` sur les 262 séries ; les pixels donnent 134 R / 128 L. L'appariement trouvait 147 séries annotées sur 253 et posait 23 masques sur du fond. Corrigé selon la sémantique du lecteur officiel du jeu de données, avec les deux cas distingués par la mesure et non par choix (9 mal appariées, 14 études stockées en miroir). Vérifié sur 11 séries réelles couvrant chaque cas avant relance, 0 avertissement de validation contre 2. Détail et chiffres : §4.4 |
+| P1 — lire la colonne `Class` des CSV de boîtes | `validation.py` (`LESION_CLASSES`, `lesion_class_label`), `TransformData.py` (`_read_boxes`, `save_preprocessed`, `preprocess_dbt_with_boxes`), `README.md` | Chaque `.npz` porte `lesion_class` (`benign`/`cancer`) et un `label` 0/1 ; le masque reste binaire, parce que la classe n'est pas peignable — une lésion bénigne peint les mêmes pixels qu'un cancer. `Class` est **exigée** (un CSV sans elle est refusé, pas traité comme une classe unique) et une valeur inconnue est refusée. `mask_classes` choisit ce qui est peint sans changer ce que dit l'étiquette ; par défaut les deux, les bénins étant deux tiers du corpus annoté. Étiquette d'examen : toute boîte cancer ⇒ examen cancer, mélange journalisé (jamais rencontré : 82 patients bénins purs, 59 cancers purs). Corpus reconstruit et **mesuré sur les fichiers** : 147 séries, 0 sans étiquette, 100 bénignes / 47 cancers, 72 patients (48 / 24), aucun patient mélangé, 0,55 Go, 27 à 53 min par passe. Manifeste vérifié : 147 cas, un par fichier, révision `cdde11e`, 5 avertissements. 16 tests sur DICOM synthétiques, dont les cas que la vraie donnée ne fournit pas (série mélangée, classe inconnue, colonne absente) |
+| P0 — corriger les affirmations que le code contredit | `app/templates/result.html`, `app/templates/biopsy.html`, `app/templates/base.html`, `app/predictor.py`, `inference.py`, `app/README.md` | Trois affirmations retirées de l'écran. (1) La pastille « Confiance 100 % » et sa jauge remplie : `best_conf` est un maximum de probabilité **par pixel**, constant à 1,0000, pas un score d'examen — la valeur reste lisible dans le détail technique sous le nom « Probabilité max. par pixel (non calibrée) », et le panneau de limites dit que le verdict lui-même est constant (28/28 patients, 160/160 coupes). (2) La carte de `/biopsie` annonçait une mesure « sur 20 % des 569 cas tenus à l'écart de l'entraînement » : le modèle servi est ajusté sur 569/569 sans découpage, et les 97,7 % / 99,8 % décrivaient un autre modèle — aucun chiffre n'est plus affiché, l'absence de mesure hors échantillon est écrite. (3) `/biopsie` empruntait les pastilles Dice / sensibilité / faux positifs du modèle d'imagerie, sous un texte disant que ce modèle ne lit pas d'image : elles sont passées dans un bloc `limits_numbers` que la page neutralise. Vérifié dans l'app réelle (backend `dce_mri`, cas de démo 1 : coupe 52/176, probabilité par pixel 1,0000) et gardé par 9 tests de rendu (`tests/test_result_page_claims.py`) — 125 tests au total, ruff propre |
 
 **Livrés** (branche `amelioration-docker-preprocess-env`, commités le 2026-08-18) :
 
@@ -99,6 +318,7 @@ Ordonné par ce qui rapproche de la cible en deux étapes, pas par facilité.
 | Packaging Docker | `Dockerfile`, `docker-compose.yml` | `docker compose up --build` rejoue la démo ; image étroite (ni Spark, ni JVM, ni ITK), torch CPU, `read_only`, port publié sur `127.0.0.1` seulement, healthcheck sur `run_demo.py --check` |
 | Validation de schéma | `validation.py`, branchée dans `save_preprocessed` | Dimensions, dtype, finitude et binarité du masque vérifiés au point unique d'écriture ; le seuil `MIN_IN_PLANE = 128` est calibré sur l'incident de crop du §4.2, pas deviné. 13 tests |
 | Manifeste de lineage | `lineage.py` | `manifest.json` par dossier prétraité : commit (suffixé `-dirty`), source, paramètres, stats par cas. Écrit en dernier — son absence signale une run interrompue. 8 tests |
+| Étape 2 branchée (branche `ameliore-le-mvp`) | `tabular_export.py`, `/biopsie`, `app/templates/biopsy.html` | Formulaire 30 champs groupé en 10 mesures × 3 statistiques, deux exemples cliquables, API JSON jumelle. Export JVM-free vérifié contre Spark sur les 569 lignes (0 désaccord, écart max 1,0 × 10⁻¹⁵). 29 tests |
 
 Rien de tout cela ne bloque la démonstration actuelle : elle tourne depuis un clone.
 Tout, en revanche, sépare cette démonstration de l'outil décrit en tête de document.
@@ -113,6 +333,92 @@ et savoir qu'ils ont dérivé une fois dit où regarder la prochaine fois.
 | `README.md` annonçait « 68 tests, ~6 s » ; il y en a 87, en ~7 s | `README.md` §Development | Corrigé le 2026-08-18 |
 | `Final_Report.md` pointait `data/model_results.csv` ; le code écrit `reports/model_results.csv` | `Final_Report.md` vs `config.py` (`TABULAR_RESULTS_CSV`) | Corrigé le 2026-08-18 |
 | `models/dce_mri_p2_negfix/` nomme une expérience, pas une couche — contredit la règle « layers, not experiments » posée dans `config.py` | `config.py` | Ouvert — un renommage casse les chemins versionnés dont dépend la démo |
+
+### Incident réseau du 2026-09-12, et ce que les labels ont appris (2026-09-13)
+
+**L'obstacle était transitoire, et il a été rapporté comme permanent — c'est
+l'erreur à retenir.** Entre ~18 h 30 et ~20 h le 2026-09-12, tous les hôtes de
+`cancerimagingarchive.net` sortaient en timeout TCP, bac à sable désactivé compris,
+comme `github.com` et `sites.duke.edu`, alors que `pypi.org`, `zenodo.org`,
+`huggingface.co` et `raw.githubusercontent.com` répondaient. La conclusion tirée sur
+le moment — « cette machine ne joint pas TCIA » — décrivait une fenêtre de temps, pas
+une propriété de la machine : le 2026-09-13 tous ces hôtes répondent et les fichiers
+sont téléchargés. Un blocage réseau se re-teste avant d'être écrit au présent.
+
+**Ce que portent les labels.** `BCS-DBT-labels-*.csv` donne le statut par étude, et
+c'est le seul moyen de savoir qu'un examen est normal — « absent du CSV de boîtes » ne
+le dit pas. Téléchargés (train, validation PHASE-2, test PHASE-2) avec les
+`BCS-DBT-file-paths-*.csv` :
+
+| Collection entière | Patients |
+|---|---:|
+| **normal** | **4 581** |
+| actionable | 278 |
+| benign | 112 |
+| **cancer** | **89** |
+| **Total** | **5 060** |
+
+Les 82 bénins / 59 cancers du pool train+validation recoupent exactement ce qui avait
+été dérivé des boîtes seules : l'étiquetage du §« Livré » tient.
+
+**Et ces chiffres plafonnent la cible.** Le § « Ce que la cible coûte en données »
+demande ~220 patients avec cancer **dans le seul jeu de test** pour mesurer une
+sensibilité à ±5 points. La collection en contient **89 en tout**, entraînement
+compris. Conséquence à assumer plutôt qu'à découvrir plus tard :
+
+- la **spécificité** est mesurable finement (4 581 normaux disponibles) ;
+- la **sensibilité** ne le sera pas. Un test à 20 % laisserait ~18 cancers, soit un IC
+  de l'ordre de ±17 points ; même en consacrant les 89 cancers au seul test — ce qui
+  n'entraînerait plus rien — on resterait vers ±8 points.
+
+BCS-DBT ne peut donc pas départager 82,8 % de 76 % ou de 94 %. Ce n'est pas une raison
+de ne pas construire la tête de décision : c'est la raison d'annoncer son IC avant de
+l'entraîner, et de ne jamais présenter le point obtenu comme une comparaison au
+programme national.
+
+**Ce que `file-paths` change pour le §4.4.** Ce CSV donne (PatientID, StudyUID, View)
+par fichier, et le nom de dossier de série s'y lit dans `classic_path` : l'appariement
+série ↔ boîte devient une jointure, plus une inférence. Confronté à nos 262 séries —
+retrouvées **262/262**, PatientID concordant **262/262** :
+
+| | |
+|---|---:|
+| Vue déduite des pixels = vue vraie | **237 / 262** |
+| Écarts de latéralité | **14** — les 7 patients « miroir » × 2 vues, **confirmés** |
+| Écarts de suffixe (`lmlo1`, `rcc1`, `lcc2`) | 11 — vues répétées, laissées de côté au §4.4 |
+| Séries annotées selon la vérité | **260** (le code en apparie 253) |
+| Séries appariées à une mauvaise boîte | **4** (une acquisition répétée prise pour l'autre) |
+
+L'inférence du §4.4 était donc juste là où elle était risquée — les 14 miroirs — et
+incomplète sur les vues répétées. **Fait le 2026-09-13** : `file-paths` est la source
+d'appariement, la latéralité des pixels ne sert plus qu'à décider du retournement, comme
+dans le lecteur officiel. Gain annoncé 253 → 260 séries et 4 masques corrigés ; gain
+obtenu, mesuré sur les fichiers, 253 → 260 séries et **exactement** 4 masques déplacés
+(§4.6).
+
+### Relevés le 2026-09-12
+
+Audit du dépôt contre la cible produit. Presque tous sont des corrections de
+documentation, pas de code, et se décident une par une. Ce qu'un utilisateur voyait
+à l'écran a été traité en premier (P0, voir Livrés) ; le reste est ouvert.
+
+| Constat | Où | État |
+|---|---|---|
+| « mesurée sur 20 % des 569 cas **tenus à l'écart de l'entraînement** » — le modèle servi est ajusté sur 569/569, sans split. Les 97,67 % viennent d'un autre modèle, celui d'`AnalyzeData` | `app/templates/biopsy.html` vs `train_tabular_model.py` (`pipeline.fit(labelled)`) | Corrigé le 2026-09-12 |
+| Parité annoncée « sur les 569 lignes, écart max 1 × 10⁻¹⁵ » ; le test compare **5 lignes** à 1e-9, et le dit dans son propre commentaire | `plan.md`, docstring `inference.predict_tabular` vs `tests/test_tabular_export.py` | Ouvert |
+| Les métriques tabulaires renvoient à `reports/model_results.csv`, **absent du disque** — comme `pca_info.csv`, `feature_contributions.csv`, `scree_plot.png` | `Final_Report.md` | Ouvert |
+| « 87 tests, ~7 s » ; il y en a **174**, tous passants (116 à l'audit, plus 9 pour le P0, 16 pour la colonne `Class`, 6 pour le split stratifié, 7 pour l'appariement et 20 pour l'étape 2 en image) | `README.md` §Development | Corrigé le 2026-09-13 : **198**, après les tests de la jointure et des labels |
+| « 0,76 s par volume, 4,5 ms par coupe » ; l'artefact dit **0,825 s** et **4,83 ms** | `plan.md` §4.3 et `DEMO.md` vs `eval_report.json` | Ouvert |
+| « temps de calcul ~110 ms » ; mesuré 69-73 ms à chaud, 585 ms au premier appel | `README.md`, `DEMO.md` | Ouvert |
+| Checkpoint par défaut documenté `results_mri_p2/unet_best.pt` ; c'est `models/dce_mri_p2_negfix/unet_best.pt` | docstring `inference.predict_dce_mri` | Ouvert |
+| Backend `unet` présenté comme disponible ; son checkpoint n'existe plus | `app/README.md`, `app/predictor.py` | Ouvert |
+| Logs annonçant `data/transformed_data.csv`, `data/pca_info.csv`, `data/scree_plot.png` ; le code écrit dans `reports/` et `plots/` | `TransformData.transform_data` | Ouvert |
+| IC 95 % top-1 `[25,0 – 60,7]` : aucun code ni artefact versionné ne la produit | `plan.md` §4.3 | Ouvert |
+| Fuite de préprocessing : imputation, scaler et PCA ajustés sur les 569 lignes **avant** le `randomSplit`, donc les 97,67 % / 99,89 % sont optimistes | `TransformData.transform_data` → `AnalyzeData.prepare_data` | Ouvert |
+| Étape 2 annoncée « livrée » ; la branche `ameliore-le-mvp` est locale, absente d'`origin` | `plan.md` §Livrés | Ouvert |
+| `/biopsie` affichait les pastilles Dice 0,53 / sensibilité 88 % / faux positifs 99,97 % — les chiffres du modèle d'imagerie, sous un texte disant que ce modèle-ci ne lit pas d'image | `app/templates/base.html` (bloc de limites partagé) | Corrigé le 2026-09-12 |
+| La pastille de moteur du bandeau est **vide** sur `/biopsie` : la route ne passe pas `backend` au gabarit, que `base.html` attend | `app/server.py` (`biopsy_form`, `biopsy_predict`) vs `base.html` | Ouvert — cosmétique, aucune affirmation fausse |
+| Un `cudaErrorIllegalAddress` sur `/demo/1` dans le serveur Flask, **observé une fois, non reproduit** : le même appel passe en direct (coupe 52/176, 1,0000) et le GPU calcule normalement juste après. Noté parce qu'un plantage de service ne doit pas rester sans trace, pas parce qu'il est caractérisé | `app/predictor.py` (`DceMriUNetPredictor`) | Ouvert — à re-observer avant d'enquêter |
 
 ---
 
@@ -500,3 +806,201 @@ honnête et utile, contrairement à un top-1 à 43 % présenté comme une répon
 faible pour une tâche de tri), exploiter le contexte 3D (une lésion s'étend sur plusieurs coupes
 consécutives — un modèle 2,5D avec ±2 coupes en entrée est peu coûteux), et calibrer sur la
 validation plutôt que de prendre l'arg-max brut.
+
+### 4.5 Étape 2 en version image : mesurée, et elle ne marche pas (2026-09-12)
+
+`imaging.lesionclf` pose à l'image la question de l'étape 2 — cette lésion est-elle
+bénigne ou maligne ? — sur les 253 recadrages étiquetés, 130 patients, 55 cancers.
+**Ce n'est pas un modèle de détection** : le volume est recadré autour de la boîte
+annotée, donc la position de la lésion est donnée. Aucun chiffre ci-dessous ne dit
+quoi que ce soit sur le fait de trouver un cancer dans un examen de dépistage.
+
+**Protocole.** Validation croisée à 5 plis stratifiés par patient plutôt qu'un test
+unique : sur 130 patients, un test à 15 % laisse ~20 patients et ~8 cancers, et l'IC
+couvrirait presque tout. Chaque patient est noté une fois par un modèle qui ne l'a pas
+vu. **Aucune sélection dans un pli** — budget d'époques fixé d'avance, dernière époque
+évaluée : choisir un checkpoint sur les patients tenus à l'écart est la façon
+habituelle de rendre un chiffre de VC optimiste, et ce dépôt en a déjà publié un
+(§`AnalyzeData`). Agrégation : probabilité moyenne sur les coupes de lésion du
+patient. Encodeur réutilisé de `sliceclf`, entraîné de zéro — un encodeur ImageNet
+avait été écarté sur preuve (§4.1) et ses poids sont de toute façon inaccessibles
+depuis cette machine.
+
+**Les deux mesures.** La première a été faite avec un défaut que j'ai introduit, la
+seconde après l'avoir corrigé. Les deux sont versionnées
+(`models/lesionclf/cv_report_stretched.json` et `cv_report.json`).
+
+| | Recadrage étiré (1ʳᵉ) | Fenêtre à échelle constante (2ᵈᵉ) |
+|---|---:|---:|
+| **ROC-AUC patient** | **0,591 [0,491 – 0,693]** | **0,513 [0,411 – 0,615]** |
+| Sensibilité à 0,5 | 54,5 % | 27,3 % |
+| Spécificité à 0,5 | 61,3 % | 73,3 % |
+| VPP (prévalence 42,3 %) | 50,8 % | 42,9 % |
+| Exactitude | 58,5 % | 53,8 % |
+| « Toujours bénin » | 57,7 % | 57,7 % |
+
+**Les deux intervalles contiennent 0,5, et aucune des deux exactitudes ne bat la
+constante triviale.** Ce modèle ne sépare pas le bénin du cancer sur ce corpus.
+
+**Le défaut corrigé entre les deux.** Le premier passage redimensionnait à 224 des
+recadrages allant de 97×149 à 710×505. Comme le recadrage est serré autour de la
+boîte, sa taille suit celle de la lésion : le redimensionnement commun effaçait donc
+la taille de la lésion — un des premiers indices de malignité — et floutait les
+petites. Remplacé par une fenêtre de **640 px natifs** centrée sur la lésion, complétée
+par des zéros (le volume est z-normalisé, zéro est donc sa moyenne) : elle contient
+97,3 % des boîtes en entier, contre 91,0 % à 512 px et 60,5 % à 256. Deux tests
+chiffrent l'écart : avec la fenêtre, une lésion de 24 px rend plus de 4 fois l'aire
+d'une de 8 px ; avec l'étirement, le rapport tombe entre 0,8 et 1,25 — indistinguable.
+La fenêtre constante en pixels ne vaut fenêtre constante en millimètres que parce que
+la géométrie du détecteur est constante ici (2457 lignes partout) : **ces DICOM ne
+portent aucun tag d'espacement de pixel**, et c'est le prix de l'hypothèse.
+
+**Diagnostic.** La perte d'entraînement descend (0,83 → 0,27 sur le pli 2, 0,75 sur le
+pli 3) pendant que l'AUC hors-pli reste au hasard : le modèle apprend ses ~1 100
+coupes d'entraînement par cœur, sur 104 patients, et ne généralise rien. La variance
+entre plis est forte, ce qui est ce à quoi ressemble un entraînement instable sur trop
+peu d'exemples. **1 366 coupes de lésion au total** : c'est le chiffre à retenir.
+
+**Arrêté à deux mesures.** Régler des hyper-paramètres contre cette même validation
+croisée jusqu'à ce que le chiffre monte le viderait de son sens — c'est la version
+lente de la fuite que le §« sélection » écarte. Ce qui suit sont des pistes, pas des
+promesses, par ordre de rapport attendu :
+
+- **Plus de patients.** La collection compte 5 060 patients ; 134 sont téléchargés,
+  et le réseau bloque le reste (voir l'obstacle du 2026-09-12). C'est de loin le
+  premier levier, et il n'est pas algorithmique.
+- **Des features pré-entraînées**, inaccessibles depuis cette machine, et écartées sur
+  preuve pour la segmentation (§4.1) — ce qui ne dit rien de leur valeur pour une
+  classification.
+- **Un modèle par patient plutôt que par coupe** : un patient a jusqu'à 4 vues de la
+  même lésion, traitées aujourd'hui comme des exemples indépendants.
+- **La colonne `AD`** (distorsion architecturale, 84 lignes sur 299) comme étiquette
+  auxiliaire.
+
+**Ce que ça ne bloque pas.** L'étape 2 du produit est servie par le modèle tabulaire
+Wisconsin, qui répond depuis un clone. La version image en est un complément, pas un
+prérequis — et son échec mesuré vaut mieux que son absence de mesure.
+
+### 4.4 Appariement boîte ↔ série DBT : le tag DICOM de latéralité est faux (2026-09-12)
+
+Parti d'un détail — 5 séries sur 147 au volume constant après recadrage (§ ci-dessus) —
+et arrivé à un défaut qui touchait l'ensemble du corpus DBT.
+
+**Ce que dit la source.** Le lecteur officiel du jeu de données
+(`mazurowski-lab/duke-dbt-data`, `duke_dbt_data.py`, récupéré via
+`raw.githubusercontent.com`) déduit la latéralité **des pixels** — quel bord porte du
+signal — et documente son propre accès au tag DICOM par
+« *Unreliable - DICOM laterality is incorrect for some cases* ». Il retourne ensuite
+l'image de 180° (`np.flip(..., axis=(-1, -2))`) quand la latéralité de l'image ne
+correspond pas à celle de la vue annotée, parce que les boîtes vivent dans ce
+repère-là. Notre `dbt_series_view` appariait **par ce tag**, et ne retournait jamais rien.
+
+**Ce que ça coûtait, mesuré sur nos 262 séries** (décodage complet, 23 min) :
+
+| | |
+|---|---:|
+| Latéralité par le tag DICOM | `L` sur les **262** séries — constante, donc fausse |
+| Latéralité par les pixels | R 134 / L 128 |
+| Groupes boîte (patient + vue) jamais appariés, patient présent sur disque | **123 / 260** dont 58 `rmlo`, 54 `rcc` |
+| Séries annotées trouvées | **147** au lieu de 253 |
+| Masques posés sur du fond au lieu du tissu | **23 / 147** |
+
+Le test décisif est l'intensité dans la boîte : sur les 124 séries concordantes, la
+région annotée fait 416 de moyenne et 467 d'étendue (du tissu) et le retournement
+l'enverrait à 90 / 155 (du fond) ; sur les 23 discordantes **c'est exactement
+l'inverse** — 86 / 119 telles que peintes, 399 / 378 après correction. Les 5 volumes
+constants sont tous dans ce lot.
+
+**Les 23 se séparent en deux cas, et la distinction est tranchée par les données, pas
+choisie.** 9 séries ont une boîte pour la vue déduite des pixels : ce sont des séries
+droites appariées à la boîte gauche du même patient, et la correction est d'apparier
+la bonne. Les 14 autres appartiennent à **7 patients dont toutes les boîtes sont
+gauches** (`lcc`, `lmlo`), qui ont exactement 2 séries sur disque (cc et mlo) et dont
+**les deux lisent « droite » en pixels** — zéro boîte droite. Ce sont donc des études
+du sein gauche stockées en miroir, le cas que le lecteur officiel traite par le
+retournement. L'hypothèse concurrente — séries droites non annotées, séries gauches
+non téléchargées — demanderait que le téléchargement ait pris les 2 séries sans
+annotation et laissé les 2 annotées, pour 7 patients indépendants, alors que la liste
+de patients est justement construite depuis le CSV de boîtes.
+
+**Décision.** La latéralité vient des pixels (`image_laterality`), l'incidence du
+header (`dbt_view_position` — `ViewPosition` est fiable), et une étude stockée en
+miroir est retournée plutôt que mal appariée. C'est la sémantique du lecteur officiel,
+reconstruite sans `BCS-DBT-file-paths-*.csv` — qui donnerait l'appariement
+série ↔ boîte de façon autoritative, et qui est sur l'hôte injoignable. Le retournement
+est appliqué au **volume** et non aux coordonnées, pour que masque, `crop_offset` et
+`.npz` soient tous dans un seul repère, celui de l'annotation. Le manifeste porte
+`mirrored` par cas et `mirrored_series` au total : c'est une propriété de la
+construction du cas, pas du volume.
+
+**Vérifié sur les vraies données avant de relancer**, sur 11 séries choisies pour
+couvrir chaque cas (2 miroirs, 2 séries droites jusque-là invisibles, les 4 séries de
+DBT-P00538, 1 déjà correcte, 2 sans annotation) : 9 sauvées, 2 miroirs, 2 ignorées —
+conforme à la prédiction, et **0 avertissement de validation** là où le même
+échantillon en produisait 2. Les deux séries de DBT-P00538 sortent désormais avec
+173 830 et 38 025 voxels de lésion sur du tissu, classées `cancer`.
+
+**Ce qui reste ouvert ici.** 12 lignes de boîtes portent une vue suffixée (`lmlo1`,
+`rmlo1`, `lcc1`, `lcc2`, `rcc1`) qu'aucune de nos séries ne peut réclamer sans savoir
+laquelle des acquisitions répétées elle est ; elles restent non appariées. Et
+`inference.load_dbt_dicom` ne normalise aucune latéralité : si un modèle DBT est
+réentraîné sur ce corpus, l'inférence devra appliquer la même règle, sinon une moitié
+des examens arrivera dans le mauvais repère.
+
+### 4.6 Appariement boîte ↔ série : la collection le dit, il suffisait de le lire (2026-09-13)
+
+Le §4.4 a remplacé un tag qui mentait par une **inférence** sur les pixels. Elle était
+bonne — 23 masques remis sur du tissu — et elle restait une inférence. `BCS-DBT-file-paths-*.csv`,
+téléchargé le 2026-09-13, donne `(PatientID, StudyUID, View)` pour **chaque dossier de
+série** : l'appariement devient une jointure, et les pixels gardent un seul rôle, celui
+que le lecteur officiel leur donne, décider du retournement.
+
+**Ce que la jointure trouve, mesuré avant de recalculer quoi que ce soit.** Les
+20 311 lignes de l'inventaire couvrent nos **262 dossiers sur 262**, avec un
+`series_uid` unique par ligne (le nom de dossier se lit en avant-dernier segment de
+`classic_path`) :
+
+| | |
+|---|---:|
+| Séries annotées par la jointure | **260** (l'inférence en trouvait 253) |
+| Lignes de boîtes appariées | 284 / 299 |
+| Les 15 lignes restantes | 9 patients **absents du disque** — rien n'est perdu |
+| Patients | **132** — 76 bénins, 56 cancers, 0 mélangé |
+
+**Ce que la reconstruction a changé, mesuré fichier par fichier contre l'ancien corpus** :
+
+| | Pixels (§4.4) | Jointure | |
+|---|---:|---:|---|
+| Séries | 253 | **260** | +7, aucune perdue |
+| Séries bénignes / cancers | 151 / 102 | **153 / 107** | |
+| Patients bénins / cancéreux | 75 / 55 | **76 / 56** | |
+| Masques déplacés | — | **4** | exactement les 4 acquisitions répétées annoncées |
+| Séries lues comme miroir | 14 | **14** | les 7 patients du §4.4, confirmés par la source |
+| Séries sans boîte sur disque | 9 | **2** | |
+| Masques vides | 0 | **0** | |
+| Avertissements de validation | 0 | **0** | |
+| Taille / durée | 1,06 Go | **1,00 Go** / 56,1 min | |
+
+Les 4 masques déplacés sont la mesure du défaut que le §4.4 avait laissé ouvert :
+DBT-P01347, DBT-P02750, DBT-P03423 et DBT-P02798, chacun avec deux acquisitions de la
+même vue (`lmlo` et `lmlo1`, par exemple), dont le masque venait de l'autre acquisition.
+Aucun pixel ne pouvait trancher ce cas : l'image des deux acquisitions est le même sein
+sous la même incidence. Les **11 séries à vue répétée** sont d'ailleurs appariées pour la
+première fois (`lcc1`, `lcc2`, `lmlo1`×3, `rcc1`×2, `rmlo1`×4).
+
+**Ce que la jointure permet de vérifier, et que l'inférence ne permettait pas.** La vue
+n'étant plus déduite de l'en-tête, l'en-tête devient un témoin : `PatientID` et
+`ViewPosition` sont comparés à l'inventaire et un désaccord est journalisé. Sur les
+262 séries, aucun. Le manifeste porte maintenant la vue et l'étude de chaque cas, plus
+le chemin des tables qui l'ont produit — de quoi refaire la jointure sans relire un
+volume.
+
+**Ce qui est supprimé.** `dbt_series_view`, `_candidate_boxes` et `_select_boxes` n'ont
+plus d'appelant : deux façons d'apparier, dont une mesurée fausse 25 fois sur 262,
+c'est un piège qu'un corpus reconstruit par distraction paierait sans rien dire. La
+latéralité par les pixels reste (`image_laterality`), pour le retournement.
+
+**Ce qui reste ouvert ici.** `inference.load_dbt_dicom` ne normalise toujours aucune
+latéralité : un modèle réentraîné sur ce corpus verra une moitié des examens dans le
+mauvais repère si l'inférence n'applique pas la même règle. C'était déjà la dernière
+ligne du §4.4 ; la jointure ne la traite pas.

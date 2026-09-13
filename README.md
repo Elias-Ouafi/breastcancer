@@ -95,7 +95,8 @@ data/
 │   ├── wisconsin/     the UCI CSV
 │   └── breakhis/      the Kaggle archive
 ├── preprocessed_data/ z-normalised volumes + masks, one .npz per series
-│   ├── dbt/           from preprocess_dbt_with_boxes
+│   ├── dbt/           from preprocess_dbt_with_boxes: annotated exams, lesion-cropped
+│   ├── dbt_exams/     from preprocess_dbt_exams: every exam at 384x384, cancer or not
 │   └── dce_mri_p2/    from preprocess_dce_mri_with_boxes (the model in the demo)
 └── curated_data/      derived and rebuildable: slice banks, the three demo cases
 models/                checkpoints + the metrics that justify them
@@ -133,14 +134,16 @@ cannot drift apart.
 ```bash
 pip install -e ".[dev]"
 ruff check .        # lint
-pytest              # 87 tests, ~7 s, no GPU or dataset needed
+pytest              # 215 tests, ~30 s, no GPU or dataset needed
 ```
 
 [CI](.github/workflows/ci.yml) runs both on every push and pull request. The suite
 covers the metric definitions, the storage-layout contract, the orchestration logic,
 and the assets the demo needs — including whether git actually *tracks* the checkpoint
 and the demo cases, which is the failure that would otherwise surface five minutes
-before a pitch.
+before a pitch. On a machine with a JVM, one more test compares the exported tabular
+model against Spark and adds ~80 s on its own; CI installs neither Spark nor Java, so
+it skips there.
 
 Pipelines log through `logging` (see [logging_setup.py](logging_setup.py)), with a
 timestamp per line and a copy under `logs/`. Turn the volume up with
@@ -205,21 +208,27 @@ DBT (Digital Breast Tomosynthesis) is a 3D mammogram: a stack of X-ray "slices" 
 the breast. In the `Breast-Cancer-Screening-DBT` collection, **most scans are
 normal** — only a subset of patients have a biopsied lesion, listed with a box
 (patient, view, slice, x/y/width/height) in the annotation CSV. So the pipeline is
-**annotation-driven**: fetch the boxes first, download only the annotated patients,
-then turn each box into a mask.
+**annotation-driven**: fetch the tables first, download the patients they name, then
+turn each box into a mask. Everything downloaded that way carries a lesion, which is
+why step 1b exists: a specificity cannot be measured on a corpus without negatives, and
+"absent from the boxes CSV" is not the same statement as "normal exam".
 
 ```python
-from ExtractData import download_annotated_dbt_series
+import config
+from ExtractData import (
+    download_annotated_dbt_series,
+    download_dbt_tables,
+    download_normal_dbt_series,
+)
 from TransformData import preprocess_dbt_with_boxes
 
-# 0. Get the boxes CSV(s) once into data/raw_data/tcia/ from TCIA. The training set
-#    (BCS-DBT-boxes-train.csv, 101 patients) can be grown with the validation set
-#    (BCS-DBT-boxes-validation.csv, 40 disjoint patients) — same schema. Both
-#    functions accept a single path or a list of paths and pool them.
-BOXES = [
-    "data/raw_data/tcia/BCS-DBT-boxes-train.csv",
-    "data/raw_data/tcia/BCS-DBT-boxes-validation.csv",
-]
+# 0. Get the BCS-DBT tables once into data/raw_data/tcia/ (boxes, per-view labels, and
+#    the file-paths inventory). Existing files are kept; pass overwrite=True to refresh.
+download_dbt_tables()
+
+# The boxes of the training set (101 patients) pool with the validation set (40
+# disjoint patients) — same schema. Both functions take a path or a list of paths.
+BOXES = [config.DBT_BOXES_TRAIN, config.DBT_BOXES_VALIDATION]
 
 # 1. Download the DBT series of the annotated patients (cap the volume with max_gb).
 #    max_patients=None fetches every annotated patient in the pooled CSVs.
@@ -228,10 +237,17 @@ download_annotated_dbt_series(
     download_dir="data/raw_data/tcia", max_gb=25,
 )
 
+# 1b. Exams *without* a cancer, which the boxes CSVs cannot give you: the per-view
+#     labels table is the only place the collection says an exam is normal (4 581 of
+#     its 5 060 patients). A patient is taken only if every one of its views is normal.
+#     ~200 MB per patient; the cap is on what this call adds, not on the folder size.
+download_normal_dbt_series(max_patients=150, max_gb_added=50)
+
 # 2. Build a box mask per series and save compressed .npz (skips views with no box).
 preprocess_dbt_with_boxes(
     root_dir="data/raw_data/tcia",
     boxes_csv=BOXES,
+    file_paths_csv=config.DBT_FILE_PATHS,   # the inventory; this is the match
     output_dir="data/preprocessed_data/dbt",
 )
 ```
@@ -240,10 +256,65 @@ preprocess_dbt_with_boxes(
 python -m imaging.train --data-dir data/preprocessed_data/dbt --epochs 25
 ```
 
-Step 2 matches each downloaded series to its boxes by **PatientID + view**
-(laterality from `FrameLaterality` + `ViewPosition`, e.g. `lmlo`), z-normalises the
-image, paints the box(es) into a binary mask with `create_mask`, crops to the lesion
-region of interest, and stores the real `PatientID` inside the `.npz` (as `case_id`).
+Step 2 matches each downloaded series to its boxes with a **join**, not a guess:
+`BCS-DBT-file-paths-*.csv` lists `(PatientID, StudyUID, View)` for every series folder,
+and a box belongs to the series carrying its three values. A folder the inventory does
+not list is skipped and counted, since nothing says which box is its own. The pixels
+keep one job — the one the dataset's own reader gives them: a study stored rotated
+relative to the frame its boxes live in is flipped (laterality read from whichever edge
+carries signal), and the manifest records which cases were.
+
+Two earlier versions inferred the view instead, and the measurements are why they are
+gone: the DICOM laterality tag reads `L` on all 262 downloaded series (147 of 253 series
+matched, 23 masks on background), and deriving laterality from the pixels was right 237
+times out of 262, found 253 of the 260 annotated series, and took the box of the *other*
+acquisition of a repeated view (`lmlo` vs `lmlo1`) 4 times — a case no pixel can decide
+(plan.md §4.4). Preprocessing then z-normalises the image, paints the box(es) into a
+binary mask with `create_mask`, crops to the lesion region of interest, and stores the
+real `PatientID` inside the `.npz` (as `case_id`).
+
+It also reads the boxes CSV's **`Class`** column and stores it: each `.npz` carries
+`lesion_class` (`benign` or `cancer`) and a 0/1 `label`. The mask cannot carry that —
+a benign lesion paints the same pixels as a cancer — so a file holding only a mask
+cannot answer the exam-level question, which is *cancer or not*, not *lesion or not*.
+Pass `mask_classes=("cancer",)` to paint only the cancer boxes; the default paints
+both, since a benign lesion is still something to localise and benign patients are
+two thirds of the annotated set. `Class` is required: a CSV without it is rejected
+rather than treated as one undistinguished class. A completed run writes
+`manifest.json` beside the volumes (`lineage.py`) with the per-class counts, so the
+class balance of a corpus can be read without opening a single volume.
+
+#### The exam-level corpus (cancer or no cancer)
+
+Everything above is annotation-driven, so every volume it writes holds a lesion:
+prevalence 100 %, and a specificity that cannot be measured at all. `preprocess_dbt_exams`
+builds the other corpus — the one an exam-level decision is scored on:
+
+```python
+from TransformData import preprocess_dbt_exams
+
+preprocess_dbt_exams(                      # writes data/preprocessed_data/dbt_exams/
+    boxes_csv=BOXES,                       # optional: paints the masks, never the label
+)
+```
+
+The label comes from `BCS-DBT-labels-*.csv`, the only table that says an exam is normal,
+read at the patient's **worst view** — so a series with no box is a *negative* rather
+than a skip, and `label` means one thing: 1 is cancer. `actionable` (recalled, not
+biopsied) and `benign` are 0, and the word itself is stored as `exam_status`, so moving
+that line later does not mean decoding 22 GB of DICOM again. A series with no labels row
+is skipped and counted rather than assumed normal.
+
+Both classes go through **one geometry**: the full frame resampled to 384×384 with its
+aspect ratio kept, zero-padded, every slice retained, no cropping. This is the point of
+the function. A corpus whose positives are lesion crops (45×72×70) and whose negatives
+are full frames (2457×1890) is separable by array shape alone, which produces a splendid
+AUC that measures the preprocessing. Downsampling averages rather than samples — at
+2457 → 384 rows, picking one row in seven is how a small bright mass disappears — and the
+same laterality flip is applied to negatives too, so "was flipped" cannot become a proxy
+for "has a box", hence for the label. Measured: 4.9 MB per series compressed, ~14 s of
+decoding each; `skip_existing=True` makes a pass resumable, which matters when a full one
+runs for hours.
 
 The `imaging/` package then trains the U-Net: it reads the `.npz` volumes, splits
 them **by patient** (`case_id`) so no patient straddles train/val/test, serves axial
@@ -282,6 +353,30 @@ python -m imaging.sliceclf --slice-bank data/curated_data/slice_bank_p2 --epochs
 
 It is selected on top-1 accuracy — "is the volume's highest-scoring slice really
 lesion-bearing?" — the metric the segmentation confidence scored 0 on.
+
+#### Lesion classifier (benign vs cancer, step 2 from the image)
+
+`imaging.lesionclf` answers step 2's question — is this lesion benign or malignant? —
+from the DBT crops instead of from a cytology form, using the `label` that
+`preprocess_dbt_with_boxes` stores:
+
+```bash
+python -m imaging.lesionclf --data-dir data/preprocessed_data/dbt --folds 5
+```
+
+It is **not** a detection model: the volume is cropped around the annotated box, so
+the lesion's location is given. Nothing it reports says anything about finding a
+cancer in a screening exam — that is the separate exam-level head, which needs full
+frames and normal exams.
+
+It cross-validates instead of holding out one test split, because 130 patients split
+15 % leaves about 8 cancers in test and an interval that would cover nearly
+everything; the folds are stratified by class over patients, and every patient is
+scored once by a model that never saw it. No checkpoint or epoch is chosen on the
+held-out patients. Writes `models/lesionclf/cv_report.json` (patient ROC-AUC with a
+patient-bootstrap CI, plus sensitivity/specificity/PPV **and the prevalence they were
+measured at**) and `cv_predictions.csv` (one row per patient). Validate the loop with
+no dataset via `python -m imaging.lesionclf --smoke-test`.
 
 ### Histopathology (BreakHis)
 ```bash

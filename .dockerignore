@@ -11,8 +11,10 @@ data/preprocessed_data/
 data/curated_data/slice_bank_p2/
 data/_legacy/
 models/dbt/
-models/tabular/
 models/_legacy/
+# models/tabular/ is NOT excluded: the 13 KB export is what /biopsie serves. Its
+# pipeline_model/ sibling is, because only a JVM can read it and the image has none.
+models/tabular/pipeline_model/
 
 .venv/
 __pycache__/
