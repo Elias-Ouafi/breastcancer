@@ -493,52 +493,131 @@ def image_laterality(frame):
     return "R" if frame[:, 0].sum() < frame[:, -1].sum() else "L"
 
 
-def dbt_series_view(ds, frame):
-    """The BCS-DBT view key (e.g. ``'rmlo'``) for a DBT series: laterality + position.
+# BCS-DBT ships a per-file inventory -- ``BCS-DBT-file-paths-*.csv`` -- saying which
+# patient, study and view every series folder holds. Matching a box to a series is
+# therefore a join on those three columns, not an inference from the pixels: the
+# collection states it. Measured on the 262 downloaded series, the inference this
+# replaces was right 237 times, found 253 of 260 annotated series, and took the box of
+# the other acquisition of the same view 4 times (plan.md, sections 4.4 and 2026-09-13).
+FILE_PATHS_COLUMNS = ("PatientID", "StudyUID", "View", "classic_path")
+_VIEW_REPEAT_DIGITS = "0123456789"
 
-    ``frame`` is one slice of the volume; laterality comes from it rather than from
-    the header, for the reason spelled out in :func:`image_laterality`.
+
+def series_uid_from_classic_path(classic_path):
+    """The series folder name held in a BCS-DBT ``classic_path``.
+
+    ``classic_path`` reads ``collection/patient/study_uid/series_uid/1-1.dcm``, and
+    ``series_uid`` is the folder name the downloader writes under ``TCIA_DIR`` -- which
+    is what ties a row of the inventory to a folder on disk. Checked against the 262
+    downloaded series: all 262 found, every ``PatientID`` agreeing.
     """
-    return f"{image_laterality(frame)}{dbt_view_position(ds)}".lower()
+    parts = [part for part in str(classic_path).replace("\\", "/").split("/") if part]
+    if len(parts) < 2:
+        raise ValueError(f"classic_path {classic_path!r} names no series folder")
+    return parts[-2]
 
 
-def _candidate_boxes(boxes_df, patient, view_position):
-    """Box rows for this patient at this view position, **either** laterality.
+def view_position_of(view):
+    """``'mlo'`` from ``'lmlo1'``: the incidence alone, no laterality, no repeat index.
 
-    This is the cheap half of the match: it needs no pixels, so a series whose
-    patient has nothing annotated at its view position is skipped before paying for
-    the decode. Which laterality applies is decided afterwards, from the pixels.
+    A BCS-DBT view key is laterality + incidence + an optional index for a repeated
+    acquisition (``rmlo1``, ``lcc2``). The incidence is the half the DICOM header also
+    carries, so it is the half that can be cross-checked.
     """
-    if patient is None or not view_position:
-        return boxes_df.iloc[0:0]
-    return boxes_df[(boxes_df["PatientID"] == patient)
-                    & (boxes_df["View"].str.lower().str[1:] == view_position)]
+    return str(view)[1:].rstrip(_VIEW_REPEAT_DIGITS).lower()
 
 
-def _select_boxes(candidates, view):
-    """Return ``(rows, mirrored)``: the boxes for ``view``, or the flip that gets them.
+def _read_file_paths(file_paths_csv):
+    """The series inventory, indexed by series folder name.
 
-    The boxes are annotated in the frame where the image laterality *matches the
-    view's* laterality. When a patient's only boxes at this view position are for the
-    other side, the study is stored rotated relative to that frame and the reference
-    reader flips the image (``np.flip(..., axis=(-1, -2))``, both in-plane axes) --
-    which is what ``mirrored`` asks the caller to do.
-
-    Measured on this corpus: 239 of 262 series match their own view directly, 14 need
-    the flip (7 patients, all with left-only boxes, both of whose series read right by
-    pixels -- so they are left studies stored rotated, not unannotated right ones),
-    and 9 have no box either way.
+    One path or several (train + validation cover disjoint patients). The index is
+    what :func:`preprocess_dbt_with_boxes` looks a folder up by, so a duplicated
+    series UID is refused rather than silently resolved to whichever row came first
+    (measured: 20 311 rows, 20 311 distinct UIDs, so this is a guard, not a filter).
     """
-    rows = candidates[candidates["View"].str.lower() == view]
-    if not rows.empty:
-        return rows, False
-    return candidates, not candidates.empty
+    frames = []
+    for path in _box_paths(file_paths_csv):
+        df = pd.read_csv(path)
+        missing = [c for c in FILE_PATHS_COLUMNS if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"{path}: missing column(s) {missing} -- this should be a BCS-DBT "
+                f"file-paths CSV, whose columns are {list(FILE_PATHS_COLUMNS)}; got "
+                f"{list(df.columns)}")
+        df = df.loc[:, list(FILE_PATHS_COLUMNS)].copy()
+        df["series_uid"] = df["classic_path"].map(series_uid_from_classic_path)
+        df["View"] = df["View"].astype(str).str.strip().str.lower()
+        frames.append(df)
+    paths = pd.concat(frames, ignore_index=True)
+    duplicated = paths["series_uid"].duplicated()
+    if duplicated.any():
+        raise ValueError(
+            f"{int(duplicated.sum())} series folder(s) listed twice across "
+            f"{len(_box_paths(file_paths_csv))} file-paths CSV(s), e.g. "
+            f"{paths.loc[duplicated, 'series_uid'].iloc[0]}")
+    return paths.set_index("series_uid")
+
+
+# The per-view status table, ``BCS-DBT-labels-*.csv``: one row per view, one flag set.
+# This is the only place the collection says an exam is *normal* -- "absent from the
+# boxes CSV" says "no annotated box", which is not the same thing -- so it is what an
+# exam-level cancer / no-cancer target has to be built from. Measured over the three
+# splits: 4 581 normal patients, 278 actionable, 112 benign, 89 cancer (5 060 total).
+DBT_LABEL_COLUMNS = ("Normal", "Actionable", "Benign", "Cancer")
+# Worst first. A patient is read at its worst view: one cancer view makes a cancer exam,
+# the same rule the box path applies to a mixed series.
+DBT_STATUS_ORDER = ("cancer", "benign", "actionable", "normal")
+
+
+def read_dbt_labels(labels_csv):
+    """The per-view status rows, one CSV path or several, as one DataFrame.
+
+    The four flag columns are required: a table missing one would silently read as
+    "no patient has that status", which is exactly the kind of absence that looks like
+    a measurement.
+    """
+    frames = []
+    for path in _box_paths(labels_csv):
+        df = pd.read_csv(path)
+        missing = [c for c in ("PatientID",) + DBT_LABEL_COLUMNS if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"{path}: missing column(s) {missing}; a BCS-DBT labels CSV carries "
+                f"PatientID plus {list(DBT_LABEL_COLUMNS)}, got {list(df.columns)}")
+        frames.append(df)
+    return pd.concat(frames, ignore_index=True)
+
+
+def dbt_patient_status(labels_csv):
+    """``{PatientID: status}`` over the labels CSV(s), status being the patient's worst.
+
+    A patient has up to four views per study and may have several studies; the status
+    returned is the worst one found anywhere, per :data:`DBT_STATUS_ORDER`. A row with
+    no flag set is reported as ``normal`` only if the ``Normal`` column says so -- an
+    all-zero row is left out rather than assumed benign in either direction.
+    """
+    labels = read_dbt_labels(labels_csv)
+    status = {}
+    for row in labels.itertuples():
+        flags = {name.lower() for name in DBT_LABEL_COLUMNS
+                 if int(getattr(row, name, 0) or 0) == 1}
+        if not flags:
+            continue
+        worst = next(name for name in DBT_STATUS_ORDER if name in flags)
+        current = status.get(row.PatientID)
+        if current is None or DBT_STATUS_ORDER.index(worst) < DBT_STATUS_ORDER.index(current):
+            status[row.PatientID] = worst
+    return status
 
 
 # The column that says what an annotated box actually is. It shipped with the
 # collection from the start and nothing read it, so every box -- benign or cancer --
 # was painted into the same mask (plan.md, "Lire la colonne Class").
 BOX_CLASS_COLUMN = "Class"
+
+# What identifies the series a box belongs to. The inventory gives these three for
+# every series folder, which is what turns the match into a join (see `_read_file_paths`).
+BOX_JOIN_COLUMNS = ("PatientID", "StudyUID", "View")
 
 
 def _box_paths(boxes_csv):
@@ -569,6 +648,14 @@ def _read_boxes(boxes_csv):
                 f"{path}: no {BOX_CLASS_COLUMN!r} column. Benign and cancer boxes are "
                 "not the same target, so the class is required; got columns "
                 f"{list(df.columns)}")
+        # The three columns the series inventory joins on. Required here rather than
+        # where the join happens, so a table missing one fails on the file that is
+        # wrong instead of on every series in turn.
+        missing_keys = [c for c in BOX_JOIN_COLUMNS if c not in df.columns]
+        if missing_keys:
+            raise ValueError(
+                f"{path}: missing join column(s) {missing_keys}; a box is matched to a "
+                f"series by {list(BOX_JOIN_COLUMNS)}, got {list(df.columns)}")
         df[BOX_CLASS_COLUMN] = df[BOX_CLASS_COLUMN].astype(str).str.strip().str.lower()
         unknown = sorted(set(df[BOX_CLASS_COLUMN]) - set(validation.LESION_CLASSES))
         if unknown:
@@ -582,6 +669,7 @@ def _read_boxes(boxes_csv):
 def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
                               boxes_csv=config.DBT_BOXES_TRAIN,
                               output_dir=config.DBT_PREPROCESSED_DIR,
+                              file_paths_csv=config.DBT_FILE_PATHS,
                               skip_empty=True,
                               slice_margin=2,
                               crop=True,
@@ -595,12 +683,19 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
     mask from the matching box rows by reusing :func:`create_mask`. Volumes are
     written as compressed ``.npz`` via :func:`save_preprocessed`.
 
-    **The view is read from the pixels.** Matching on the DICOM laterality tag, as
-    this did until 2026-09-12, reached 147 of the 253 annotated series -- the tag
-    reads ``L`` on all 262 downloaded series -- and left 23 masks sitting on
-    background instead of tissue. Laterality now comes from :func:`image_laterality`,
-    and a study stored rotated relative to its annotation frame is flipped, both as
-    the dataset's own reader does. :func:`_select_boxes` carries the counts.
+    **The match is a join, not an inference.** ``file_paths_csv`` points at the
+    collection's own inventory (``BCS-DBT-file-paths-*.csv``), which gives
+    ``(PatientID, StudyUID, View)`` for every series folder: the box rows for a series
+    are the rows carrying those three values. Two earlier versions inferred the view
+    instead, and both were measured wrong -- the DICOM laterality tag reads ``L`` on
+    all 262 downloaded series (147 of 253 series matched, 23 masks on background), and
+    deriving laterality from the pixels got 237 of 262 right, reached 253 of the 260
+    annotated series, and took the box of the *other* acquisition of a repeated view
+    4 times. The pixels keep one job, the one the dataset's own reader gives them:
+    deciding whether the stored study is rotated relative to the frame its boxes live
+    in, and flipping it if so (:func:`image_laterality`). A series absent from the
+    inventory is skipped and counted, because nothing can be said about which box is
+    its own.
 
     **The class is read, and it is stored.** ``Class`` says whether a box is a
     ``benign`` finding or a ``cancer``; for a long time nothing read it, so both were
@@ -636,10 +731,11 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
     slices are extremely rare, starving the 2D per-slice training loop of examples.
     Pass 0 to keep the original single-slice behaviour.
 
-    ``boxes_csv`` may be a single path or a list of paths; pass both the train and
-    validation boxes CSVs to build masks for the pooled annotated set. Series with no
-    matching box are skipped when ``skip_empty`` is True (an empty mask is useless for
-    the localisation model and would store the full frame). Note what such a skip does
+    ``boxes_csv`` and ``file_paths_csv`` may each be a single path or a list of paths;
+    pass both the train and validation files to build masks for the pooled annotated
+    set (disjoint patients, same schema). Series with no matching box are skipped when
+    ``skip_empty`` is True (an empty mask is useless for the localisation model and
+    would store the full frame). Note what such a skip does
     *not* mean: a series absent from the boxes CSV is a series with no annotated box,
     which is not the same as a normal exam -- BCS-DBT states that in a separate
     per-study labels file, which this function never reads.
@@ -649,6 +745,10 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
     """
     os.makedirs(output_dir, exist_ok=True)
     boxes = _read_boxes(boxes_csv)
+    boxes["View"] = boxes["View"].astype(str).str.strip().str.lower()
+    file_paths = _read_file_paths(file_paths_csv)
+    # One group per (patient, study, view): the key the inventory gives a folder.
+    boxes_by_series = dict(tuple(boxes.groupby(["PatientID", "StudyUID", "View"])))
 
     mask_classes = tuple(str(c).strip().lower() for c in mask_classes)
     unknown = sorted(set(mask_classes) - set(validation.LESION_CLASSES))
@@ -659,6 +759,7 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
     saved, skipped, summary = 0, 0, {}
     saved_by_class = {name: 0 for name in validation.LESION_CLASSES}
     skipped_unannotated, skipped_unpainted, mirrored_count = 0, 0, 0
+    skipped_unlisted = 0
     for name in sorted(os.listdir(root_dir)):
         folder = os.path.join(root_dir, name)
         if not os.path.isdir(folder):
@@ -667,35 +768,56 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
         if not dcm_files:
             continue
 
-        # The header gives PatientID and the view position, which is enough to know
-        # whether this patient has anything annotated at this position -- on either
-        # side. Deciding that before decoding matters: the pixels cost 7-17 s and
-        # ~100 MB per series on the real collection. Which laterality applies needs
-        # the pixels, so it is settled after the decode, below.
+        # The inventory identifies the folder, so whether it has any annotated box is
+        # known before anything is decoded. That order matters: the pixels cost 7-17 s
+        # and ~100 MB per series on the real collection.
         path = os.path.join(folder, dcm_files[0])
-        ds = pydicom.dcmread(path, stop_before_pixels=True)
-        patient = getattr(ds, "PatientID", None)
-        candidates = _candidate_boxes(boxes, patient, dbt_view_position(ds))
-        if skip_empty and candidates.empty:
+        if name not in file_paths.index:
+            log.warning(f"[DBT] {name}: not in the file-paths inventory; skipping, "
+                        "since which box is its own cannot be established.")
+            skipped += 1
+            skipped_unlisted += 1
+            continue
+        listed = file_paths.loc[name]
+        patient, study_uid, view = listed["PatientID"], listed["StudyUID"], listed["View"]
+
+        rows = boxes_by_series.get((patient, study_uid, view))
+        if skip_empty and (rows is None or rows.empty):
             skipped += 1
             skipped_unannotated += 1
             continue
+        if rows is None:
+            rows = boxes.iloc[0:0]
+
+        # Read once the series is known to be worth it, and cross-check what the header
+        # does carry: PatientID, and the incidence (``ViewPosition`` is reliable here,
+        # the laterality tags beside it are not). A disagreement means the folder-to-row
+        # mapping is off, which no downstream count would reveal.
+        ds = pydicom.dcmread(path, stop_before_pixels=True)
+        header_patient = getattr(ds, "PatientID", None)
+        if header_patient is not None and str(header_patient) != str(patient):
+            log.warning(f"[DBT] {name}: inventory says patient {patient}, the DICOM says "
+                        f"{header_patient}; trusting the inventory.")
+        header_position = dbt_view_position(ds)
+        if header_position and header_position != view_position_of(view):
+            log.warning(f"[DBT] {name}: inventory says view {view!r}, the DICOM says "
+                        f"position {header_position!r}.")
 
         volume = pydicom.dcmread(path).pixel_array.astype(np.float32)
         if volume.ndim == 2:
             volume = volume[None]  # (1, rows, cols)
 
-        view = dbt_series_view(ds, volume[0])
-        rows, mirrored = _select_boxes(candidates, view)
+        stored_laterality = image_laterality(volume[0])
+        mirrored = stored_laterality != view[0].upper()
         if mirrored:
-            # The stored study is rotated relative to the frame its boxes live in.
-            # The volume is flipped rather than the coordinates, so everything after
-            # this point -- mask, crop offset, what lands in the .npz -- is in one
-            # single frame, the one the annotation uses.
+            # The boxes live in the frame where the image laterality matches the view's;
+            # this study is stored rotated relative to it. The volume is flipped rather
+            # than the coordinates, so everything after this point -- mask, crop offset,
+            # what lands in the .npz -- is in that one frame, the annotation's.
             volume = np.flip(volume, axis=(-1, -2))
-            log.info(f"[DBT] {name}: image laterality {view[0]!r} against "
-                     f"{sorted(set(candidates['View'].str.lower()))} boxes; "
-                     "reading it as a mirrored study (180 deg, as the reference does).")
+            log.info(f"[DBT] {name}: inventory says view {view!r}, the pixels carry the "
+                     f"breast on the {stored_laterality!r} side; reading it as a mirrored "
+                     "study and flipping it (180 deg, as the reference reader does).")
 
         present = tuple(sorted(set(rows[BOX_CLASS_COLUMN]))) if len(rows) else ()
         # Any cancer box makes the exam a cancer exam: at the level the decision is
@@ -739,6 +861,8 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
         # where a reader asks how a case was built.
         if name in summary:
             summary[name]["mirrored"] = bool(mirrored)
+            summary[name]["view"] = view
+            summary[name]["study_uid"] = study_uid
         saved += 1
         mirrored_count += int(mirrored)
         if lesion_class is not None:
@@ -755,6 +879,7 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
         parameters={
             "pipeline": "preprocess_dbt_with_boxes",
             "boxes": [lineage.relative_path(p) for p in _box_paths(boxes_csv)],
+            "file_paths": [lineage.relative_path(p) for p in _box_paths(file_paths_csv)],
             "crop": crop,
             "slice_margin": slice_margin,
             "skip_empty": skip_empty,
@@ -763,6 +888,7 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
             "mirrored_series": mirrored_count,
             "skipped_unannotated": skipped_unannotated,
             "skipped_unpainted": skipped_unpainted,
+            "skipped_unlisted": skipped_unlisted,
         },
         cases=summary,
         warnings=[w for case in summary.values() for w in case.get("warnings", [])],
@@ -772,7 +898,8 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
              f"({saved_by_class['cancer']} cancer, {saved_by_class['benign']} benign, "
              f"{mirrored_count} read as mirrored), "
              f"skipped {skipped} ({skipped_unannotated} without any box, "
-             f"{skipped_unpainted} annotated but empty for classes {list(mask_classes)}).")
+             f"{skipped_unpainted} annotated but empty for classes {list(mask_classes)}, "
+             f"{skipped_unlisted} absent from the file-paths inventory).")
     return saved, skipped
 
 

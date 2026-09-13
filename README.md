@@ -133,14 +133,16 @@ cannot drift apart.
 ```bash
 pip install -e ".[dev]"
 ruff check .        # lint
-pytest              # 87 tests, ~7 s, no GPU or dataset needed
+pytest              # 198 tests, ~25 s, no GPU or dataset needed
 ```
 
 [CI](.github/workflows/ci.yml) runs both on every push and pull request. The suite
 covers the metric definitions, the storage-layout contract, the orchestration logic,
 and the assets the demo needs — including whether git actually *tracks* the checkpoint
 and the demo cases, which is the failure that would otherwise surface five minutes
-before a pitch.
+before a pitch. On a machine with a JVM, one more test compares the exported tabular
+model against Spark and adds ~80 s on its own; CI installs neither Spark nor Java, so
+it skips there.
 
 Pipelines log through `logging` (see [logging_setup.py](logging_setup.py)), with a
 timestamp per line and a copy under `logs/`. Turn the volume up with
@@ -205,21 +207,27 @@ DBT (Digital Breast Tomosynthesis) is a 3D mammogram: a stack of X-ray "slices" 
 the breast. In the `Breast-Cancer-Screening-DBT` collection, **most scans are
 normal** — only a subset of patients have a biopsied lesion, listed with a box
 (patient, view, slice, x/y/width/height) in the annotation CSV. So the pipeline is
-**annotation-driven**: fetch the boxes first, download only the annotated patients,
-then turn each box into a mask.
+**annotation-driven**: fetch the tables first, download the patients they name, then
+turn each box into a mask. Everything downloaded that way carries a lesion, which is
+why step 1b exists: a specificity cannot be measured on a corpus without negatives, and
+"absent from the boxes CSV" is not the same statement as "normal exam".
 
 ```python
-from ExtractData import download_annotated_dbt_series
+import config
+from ExtractData import (
+    download_annotated_dbt_series,
+    download_dbt_tables,
+    download_normal_dbt_series,
+)
 from TransformData import preprocess_dbt_with_boxes
 
-# 0. Get the boxes CSV(s) once into data/raw_data/tcia/ from TCIA. The training set
-#    (BCS-DBT-boxes-train.csv, 101 patients) can be grown with the validation set
-#    (BCS-DBT-boxes-validation.csv, 40 disjoint patients) — same schema. Both
-#    functions accept a single path or a list of paths and pool them.
-BOXES = [
-    "data/raw_data/tcia/BCS-DBT-boxes-train.csv",
-    "data/raw_data/tcia/BCS-DBT-boxes-validation.csv",
-]
+# 0. Get the BCS-DBT tables once into data/raw_data/tcia/ (boxes, per-view labels, and
+#    the file-paths inventory). Existing files are kept; pass overwrite=True to refresh.
+download_dbt_tables()
+
+# The boxes of the training set (101 patients) pool with the validation set (40
+# disjoint patients) — same schema. Both functions take a path or a list of paths.
+BOXES = [config.DBT_BOXES_TRAIN, config.DBT_BOXES_VALIDATION]
 
 # 1. Download the DBT series of the annotated patients (cap the volume with max_gb).
 #    max_patients=None fetches every annotated patient in the pooled CSVs.
@@ -228,10 +236,17 @@ download_annotated_dbt_series(
     download_dir="data/raw_data/tcia", max_gb=25,
 )
 
+# 1b. Exams *without* a cancer, which the boxes CSVs cannot give you: the per-view
+#     labels table is the only place the collection says an exam is normal (4 581 of
+#     its 5 060 patients). A patient is taken only if every one of its views is normal.
+#     ~200 MB per patient; the cap is on what this call adds, not on the folder size.
+download_normal_dbt_series(max_patients=150, max_gb_added=50)
+
 # 2. Build a box mask per series and save compressed .npz (skips views with no box).
 preprocess_dbt_with_boxes(
     root_dir="data/raw_data/tcia",
     boxes_csv=BOXES,
+    file_paths_csv=config.DBT_FILE_PATHS,   # the inventory; this is the match
     output_dir="data/preprocessed_data/dbt",
 )
 ```
@@ -240,17 +255,22 @@ preprocess_dbt_with_boxes(
 python -m imaging.train --data-dir data/preprocessed_data/dbt --epochs 25
 ```
 
-Step 2 matches each downloaded series to its boxes by **PatientID + view**, where
-the view is `laterality + ViewPosition` (e.g. `lmlo`). The laterality is read **from
-the pixels** — whichever edge of the image carries signal — and not from the DICOM
-tag, which the dataset's own reader calls unreliable and which reads `L` on all 262
-downloaded series while the pixels give 134 right and 128 left. A study stored
-rotated relative to the frame its boxes live in is flipped, as that reader does; the
-manifest records which cases were. Matching on the tag found 147 of 253 annotated
-series and left 23 masks on background instead of tissue (plan.md §4.4). It then
-z-normalises the
-image, paints the box(es) into a binary mask with `create_mask`, crops to the lesion
-region of interest, and stores the real `PatientID` inside the `.npz` (as `case_id`).
+Step 2 matches each downloaded series to its boxes with a **join**, not a guess:
+`BCS-DBT-file-paths-*.csv` lists `(PatientID, StudyUID, View)` for every series folder,
+and a box belongs to the series carrying its three values. A folder the inventory does
+not list is skipped and counted, since nothing says which box is its own. The pixels
+keep one job — the one the dataset's own reader gives them: a study stored rotated
+relative to the frame its boxes live in is flipped (laterality read from whichever edge
+carries signal), and the manifest records which cases were.
+
+Two earlier versions inferred the view instead, and the measurements are why they are
+gone: the DICOM laterality tag reads `L` on all 262 downloaded series (147 of 253 series
+matched, 23 masks on background), and deriving laterality from the pixels was right 237
+times out of 262, found 253 of the 260 annotated series, and took the box of the *other*
+acquisition of a repeated view (`lmlo` vs `lmlo1`) 4 times — a case no pixel can decide
+(plan.md §4.4). Preprocessing then z-normalises the image, paints the box(es) into a
+binary mask with `create_mask`, crops to the lesion region of interest, and stores the
+real `PatientID` inside the `.npz` (as `case_id`).
 
 It also reads the boxes CSV's **`Class`** column and stores it: each `.npz` carries
 `lesion_class` (`benign` or `cancer`) and a 0/1 `label`. The mask cannot carry that —

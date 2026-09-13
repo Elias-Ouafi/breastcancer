@@ -138,20 +138,21 @@ Corrigé le 2026-09-12 (voir Livré) : chaque `.npz` porte maintenant son
 seconde après la correction d'appariement du §4.4. Mesuré sur les fichiers, pas
 déclaré :
 
-| | Étiquetage seul | Après correction d'appariement (§4.4) |
-|---|---:|---:|
-| Séries | 147 | **253** |
-| Séries bénignes / cancers | 100 / 47 | **151 / 102** |
-| Patients | 72 | **130** |
-| Patients bénins / cancéreux | 48 / 24 | **75 / 55** |
-| Patients mélangeant les deux classes | 0 | **0** |
-| Avertissements de validation | 5 | **0** |
-| Taille | 0,55 Go | **1,06 Go** |
+| | Étiquetage seul | Latéralité par les pixels (§4.4) | Jointure `file-paths` (§4.6) |
+|---|---:|---:|---:|
+| Séries | 147 | 253 | **260** |
+| Séries bénignes / cancers | 100 / 47 | 151 / 102 | **153 / 107** |
+| Patients | 72 | 130 | **132** |
+| Patients bénins / cancéreux | 48 / 24 | 75 / 55 | **76 / 56** |
+| Patients mélangeant les deux classes | 0 | 0 | **0** |
+| Avertissements de validation | 5 | 0 | **0** |
+| Taille | 0,55 Go | 1,06 Go | **1,00 Go** |
 
-Le `manifest.json` couvre les 253 fichiers, un par série, porte la révision qui l'a
-produit et compte 14 séries lues comme miroir. Durée d'une passe complète : 27 à
-51 min pour 22,4 Go de DICOM à décoder — la première passe, qui écartait 115 séries
-sur l'en-tête, était la plus rapide.
+Le `manifest.json` couvre les 260 fichiers, un par série, porte la révision qui l'a
+produit (`git_revision`), la vue et l'étude de chaque cas, et compte 14 séries lues
+comme miroir. Durée d'une passe complète : 27 à 56 min pour 22,4 Go de DICOM à décoder
+— la première passe, qui écartait 115 séries sur l'en-tête, était la plus rapide ; la
+dernière, qui en décode 260, la plus lente.
 
 **Ce que la reconstruction a fait apparaître** (2026-09-12, mesuré) :
 
@@ -168,7 +169,9 @@ sur l'en-tête, était la plus rapide.
   plan (p. ex. 512×512), pas seulement changer le drapeau.
 - **115 des 262 séries sur disque n'ont aucune boîte** (62 patients), et cela ne veut
   **pas** dire « examen normal » : le statut par étude (normal / actionable / benign /
-  cancer) vit dans `BCS-DBT-labels-*.csv`, qui **n'est pas téléchargé**. C'est le
+  cancer) vit dans `BCS-DBT-labels-*.csv`, qui **n'est pas téléchargé**. *(Téléchargé
+  depuis le 2026-09-13, et la jointure du §4.6 ramène ces 115 à **2** séries sans
+  boîte : les 113 autres en avaient une, que l'inférence ne trouvait pas.)* C'est le
   premier obstacle du P1 « corpus à deux classes », avant tout téléchargement.
 
 ### Ce que la cible coûte en données
@@ -276,11 +279,10 @@ le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 
 | Priorité | Tâche | Critère de « fait » |
 |---|---|---|
-| P1 | Corpus DBT à deux classes, d'une seule source | Le filtre « patients annotés » de `download_annotated_dbt_series` est levé, des normaux sont téléchargés, l'étiquette patient est cancer / non-cancer, et le split par patient conserve la prévalence. **Avancement au 2026-09-13** : l'étiquette patient est faite (colonne `Class`, voir Livré), le split stratifié aussi (`imaging.dataset.split_npz_by_patient`), et les labels par étude sont téléchargés — 4 581 normaux disponibles. Reste le téléchargement lui-même : ~400 Mo par patient (4 vues), donc un volume à décider, et 22,4 Go sont déjà pris par 134 patients |
-| P1 | Apparier les boîtes depuis `file-paths` plutôt que par inférence | `BCS-DBT-file-paths-*.csv` donne la vue de chaque série : 260 séries annotées contre 253 appariées aujourd'hui, et 4 masques posés depuis la mauvaise acquisition répétée. La latéralité des pixels ne sert plus qu'à décider du retournement (voir l'incident réseau ci-dessus) |
+| P1 | Corpus DBT à deux classes, d'une seule source | Le filtre « patients annotés » de `download_annotated_dbt_series` est levé, des normaux sont téléchargés, l'étiquette patient est cancer / non-cancer, et le split par patient conserve la prévalence. **Avancement au 2026-09-13** : l'étiquette patient est faite (colonne `Class`, voir Livré), le split stratifié aussi (`imaging.dataset.split_npz_by_patient`), les neuf tables BCS-DBT se téléchargent depuis un clone (`ExtractData.download_dbt_tables`, voir Livré) et les labels par vue donnent 4 581 normaux disponibles. Reste le téléchargement des séries : ~400 Mo par patient (4 vues), donc un volume à décider, et 22,4 Go sont déjà pris par 134 patients |
 | P1 | Tête de décision au niveau examen | Une probabilité par patient — pas une agrégation « une coupe s'allume », dont le §« Cible chiffrée » montre qu'elle exige 99,94 % de spécificité par coupe. **ROC-AUC patient avec IC bootstrap par patient** dans `eval_report.json` |
 | P1 | Choisir et publier le point de fonctionnement | Seuil fixé sur la **validation** pour Se = 82,8 % ; spécificité, VPP et **prévalence du jeu de test** rapportées sur le **test**, avec IC. Le panneau « Limites connues » cite Se/Sp/IC/prévalence au lieu du Dice |
-| P2 | Reprendre l'étape 2 en version image **si le corpus grossit** | Mesurée le 2026-09-12 et négative : ROC-AUC patient 0,513 [0,411 – 0,615] sur 130 patients, l'IC contient le hasard (§4.5). Le levier identifié est le nombre de patients (134 téléchargés sur 5 060), pas le modèle — donc cette ligne attend le déblocage du réseau |
+| P2 | Reprendre l'étape 2 en version image **si le corpus grossit** | Mesurée le 2026-09-12 et négative : ROC-AUC patient 0,513 [0,411 – 0,615] sur 130 patients, l'IC contient le hasard (§4.5). Le levier identifié est le nombre de patients, pas le modèle. Le réseau n'est plus l'obstacle (2026-09-13) : ce qui reste à décider est le volume disque. Le plus court chemin est désormais chiffré — les boîtes du **split test** de la collection existent (`BCS-DBT-boxes-test`, 136 lignes, 60 patients, 30 cancers) et n'ont jamais été utilisées ici : pooler les trois splits porte le corpus annoté de 141 à **201 patients, dont 89 cancers**, soit tous les cancers annotés de la collection |
 | P2 | Donner à l'étape 2 tabulaire une mesure qui lui appartienne | `train_tabular_model.py` fait un split (ou une VC) et persiste les métriques du modèle **servi** ; `AnalyzeData` ajuste imputation/scaler/PCA **après** le split ; `reports/model_results.csv` recommité |
 | P2 | Trancher le sort de BreakHis | Un modèle bénin/malin entraîné et mesuré, ou le script et `BREAKHIS_DIR` supprimés. Rétrogradé de fait : `Class` fournit un pendant image moins cher |
 | P3 | Trancher le sort du pipeline tabulaire Spark | Assumé et documenté comme démo Spark, ou retiré. Rétrogradé de P2 : depuis l'export, la JVM n'est plus qu'une dépendance d'entraînement, plus une condition pour servir |
@@ -290,6 +292,15 @@ le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 | P3 | Exécuter le lineage sur le corpus | Aucun `manifest.json` n'existe sous `data/preprocessed_data/` : le code est écrit et testé, jamais passé sur les données réelles |
 | P3 | Registre de traitement RGPD | Une page : base légale, nature des données, finalité, conservation, sécurité |
 | P3 | Nom de produit + logo | Choisi et intégré au header de l'app |
+
+**Livré** (branche `ameliore-le-mvp`, le 2026-09-13) :
+
+| Tâche | Où | Ce qui la rend faite |
+|---|---|---|
+| P1 — apparier les boîtes depuis `file-paths` au lieu de les inférer | `TransformData.py` (`series_uid_from_classic_path`, `view_position_of`, `_read_file_paths`, `BOX_JOIN_COLUMNS`, `preprocess_dbt_with_boxes`), `tests/test_dbt_preprocessing.py` | L'appariement est une **jointure** sur `(PatientID, StudyUID, View)` ; les trois helpers d'inférence sont supprimés et les pixels ne décident plus que du retournement. Corpus reconstruit et **mesuré sur les fichiers** : 260 séries (contre 253), 132 patients, 153 bénignes / 107 cancers, 76 / 56 patients, 0 masque vide, 0 avertissement, 1,00 Go, 56,1 min. Diff contre l'ancien corpus : +7 séries, 0 perdue, **exactement 4 masques déplacés** — les 4 acquisitions répétées que le §4.4 annonçait mal appariées — et 14 miroirs conservés. Les 11 séries à vue répétée (`lmlo1`, `rcc1`, `lcc2`…) sont appariées pour la première fois. Détail au §4.6 |
+| P1 — rendre les tables BCS-DBT téléchargeables depuis un clone | `ExtractData.download_dbt_tables`, `config.py` (`DBT_FILE_PATHS*`, `DBT_LABELS_*`, `DBT_BOXES_TEST`) | Les **9 tables** (boîtes, labels par vue, inventaire `file-paths`, pour les trois splits) se téléchargent en une fonction ; deux d'entre elles sont **identiques octet pour octet** aux copies posées à la main le 2026-09-13. Jusqu'ici un clone ne pouvait pas prétraiter DBT du tout, puisque la jointure exige l'inventaire. Un nom publié ne suit pas le nom local (`BCS-DBT-boxes-validation-v2-PHASE-2-Jan-2024.csv`) : la table le dit |
+| P1 — lire le statut par vue, seule source du mot « normal » | `TransformData.read_dbt_labels`, `TransformData.dbt_patient_status`, 4 tests | Un patient est lu **à sa pire vue** (un cancer ⇒ examen cancer), une ligne sans aucun drapeau n'est pas comptée normale, et une table amputée d'une colonne est refusée. Reproduit depuis les fichiers les chiffres jusque-là repris de la documentation : 4 581 normaux / 278 actionable / 112 bénins / **89 cancers**, 5 060 patients |
+| P1 — télécharger des examens sans cancer | `ExtractData.download_normal_dbt_series`, `ExtractData.download_dbt_series_for` | Le filtre « patients annotés » est levé : la sélection vient du statut par vue, un patient n'est pris que si **toutes** ses vues sont normales, et l'échantillon est tiré avec une graine plutôt que par ID croissant (les ID suivent le site et la date). Cap exprimé en **volume ajouté par l'appel** et non en taille totale du dossier — l'ancien cap se déclenchait immédiatement sur un dossier partagé avec Duke. Coût mesuré : ~200 Mo par patient normal (4 vues) |
 
 **Livré** (branche `ameliore-le-mvp`, le 2026-09-12) :
 
@@ -379,9 +390,11 @@ retrouvées **262/262**, PatientID concordant **262/262** :
 | Séries appariées à une mauvaise boîte | **4** (une acquisition répétée prise pour l'autre) |
 
 L'inférence du §4.4 était donc juste là où elle était risquée — les 14 miroirs — et
-incomplète sur les vues répétées. **Ouvert** : brancher `file-paths` comme source
-d'appariement, la latéralité des pixels ne servant plus qu'à décider du retournement,
-comme dans le lecteur officiel. Gain attendu : 253 → 260 séries et 4 masques corrigés.
+incomplète sur les vues répétées. **Fait le 2026-09-13** : `file-paths` est la source
+d'appariement, la latéralité des pixels ne sert plus qu'à décider du retournement, comme
+dans le lecteur officiel. Gain annoncé 253 → 260 séries et 4 masques corrigés ; gain
+obtenu, mesuré sur les fichiers, 253 → 260 séries et **exactement** 4 masques déplacés
+(§4.6).
 
 ### Relevés le 2026-09-12
 
@@ -394,7 +407,7 @@ documentation, pas de code, et se décident une par une. Ce qu'un utilisateur vo
 | « mesurée sur 20 % des 569 cas **tenus à l'écart de l'entraînement** » — le modèle servi est ajusté sur 569/569, sans split. Les 97,67 % viennent d'un autre modèle, celui d'`AnalyzeData` | `app/templates/biopsy.html` vs `train_tabular_model.py` (`pipeline.fit(labelled)`) | Corrigé le 2026-09-12 |
 | Parité annoncée « sur les 569 lignes, écart max 1 × 10⁻¹⁵ » ; le test compare **5 lignes** à 1e-9, et le dit dans son propre commentaire | `plan.md`, docstring `inference.predict_tabular` vs `tests/test_tabular_export.py` | Ouvert |
 | Les métriques tabulaires renvoient à `reports/model_results.csv`, **absent du disque** — comme `pca_info.csv`, `feature_contributions.csv`, `scree_plot.png` | `Final_Report.md` | Ouvert |
-| « 87 tests, ~7 s » ; il y en a **174**, tous passants (116 à l'audit, plus 9 pour le P0, 16 pour la colonne `Class`, 6 pour le split stratifié, 7 pour l'appariement et 20 pour l'étape 2 en image) | `README.md` §Development | Ouvert |
+| « 87 tests, ~7 s » ; il y en a **174**, tous passants (116 à l'audit, plus 9 pour le P0, 16 pour la colonne `Class`, 6 pour le split stratifié, 7 pour l'appariement et 20 pour l'étape 2 en image) | `README.md` §Development | Corrigé le 2026-09-13 : **198**, après les tests de la jointure et des labels |
 | « 0,76 s par volume, 4,5 ms par coupe » ; l'artefact dit **0,825 s** et **4,83 ms** | `plan.md` §4.3 et `DEMO.md` vs `eval_report.json` | Ouvert |
 | « temps de calcul ~110 ms » ; mesuré 69-73 ms à chaud, 585 ms au premier appel | `README.md`, `DEMO.md` | Ouvert |
 | Checkpoint par défaut documenté `results_mri_p2/unet_best.pt` ; c'est `models/dce_mri_p2_negfix/unet_best.pt` | docstring `inference.predict_dce_mri` | Ouvert |
@@ -933,3 +946,61 @@ laquelle des acquisitions répétées elle est ; elles restent non appariées. E
 `inference.load_dbt_dicom` ne normalise aucune latéralité : si un modèle DBT est
 réentraîné sur ce corpus, l'inférence devra appliquer la même règle, sinon une moitié
 des examens arrivera dans le mauvais repère.
+
+### 4.6 Appariement boîte ↔ série : la collection le dit, il suffisait de le lire (2026-09-13)
+
+Le §4.4 a remplacé un tag qui mentait par une **inférence** sur les pixels. Elle était
+bonne — 23 masques remis sur du tissu — et elle restait une inférence. `BCS-DBT-file-paths-*.csv`,
+téléchargé le 2026-09-13, donne `(PatientID, StudyUID, View)` pour **chaque dossier de
+série** : l'appariement devient une jointure, et les pixels gardent un seul rôle, celui
+que le lecteur officiel leur donne, décider du retournement.
+
+**Ce que la jointure trouve, mesuré avant de recalculer quoi que ce soit.** Les
+20 311 lignes de l'inventaire couvrent nos **262 dossiers sur 262**, avec un
+`series_uid` unique par ligne (le nom de dossier se lit en avant-dernier segment de
+`classic_path`) :
+
+| | |
+|---|---:|
+| Séries annotées par la jointure | **260** (l'inférence en trouvait 253) |
+| Lignes de boîtes appariées | 284 / 299 |
+| Les 15 lignes restantes | 9 patients **absents du disque** — rien n'est perdu |
+| Patients | **132** — 76 bénins, 56 cancers, 0 mélangé |
+
+**Ce que la reconstruction a changé, mesuré fichier par fichier contre l'ancien corpus** :
+
+| | Pixels (§4.4) | Jointure | |
+|---|---:|---:|---|
+| Séries | 253 | **260** | +7, aucune perdue |
+| Séries bénignes / cancers | 151 / 102 | **153 / 107** | |
+| Patients bénins / cancéreux | 75 / 55 | **76 / 56** | |
+| Masques déplacés | — | **4** | exactement les 4 acquisitions répétées annoncées |
+| Séries lues comme miroir | 14 | **14** | les 7 patients du §4.4, confirmés par la source |
+| Séries sans boîte sur disque | 9 | **2** | |
+| Masques vides | 0 | **0** | |
+| Avertissements de validation | 0 | **0** | |
+| Taille / durée | 1,06 Go | **1,00 Go** / 56,1 min | |
+
+Les 4 masques déplacés sont la mesure du défaut que le §4.4 avait laissé ouvert :
+DBT-P01347, DBT-P02750, DBT-P03423 et DBT-P02798, chacun avec deux acquisitions de la
+même vue (`lmlo` et `lmlo1`, par exemple), dont le masque venait de l'autre acquisition.
+Aucun pixel ne pouvait trancher ce cas : l'image des deux acquisitions est le même sein
+sous la même incidence. Les **11 séries à vue répétée** sont d'ailleurs appariées pour la
+première fois (`lcc1`, `lcc2`, `lmlo1`×3, `rcc1`×2, `rmlo1`×4).
+
+**Ce que la jointure permet de vérifier, et que l'inférence ne permettait pas.** La vue
+n'étant plus déduite de l'en-tête, l'en-tête devient un témoin : `PatientID` et
+`ViewPosition` sont comparés à l'inventaire et un désaccord est journalisé. Sur les
+262 séries, aucun. Le manifeste porte maintenant la vue et l'étude de chaque cas, plus
+le chemin des tables qui l'ont produit — de quoi refaire la jointure sans relire un
+volume.
+
+**Ce qui est supprimé.** `dbt_series_view`, `_candidate_boxes` et `_select_boxes` n'ont
+plus d'appelant : deux façons d'apparier, dont une mesurée fausse 25 fois sur 262,
+c'est un piège qu'un corpus reconstruit par distraction paierait sans rien dire. La
+latéralité par les pixels reste (`image_laterality`), pour le retournement.
+
+**Ce qui reste ouvert ici.** `inference.load_dbt_dicom` ne normalise toujours aucune
+latéralité : un modèle réentraîné sur ce corpus verra une moitié des examens dans le
+mauvais repère si l'inférence n'applique pas la même règle. C'était déjà la dernière
+ligne du §4.4 ; la jointure ne la traite pas.
