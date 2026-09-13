@@ -66,6 +66,11 @@ DBT_LABELS_TEST = os.path.join(TCIA_DIR, "BCS-DBT-labels-test-PHASE-2.csv")
 
 # --- Preprocessed: z-normalised volumes + masks, one .npz per series --------
 DBT_PREPROCESSED_DIR = os.path.join(PREPROCESSED_DATA_DIR, "dbt")
+# Two DBT corpora, because they answer different questions and cannot share a geometry.
+# `dbt/` is lesion-cropped: it holds only annotated exams and serves localisation.
+# `dbt_exams/` holds every listed series at one fixed in-plane size, cancer and
+# no-cancer alike, which is what an exam-level decision can be measured on.
+DBT_EXAMS_PREPROCESSED_DIR = os.path.join(PREPROCESSED_DATA_DIR, "dbt_exams")
 DCE_MRI_PREPROCESSED_DIR = os.path.join(PREPROCESSED_DATA_DIR, "dce_mri_p2")
 WISCONSIN_PREPROCESSED_DIR = os.path.join(PREPROCESSED_DATA_DIR, "wisconsin")
 

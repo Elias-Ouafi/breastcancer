@@ -44,6 +44,15 @@ MIN_IN_PLANE = 128
 # is written down; 1 is cancer, so "positive" means what it says.
 LESION_CLASSES = {"benign": 0, "cancer": 1}
 
+# The exam-level vocabulary, from ``BCS-DBT-labels-*.csv``. It is wider than the box
+# classes -- an exam can be normal, or recalled without a biopsy (``actionable``) -- and
+# it maps onto the same ``label``: **1 means cancer**, and nothing else does. A benign
+# biopsy, a recall and a normal exam are all 0, because the question the decision head
+# is scored on is "is there a cancer", not "is there something". The raw word travels
+# with the volume as ``exam_status`` so a later run can move that line (treating
+# ``actionable`` as positive, say) without decoding 22 GB of DICOM again.
+EXAM_STATUSES = {"normal": 0, "actionable": 0, "benign": 0, "cancer": 1}
+
 
 class VolumeValidationError(ValueError):
     """A preprocessed volume violates a contract the rest of the pipeline relies on."""
@@ -63,8 +72,22 @@ def lesion_class_label(lesion_class):
     return key, LESION_CLASSES[key]
 
 
+def exam_status_label(exam_status):
+    """Return ``(canonical status, label)`` for one exam status, or raise.
+
+    Same choke point as :func:`lesion_class_label`, for the wider vocabulary of
+    :data:`EXAM_STATUSES`. The two agree wherever they overlap: ``cancer`` is 1,
+    ``benign`` is 0.
+    """
+    key = str(exam_status).strip().lower()
+    if key not in EXAM_STATUSES:
+        raise VolumeValidationError(
+            f"exam_status must be one of {sorted(EXAM_STATUSES)}; got {exam_status!r}")
+    return key, EXAM_STATUSES[key]
+
+
 def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_frame=True,
-                             lesion_class=None):
+                             lesion_class=None, exam_status=None, expect_lesion=True):
     """Check one volume/mask pair. Raises on a broken contract, warns on a smell.
 
     Returns the list of warnings raised, so a caller can count them across a run.
@@ -73,7 +96,13 @@ def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_fram
     demo cases, where a cropped volume is the intended output rather than an accident.
 
     ``lesion_class``, when given, is checked against :data:`LESION_CLASSES` here --
-    the same single choke point as the rest, so a typo cannot reach the disk.
+    the same single choke point as the rest, so a typo cannot reach the disk. So is
+    ``exam_status`` against :data:`EXAM_STATUSES`.
+
+    ``expect_lesion=False`` drops the empty-mask warning. An exam-level corpus holds
+    negatives on purpose -- a normal screening exam *has* no lesion to localise -- and a
+    warning raised once per negative would bury the ones that mean something: on the
+    4 581 normal patients of BCS-DBT there would be thousands.
     """
     volume = np.asarray(volume)
     mask = np.asarray(mask)
@@ -103,6 +132,8 @@ def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_fram
 
     if lesion_class is not None:
         lesion_class_label(lesion_class)  # raises on anything unrecognised
+    if exam_status is not None:
+        exam_status_label(exam_status)
 
     unique = np.unique(mask)
     if not np.isin(unique, (0, 1)).all():
@@ -126,7 +157,7 @@ def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_fram
             "crop is intended")
 
     lesion_voxels = int((mask > 0).sum())
-    if lesion_voxels == 0:
+    if lesion_voxels == 0 and expect_lesion:
         warnings.append(f"{where}mask is empty — no lesion to localise in this volume")
 
     for message in warnings:
@@ -134,7 +165,7 @@ def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_fram
     return warnings
 
 
-def summarise(volume, mask, lesion_class=None):
+def summarise(volume, mask, lesion_class=None, exam_status=None):
     """Descriptive stats for the lineage manifest. Assumes validation already passed.
 
     ``lesion_class`` is carried through when known, so the manifest says how many
@@ -154,4 +185,7 @@ def summarise(volume, mask, lesion_class=None):
     if lesion_class is not None:
         key, label = lesion_class_label(lesion_class)
         stats["lesion_class"], stats["label"] = key, label
+    if exam_status is not None:
+        key, label = exam_status_label(exam_status)
+        stats["exam_status"], stats["label"] = key, label
     return stats

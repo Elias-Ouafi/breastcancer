@@ -95,7 +95,8 @@ data/
 │   ├── wisconsin/     the UCI CSV
 │   └── breakhis/      the Kaggle archive
 ├── preprocessed_data/ z-normalised volumes + masks, one .npz per series
-│   ├── dbt/           from preprocess_dbt_with_boxes
+│   ├── dbt/           from preprocess_dbt_with_boxes: annotated exams, lesion-cropped
+│   ├── dbt_exams/     from preprocess_dbt_exams: every exam at 384x384, cancer or not
 │   └── dce_mri_p2/    from preprocess_dce_mri_with_boxes (the model in the demo)
 └── curated_data/      derived and rebuildable: slice banks, the three demo cases
 models/                checkpoints + the metrics that justify them
@@ -133,7 +134,7 @@ cannot drift apart.
 ```bash
 pip install -e ".[dev]"
 ruff check .        # lint
-pytest              # 198 tests, ~25 s, no GPU or dataset needed
+pytest              # 215 tests, ~30 s, no GPU or dataset needed
 ```
 
 [CI](.github/workflows/ci.yml) runs both on every push and pull request. The suite
@@ -282,6 +283,38 @@ two thirds of the annotated set. `Class` is required: a CSV without it is reject
 rather than treated as one undistinguished class. A completed run writes
 `manifest.json` beside the volumes (`lineage.py`) with the per-class counts, so the
 class balance of a corpus can be read without opening a single volume.
+
+#### The exam-level corpus (cancer or no cancer)
+
+Everything above is annotation-driven, so every volume it writes holds a lesion:
+prevalence 100 %, and a specificity that cannot be measured at all. `preprocess_dbt_exams`
+builds the other corpus — the one an exam-level decision is scored on:
+
+```python
+from TransformData import preprocess_dbt_exams
+
+preprocess_dbt_exams(                      # writes data/preprocessed_data/dbt_exams/
+    boxes_csv=BOXES,                       # optional: paints the masks, never the label
+)
+```
+
+The label comes from `BCS-DBT-labels-*.csv`, the only table that says an exam is normal,
+read at the patient's **worst view** — so a series with no box is a *negative* rather
+than a skip, and `label` means one thing: 1 is cancer. `actionable` (recalled, not
+biopsied) and `benign` are 0, and the word itself is stored as `exam_status`, so moving
+that line later does not mean decoding 22 GB of DICOM again. A series with no labels row
+is skipped and counted rather than assumed normal.
+
+Both classes go through **one geometry**: the full frame resampled to 384×384 with its
+aspect ratio kept, zero-padded, every slice retained, no cropping. This is the point of
+the function. A corpus whose positives are lesion crops (45×72×70) and whose negatives
+are full frames (2457×1890) is separable by array shape alone, which produces a splendid
+AUC that measures the preprocessing. Downsampling averages rather than samples — at
+2457 → 384 rows, picking one row in seven is how a small bright mass disappears — and the
+same laterality flip is applied to negatives too, so "was flipped" cannot become a proxy
+for "has a box", hence for the label. Measured: 4.9 MB per series compressed, ~14 s of
+decoding each; `skip_existing=True` makes a pass resumable, which matters when a full one
+runs for hours.
 
 The `imaging/` package then trains the U-Net: it reads the `.npz` volumes, splits
 them **by patient** (`case_id`) so no patient straddles train/val/test, serves axial

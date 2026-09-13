@@ -375,7 +375,8 @@ def crop_to_roi(volume, mask, margin=16):
 
 
 def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, crop=True,
-                      case_id=None, summary=None, lesion_class=None):
+                      case_id=None, summary=None, lesion_class=None, exam_status=None,
+                      expect_lesion=True):
     """Save a preprocessed volume + mask as a single compressed .npz file.
 
     Three levers keep the files small:
@@ -401,6 +402,14 @@ def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, cr
     hold a mask has no way to answer the exam-level question. Omit it when the source
     does not say (the DCE-MRI collection has no such column) -- the keys are then
     absent, and absent means unknown rather than benign.
+
+    `exam_status` ("normal", "actionable", "benign" or "cancer", see
+    `validation.EXAM_STATUSES`) is the same idea one level up, for a corpus that holds
+    exams rather than lesions: it is the only way a negative exam can say what it is,
+    since its mask is empty and an empty mask is also what a failed match looks like.
+    It writes `exam_status` and the same 0/1 `label`, where 1 still means cancer.
+    `expect_lesion=False` goes with it, to stop each negative reporting an empty mask
+    as a smell.
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -415,14 +424,16 @@ def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, cr
     # and it does not exist until the cast has happened.
     key = str(case_id) if case_id is not None else str(patient_id)
     warnings = validation.validate_volume_and_mask(
-        volume, mask, case_id=key, expect_full_frame=not crop, lesion_class=lesion_class)
+        volume, mask, case_id=key, expect_full_frame=not crop, lesion_class=lesion_class,
+        exam_status=exam_status, expect_lesion=expect_lesion)
     # The summary is keyed by output file, not by case: a DBT patient contributes up
     # to four views, and keying by `case_id` made each series overwrite the previous
     # one -- a manifest claiming 72 cases for 147 files, and losing 3 of its 5
     # validation warnings with them. The patient grouping stays readable as `case_id`
     # inside each entry, which is what a leakage-free split needs.
     if summary is not None:
-        entry = validation.summarise(volume, mask, lesion_class=lesion_class)
+        entry = validation.summarise(volume, mask, lesion_class=lesion_class,
+                                     exam_status=exam_status)
         entry["case_id"] = key
         entry["warnings"] = warnings
         summary[str(patient_id)] = entry
@@ -436,6 +447,10 @@ def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, cr
     if lesion_class is not None:
         canonical, label = validation.lesion_class_label(lesion_class)
         arrays["lesion_class"] = np.asarray(canonical)
+        arrays["label"] = np.asarray(label, dtype=np.uint8)
+    if exam_status is not None:
+        canonical, label = validation.exam_status_label(exam_status)
+        arrays["exam_status"] = np.asarray(canonical)
         arrays["label"] = np.asarray(label, dtype=np.uint8)
 
     out_path = os.path.join(output_dir, f"{patient_id}.npz")
@@ -902,6 +917,232 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
              f"{skipped_unlisted} absent from the file-paths inventory).")
     return saved, skipped
 
+
+# --------------------------------------------------------------------------- #
+# The exam-level corpus: one volume per view, labelled cancer / no cancer
+# --------------------------------------------------------------------------- #
+
+# The in-plane size every exam volume is resampled to. A full DBT frame is 2457 rows by
+# 1890-1996 columns and weighs ~745 MB in float16, so a corpus of full frames is not
+# storable (plan.md: `crop=False` would ask for ~100 GB over 262 series alone). Cropping
+# to the lesion is the other extreme and is worse than expensive: it **presupposes the
+# answer**, since only an annotated exam has a lesion to crop to, and a negative exam
+# would arrive as a full frame. Both classes therefore go through the same geometry.
+EXAM_PLANE = 384
+
+
+def resize_in_plane(volume, size=EXAM_PLANE):
+    """Fit each slice of `volume` into a `size` x `size` frame, aspect ratio kept.
+
+    Returns ``(resized, scale, (row_pad, col_pad))``: the scale applied to both axes and
+    where the image sits inside the padded frame, which is what a box coordinate needs to
+    follow the pixels. Area averaging is used rather than sampling -- a 2457-row frame
+    reaching 384 rows drops 6 pixels out of 7, and picking one of the seven instead of
+    averaging them is how a small bright mass disappears.
+
+    The padding value is 0, which is the **mean** of the volume rather than air: this
+    runs after :func:`normalize_intensity`, so zero is the least informative value
+    available. Padding with the minimum would draw a bright border on one side of every
+    frame that needed padding -- a feature correlated with nothing but the detector.
+    """
+    import torch  # a training dependency, kept out of this module's import path
+    import torch.nn.functional as tnf
+
+    volume = np.ascontiguousarray(np.asarray(volume, dtype=np.float32))
+    depth, rows, cols = volume.shape
+    scale = min(size / rows, size / cols)
+    new_rows, new_cols = max(1, round(rows * scale)), max(1, round(cols * scale))
+
+    resized = np.zeros((depth, size, size), dtype=np.float32)
+    row_pad, col_pad = (size - new_rows) // 2, (size - new_cols) // 2
+    # In chunks: the source volume is already ~1.9 GB as float32 on a real series, and a
+    # second copy of it is what would make this fail on an 8 GB machine.
+    for start in range(0, depth, 8):
+        chunk = torch.from_numpy(volume[start:start + 8]).unsqueeze(1)
+        small = tnf.interpolate(chunk, size=(new_rows, new_cols), mode="area")
+        resized[start:start + 8, row_pad:row_pad + new_rows,
+                col_pad:col_pad + new_cols] = small.squeeze(1).numpy()
+    return resized, scale, (row_pad, col_pad)
+
+
+def _scaled_box(row, scale, offsets, shape, slice_margin):
+    """One box row mapped into the resampled frame, as a `create_mask` bbox.
+
+    A box 20 px wide at full resolution is 3 px wide at 384, and rounding it to 2 px is
+    not the same lesion; a box that rounds to zero would vanish silently. Each side is
+    therefore kept at 1 px minimum, and the result is clamped to the frame.
+    """
+    row_pad, col_pad = offsets
+    y0 = int(round(int(row["Y"]) * scale)) + row_pad
+    x0 = int(round(int(row["X"]) * scale)) + col_pad
+    y1 = max(y0 + 1, int(round((int(row["Y"]) + int(row["Height"])) * scale)) + row_pad)
+    x1 = max(x0 + 1, int(round((int(row["X"]) + int(row["Width"])) * scale)) + col_pad)
+    z = int(row["Slice"])
+    return {
+        "Start Slice": max(0, z - slice_margin),
+        "End Slice": min(shape[0], z + 1 + slice_margin),
+        "Start Row": min(max(0, y0), shape[1] - 1),
+        "End Row": min(y1, shape[1]),
+        "Start Column": min(max(0, x0), shape[2] - 1),
+        "End Column": min(x1, shape[2]),
+    }
+
+
+def preprocess_dbt_exams(root_dir=config.TCIA_DIR,
+                         labels_csv=None,
+                         file_paths_csv=config.DBT_FILE_PATHS,
+                         boxes_csv=None,
+                         output_dir=config.DBT_EXAMS_PREPROCESSED_DIR,
+                         plane=EXAM_PLANE,
+                         slice_margin=2,
+                         skip_existing=True):
+    """Preprocess every listed DBT series as an **exam**: cancer or no cancer.
+
+    This is the corpus an exam-level decision head needs, and the one the project did
+    not have. :func:`preprocess_dbt_with_boxes` is annotation-driven, so every volume it
+    writes carries a lesion: 100 % prevalence, and a specificity that cannot be measured
+    at all (plan.md, "Cible chiffrée"). Here the label comes from
+    ``BCS-DBT-labels-*.csv`` -- the only table that says an exam is *normal* -- so a
+    series with no box is a negative rather than a skip.
+
+    **One geometry for both classes.** Every volume is resampled to ``plane`` x ``plane``
+    in plane with its aspect ratio kept (:func:`resize_in_plane`), all slices retained,
+    and no cropping anywhere. This is the point of the function: a corpus whose positives
+    are lesion crops and whose negatives are full frames is separable by array shape
+    alone, which would produce a splendid AUC that measures the preprocessing.
+
+    **One laterality convention.** A study stored rotated relative to the frame its
+    annotation lives in is flipped, as in :func:`preprocess_dbt_with_boxes` -- and here
+    the rule is applied to negatives too, which have no annotation to be rotated against.
+    Without that, "was flipped" would correlate with "has a box", which correlates with
+    the label.
+
+    ``boxes_csv`` is optional and changes nothing about the label: it only paints the
+    masks of the annotated exams, so the same corpus can serve a coarse localisation
+    check. The mask of a negative is empty by construction, and ``expect_lesion=False``
+    keeps that from being reported as a smell once per negative.
+
+    ``skip_existing`` makes the run resumable: on this collection a full pass is hours of
+    DICOM decoding, and a pass that has to start over after an interruption is a pass
+    that does not get run.
+
+    Returns ``(saved, skipped)``; per-class counts go to the log and the manifest.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    labels_csv = labels_csv or [config.DBT_LABELS_TRAIN, config.DBT_LABELS_VALIDATION,
+                                config.DBT_LABELS_TEST]
+    labels = read_dbt_labels(labels_csv)
+    labels["View"] = labels["View"].astype(str).str.strip().str.lower()
+    status_by_series = {}
+    for row in labels.itertuples():
+        flags = {name.lower() for name in DBT_LABEL_COLUMNS
+                 if int(getattr(row, name, 0) or 0) == 1}
+        if not flags:
+            continue
+        worst = next(name for name in DBT_STATUS_ORDER if name in flags)
+        status_by_series[(row.PatientID, row.StudyUID, row.View)] = worst
+
+    file_paths = _read_file_paths(file_paths_csv)
+    boxes_by_series = {}
+    if boxes_csv is not None:
+        boxes = _read_boxes(boxes_csv)
+        boxes["View"] = boxes["View"].astype(str).str.strip().str.lower()
+        boxes_by_series = dict(tuple(boxes.groupby(["PatientID", "StudyUID", "View"])))
+
+    saved, skipped, summary = 0, 0, {}
+    saved_by_status = {name: 0 for name in validation.EXAM_STATUSES}
+    skipped_unlisted, skipped_unlabelled, skipped_existing, mirrored_count = 0, 0, 0, 0
+    for name in sorted(os.listdir(root_dir)):
+        folder = os.path.join(root_dir, name)
+        if not os.path.isdir(folder):
+            continue
+        dcm_files = [f for f in os.listdir(folder) if f.lower().endswith(".dcm")]
+        if not dcm_files:
+            continue
+        if skip_existing and os.path.exists(os.path.join(output_dir, f"{name}.npz")):
+            skipped += 1
+            skipped_existing += 1
+            continue
+        if name not in file_paths.index:
+            log.warning(f"[DBT-exam] {name}: not in the file-paths inventory; skipping.")
+            skipped += 1
+            skipped_unlisted += 1
+            continue
+        listed = file_paths.loc[name]
+        patient, study_uid, view = listed["PatientID"], listed["StudyUID"], listed["View"]
+        key = (patient, study_uid, view)
+        status = status_by_series.get(key)
+        if status is None:
+            # No status means no target. Guessing "normal" here is how a corpus acquires
+            # negatives that were never called negative by anyone.
+            log.warning(f"[DBT-exam] {name}: no labels row for {key}; skipping.")
+            skipped += 1
+            skipped_unlabelled += 1
+            continue
+
+        volume = pydicom.dcmread(os.path.join(folder, dcm_files[0])).pixel_array
+        volume = volume.astype(np.float32)
+        if volume.ndim == 2:
+            volume = volume[None]
+        stored_laterality = image_laterality(volume[0])
+        mirrored = stored_laterality != view[0].upper()
+        if mirrored:
+            volume = np.flip(volume, axis=(-1, -2))
+
+        volume = normalize_intensity(volume)
+        volume, scale, offsets = resize_in_plane(volume, size=plane)
+
+        mask = np.zeros(volume.shape, dtype=np.uint8)
+        rows = boxes_by_series.get(key)
+        if rows is not None:
+            for _, box in rows.iterrows():
+                mask = np.logical_or(
+                    mask, create_mask(volume.shape,
+                                      _scaled_box(box, scale, offsets, volume.shape,
+                                                  slice_margin))).astype(np.uint8)
+
+        save_preprocessed(name, volume, mask, output_dir, crop=False,
+                          case_id=patient, exam_status=status, summary=summary,
+                          expect_lesion=False)
+        if name in summary:
+            summary[name].update({"view": view, "study_uid": study_uid,
+                                  "mirrored": bool(mirrored),
+                                  "in_plane_scale": round(float(scale), 5)})
+        saved += 1
+        saved_by_status[status] += 1
+        mirrored_count += int(mirrored)
+        log.info(f"[DBT-exam] {name}: {view} {status} "
+                 f"(label {validation.EXAM_STATUSES[status]}), "
+                 f"{volume.shape} at scale {scale:.3f}, "
+                 f"{int(mask.sum())} lesion voxels -> saved.")
+
+    lineage.write_manifest(
+        output_dir,
+        source=root_dir,
+        parameters={
+            "pipeline": "preprocess_dbt_exams",
+            "labels": [lineage.relative_path(p) for p in _box_paths(labels_csv)],
+            "file_paths": [lineage.relative_path(p) for p in _box_paths(file_paths_csv)],
+            "boxes": ([lineage.relative_path(p) for p in _box_paths(boxes_csv)]
+                      if boxes_csv is not None else []),
+            "plane": plane,
+            "slice_margin": slice_margin,
+            "saved_by_status": saved_by_status,
+            "mirrored_series": mirrored_count,
+            "skipped_unlisted": skipped_unlisted,
+            "skipped_unlabelled": skipped_unlabelled,
+            "skipped_existing": skipped_existing,
+        },
+        cases=summary,
+        warnings=[w for case in summary.values() for w in case.get("warnings", [])],
+    )
+
+    log.info(f"[DBT-exam] Saved {saved} series ("
+             + ", ".join(f"{count} {name}" for name, count in saved_by_status.items())
+             + f", {mirrored_count} read as mirrored), skipped {skipped} "
+             f"({skipped_existing} already written, {skipped_unlisted} not in the "
+             f"inventory, {skipped_unlabelled} without a labels row).")
+    return saved, skipped
 
 def extract_patient_ids(root_dir=config.TCIA_DIR):
     """Walk `root_dir` and return the set of PatientIDs found in the DICOM files."""
