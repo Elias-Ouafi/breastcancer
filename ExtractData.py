@@ -10,12 +10,8 @@ from logging_setup import setup_logging
 
 log = logging.getLogger(__name__)
 
-# Optional dependencies used only by specific extractors (Wisconsin fetch, plotting).
+# Optional dependencies used only by specific extractors (plotting, table fetches).
 # Imported lazily so the DBT download path works without the full stack installed.
-try:
-    from ucimlrepo import fetch_ucirepo
-except ImportError:
-    fetch_ucirepo = None
 try:
     import requests
 except ImportError:
@@ -41,75 +37,6 @@ def dir_size_bytes(path):
                 continue
     return total
 
-
-def extract_breast_cancer_wisconsin_diagnostic_data(max_gb=30):
-    """
-    Fetches the Breast Cancer Wisconsin (Diagnostic) dataset and saves it to CSV
-    under `config.WISCONSIN_DIR`, the raw layer for this source.
-    Stops and does not save if the cumulative size there would exceed `max_gb` gigabytes.
-    Also returns the raw data as a pandas DataFrame for future use (or None if not saved).
-    """
-    # Ensure the raw directory for this source exists
-    target_dir = config.WISCONSIN_DIR
-    os.makedirs(target_dir, exist_ok=True)
-
-    # Respect storage cap
-    max_bytes = int(max_gb * 1024 ** 3)
-    current_size = dir_size_bytes(target_dir)
-    if current_size >= max_bytes:
-        log.info(f"Storage limit reached: {current_size} bytes >= {max_bytes} bytes ({max_gb} GB). Dataset will not be saved.")
-        return None
-
-    # Fetch the dataset
-    breast_cancer_wisconsin_diagnostic = fetch_ucirepo(id=17)
-    
-    # Extract features and target
-    X = breast_cancer_wisconsin_diagnostic.data.features
-    y = breast_cancer_wisconsin_diagnostic.data.targets
-    
-    # Combine features and target into a single DataFrame
-    data = pd.concat([X, y], axis=1)
-
-    # Save to a temp file first to measure size
-    filename = 'raw_breast_cancer_data.csv'
-    temp_path = os.path.join(target_dir, filename + '.tmp')
-    final_path = os.path.join(target_dir, filename)
-
-    try:
-        data.to_csv(temp_path, index=False)
-        file_size = os.path.getsize(temp_path)
-    except Exception as e:
-        log.error(f"Failed to write temporary CSV: {e}")
-        if os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except Exception:
-                pass
-        return None
-
-    # Check if adding this file would exceed the cap
-    current_size = dir_size_bytes(target_dir)
-    if current_size + file_size > max_bytes:
-        log.info(f"Saving this dataset would exceed the storage cap ({max_gb} GB). File of size {file_size} bytes will not be kept.")
-        try:
-            os.remove(temp_path)
-        except Exception:
-            pass
-        return None
-
-    # Move temp file to final path
-    try:
-        os.replace(temp_path, final_path)
-    except Exception as e:
-        log.error(f"Failed to move temporary file into place: {e}")
-        try:
-            os.remove(temp_path)
-        except Exception:
-            pass
-        return None
-
-    log.info("Wisconsin (Diagnostic) dataset extracted and saved to %s", final_path)
-    return data
 
 # Downloaded DICOM series land in the raw layer, untouched (see config.py).
 DOWNLOAD_DIR = config.TCIA_DIR

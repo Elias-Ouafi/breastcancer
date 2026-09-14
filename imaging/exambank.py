@@ -5,9 +5,9 @@ Why this exists
 ``TransformData.preprocess_dbt_exams`` writes every listed DBT series at one fixed
 geometry (384x384 in plane, every slice kept, no cropping) -- see plan.md, "Corpus
 DBT à deux classes". That corpus is what an exam-level cancer / no-cancer decision
-needs, but it cannot be loaded the way ``lesionclf.LesionSliceDataset`` loads the
-cropped-lesion corpus: a lesion crop holds ~5 slices and the whole corpus fits in
-memory decompressed, while a full exam holds 24-114 slices (mean 68), and 870 of
+needs, but it cannot be loaded the way a lesion-cropped corpus can, entirely
+decompressed into memory: a lesion crop holds ~5 slices, while a full exam holds
+24-114 slices (mean 68), and 870 of
 them at 384x384 in float16 come to ~17.6 GB -- re-inflating that every epoch would
 starve training on I/O the same way it did for DCE-MRI (see ``imaging.slicebank``).
 

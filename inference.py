@@ -1,162 +1,29 @@
 """Reusable inference layer for the breast-cancer project.
 
-Two entry points, one per pipeline, so a demo/UI can get a prediction in one call
+One entry point per imaging backend, so a demo/UI can get a prediction in one call
 without re-running the batch training scripts:
 
-* :func:`predict_tabular` — scores a single Wisconsin 30-feature record with the
-  persisted Spark ``PipelineModel`` (see ``train_tabular_model.py``). Returns the
-  predicted diagnosis and, for the logistic model, a malignancy probability.
 * :func:`predict_dbt` — runs the trained 2D U-Net (``models/dbt/unet_best.pt``) over
   a preprocessed DBT ``.npz`` volume (or a raw volume array) and returns the localised
   lesion: best slice, bounding box, and the max per-pixel lesion probability -- which
   is not a calibrated detection score, see :func:`_localize_lesion`.
+* :func:`predict_dce_mri` — the same, for the DCE-MRI U-Net.
 
-Neither entry point retrains anything; both load saved artefacts, and neither needs
-a JVM: the tabular path reads the flattened export written by ``tabular_export``
-(numpy only), the imaging path needs ``torch`` + ``numpy``. Spark stays where it
-belongs, in training.
+Neither entry point retrains anything; both load saved ``torch`` checkpoints.
 """
 from __future__ import annotations
 
 import io
-import json
 import logging
 import os
-from typing import Mapping, Sequence, Union
+from typing import Union
 
 import numpy as np
 
 import config
-import tabular_export
 from logging_setup import setup_logging
 
 log = logging.getLogger(__name__)
-
-# --------------------------------------------------------------------------- #
-# Tabular inference (Wisconsin, Spark MLlib)
-# --------------------------------------------------------------------------- #
-
-DEFAULT_TABULAR_DIR = config.TABULAR_MODEL_DIR
-
-
-def _load_tabular_metadata(model_dir):
-    meta_path = os.path.join(model_dir, "metadata.json")
-    if not os.path.exists(meta_path):
-        raise FileNotFoundError(
-            f"No tabular model metadata at {meta_path!r}. "
-            "Fit and persist the model first: python train_tabular_model.py"
-        )
-    with open(meta_path) as f:
-        return json.load(f)
-
-
-def _order_features(features, feature_order):
-    """Return the feature values as a list in ``feature_order``.
-
-    Accepts a ``{name: value}`` mapping (order-independent, keys validated) or a plain
-    sequence already in ``feature_order``.
-    """
-    if isinstance(features, Mapping):
-        missing = [c for c in feature_order if c not in features]
-        extra = [c for c in features if c not in feature_order]
-        if missing:
-            raise ValueError(f"Missing features: {missing}")
-        if extra:
-            raise ValueError(f"Unexpected features: {extra}")
-        return [float(features[c]) for c in feature_order]
-
-    values = list(features)
-    if len(values) != len(feature_order):
-        raise ValueError(
-            f"Expected {len(feature_order)} feature values, got {len(values)}. "
-            f"Order must be: {feature_order}"
-        )
-    return [float(v) for v in values]
-
-
-_TABULAR_SCORER = {}
-
-
-def load_tabular_scorer(model_dir: str = DEFAULT_TABULAR_DIR):
-    """Return the cached JVM-free scorer for ``model_dir``, loading it once.
-
-    Cached for the same reason the U-Net is (see ``app.predictor``): re-reading a
-    13 KB JSON per request is not expensive, but a served model that is re-parsed on
-    every call is how the imaging path ended up spending 350 ms of its response on
-    disk I/O before anyone noticed.
-    """
-    if model_dir not in _TABULAR_SCORER:
-        _TABULAR_SCORER[model_dir] = tabular_export.TabularScorer.load(model_dir)
-    return _TABULAR_SCORER[model_dir]
-
-
-def predict_tabular(features: Union[Mapping[str, float], Sequence[float]],
-                    model_dir: str = DEFAULT_TABULAR_DIR):
-    """Score one Wisconsin record. Milliseconds, no Spark, no JVM.
-
-    Parameters
-    ----------
-    features : mapping or sequence
-        The 30 diagnostic features, either as a ``{feature_name: value}`` mapping or a
-        sequence in the persisted feature order (see ``metadata.json``).
-    model_dir : str
-        Directory holding ``tabular_model.json`` (and, for training, the Spark
-        ``pipeline_model/`` it was exported from).
-
-    Returns
-    -------
-    dict
-        ``{"prediction": 0.0|1.0, "diagnosis": "Benign"|"Malignant",
-        "malignant_probability": float|None, "margin": float}``. The probability is
-        ``None`` when the served model is Linear SVM (no probability output).
-
-    This used to start a Spark session and load a ``PipelineModel`` on every call,
-    which is why nothing called it: the demo image ships no JVM, and seconds of
-    startup to score thirty floats is not a request path. It now reads the flattened
-    export instead, which reproduces the Spark model to floating-point noise --
-    ``tests/test_tabular_export.py`` scores the whole dataset both ways and holds it
-    to 1e-9. ``predict_tabular_spark`` below is what it is checked against.
-    """
-    return load_tabular_scorer(model_dir).predict(features)
-
-
-def predict_tabular_spark(features: Union[Mapping[str, float], Sequence[float]],
-                          model_dir: str = DEFAULT_TABULAR_DIR):
-    """Score through the Spark ``PipelineModel`` itself. Needs a JVM; used to verify.
-
-    Kept because the export is only trustworthy if something still compares against
-    the thing it was exported from. Not for serving -- see ``predict_tabular``.
-    """
-    from pyspark.ml import PipelineModel
-    from pyspark.sql.types import DoubleType, StructField, StructType
-
-    from TransformData import _get_spark
-
-    meta = _load_tabular_metadata(model_dir)
-    feature_order = meta["feature_order"]
-    values = _order_features(features, feature_order)
-
-    spark = _get_spark()
-    model = PipelineModel.load(os.path.join(model_dir, "pipeline_model"))
-
-    schema = StructType([StructField(c, DoubleType(), True) for c in feature_order])
-    sdf = spark.createDataFrame([tuple(values)], schema=schema)
-    row = model.transform(sdf).select("prediction", *(
-        ["probability"] if meta.get("produces_probability") else []
-    )).head()
-
-    prediction = float(row["prediction"])
-    malignant_probability = None
-    if meta.get("produces_probability"):
-        # probability is a DenseVector [P(benign), P(malignant)]; malignant is label 1.
-        malignant_probability = float(row["probability"][1])
-
-    return {
-        "prediction": prediction,
-        "diagnosis": meta["label_map"][str(prediction)],
-        "malignant_probability": malignant_probability,
-    }
-
 
 # --------------------------------------------------------------------------- #
 # Imaging inference (DBT lesion localisation, 2D U-Net / PyTorch)

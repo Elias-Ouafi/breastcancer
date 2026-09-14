@@ -41,9 +41,6 @@ venv.bak/
 .ipynb_checkpoints
 *.ipynb
 
-# Project specific
-.kaggle/
-
 # The data tree stays out of git: raw DICOM (~80 GB), preprocessed volumes and the
 # slice banks derived from them. One rule covers every layer and every future dataset
 # -- the previous list of per-experiment folder names had to be edited each time a run
@@ -116,18 +113,8 @@ models/sliceclf/*
 !models/sliceclf/sliceclf_metrics.csv
 !models/sliceclf/sliceclf_test_metrics.json
 
-# Lesion classifier (imaging.lesionclf): the reports, not the checkpoint. The reports
-# are the evidence for a *negative* result (plan.md section 4.5) and are 5 KB; the
-# checkpoint is a model that does not separate the two classes, and versioning it
-# would invite someone to serve it.
-!models/lesionclf/
-models/lesionclf/*
-!models/lesionclf/cv_report.json
-!models/lesionclf/cv_report_stretched.json
-!models/lesionclf/cv_predictions.csv
-
-# Exam classifier (imaging.examclf): same reasoning as lesionclf just above -- the
-# reports are the evidence for a *negative* result (plan.md section 4.7), the
+# Exam classifier (imaging.examclf): the reports, not the checkpoint. The reports
+# are the evidence for a *negative* result (plan.md section 4.7), the
 # checkpoint is a model that detects none of its 56 held-out cancers. _bag32 is a
 # second measurement (larger MIL bag, a lead from section 4.7) that did not help.
 !models/examclf/
@@ -136,14 +123,3 @@ models/examclf/*
 !models/examclf/cv_predictions.csv
 !models/examclf/cv_report_bag32.json
 !models/examclf/cv_predictions_bag32.csv
-
-# The tabular model, flattened by tabular_export: 13 KB of JSON, and the only copy
-# that can be served without a JVM. Versioned for the same reason as the checkpoints
-# above -- /biopsie has to answer on a fresh clone, and refitting it needs Spark,
-# Java and a network fetch of the UCI dataset. The Spark PipelineModel it was
-# exported from stays out: it is a directory of parquet only Spark can read, and
-# nothing in the serving path opens it.
-!models/tabular/
-models/tabular/*
-!models/tabular/tabular_model.json
-!models/tabular/metadata.json

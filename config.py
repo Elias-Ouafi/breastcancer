@@ -37,8 +37,6 @@ REPORTS_DIR = os.path.join(ROOT, "reports")
 
 # --- Raw: exactly what the source published, no preprocessing ---------------
 TCIA_DIR = os.path.join(RAW_DATA_DIR, "tcia")
-WISCONSIN_DIR = os.path.join(RAW_DATA_DIR, "wisconsin")
-BREAKHIS_DIR = os.path.join(RAW_DATA_DIR, "breakhis")
 
 # Annotation tables live beside the series they describe.
 DBT_BOXES_TRAIN = os.path.join(TCIA_DIR, "BCS-DBT-boxes-train.csv")
@@ -72,7 +70,6 @@ DBT_PREPROCESSED_DIR = os.path.join(PREPROCESSED_DATA_DIR, "dbt")
 # no-cancer alike, which is what an exam-level decision can be measured on.
 DBT_EXAMS_PREPROCESSED_DIR = os.path.join(PREPROCESSED_DATA_DIR, "dbt_exams")
 DCE_MRI_PREPROCESSED_DIR = os.path.join(PREPROCESSED_DATA_DIR, "dce_mri_p2")
-WISCONSIN_PREPROCESSED_DIR = os.path.join(PREPROCESSED_DATA_DIR, "wisconsin")
 
 # --- Curated: derived from the layer above, rebuildable ---------------------
 DEMO_CASES_DIR = os.path.join(CURATED_DATA_DIR, "demo_cases")
@@ -89,15 +86,6 @@ SLICE_CLF_CKPT = os.path.join(SLICE_CLF_DIR, "sliceclf_best.pt")
 
 DBT_MODEL_DIR = os.path.join(MODELS_DIR, "dbt")
 DBT_UNET_CKPT = os.path.join(DBT_MODEL_DIR, "unet_best.pt")
-
-TABULAR_MODEL_DIR = os.path.join(MODELS_DIR, "tabular")
-
-# --- Reports: tables and figures meant to be read, not loaded ---------------
-TABULAR_RESULTS_CSV = os.path.join(REPORTS_DIR, "model_results.csv")
-PCA_INFO_CSV = os.path.join(REPORTS_DIR, "pca_info.csv")
-FEATURE_CONTRIBUTIONS_CSV = os.path.join(REPORTS_DIR, "feature_contributions.csv")
-SCREE_PLOT_PNG = os.path.join(PLOTS_DIR, "scree_plot.png")
-MODEL_COMPARISON_PNG = os.path.join(PLOTS_DIR, "model_comparison.png")
 
 
 def ensure_dirs(*dirs):

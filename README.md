@@ -1,23 +1,21 @@
 # Breast Cancer Detection Project
 
 This project develops an app for breast cancer detection.
-The user provide their MRI data and the app returns the probability of cancer and if further medical analysis is required.
+The user provides an MRI/DBT exam and the app returns the probability of cancer and
+if further medical analysis is required.
 WARNING : IT IS NOT CURRENTLY A VALID DIAGNOSTIC USABLE BY END USERS.
 
-My personal goal is to try to help the medical sector my own way and improve my data engineering skills.
-The technical results are summarised in Final_Report.md
+My personal goal is to try to help the medical sector my own way and improve my data
+engineering skills.
 
-It uses two complementary angles:
+The project is scoped to a single question, **step 1**: given a screening exam
+(MRI or DBT), is there a cancer? (See `plan.md`, "Retrait de l'étape 2", for why a
+second, separate question — malignant vs benign, from an already-taken biopsy — was
+dropped from this repository rather than kept half-measured alongside it.)
 
-1. **Quantitative / tabular** — the **Breast Cancer Wisconsin (Diagnostic)** dataset
-   (UCI ML Repository), used to train and compare classical classifiers. This
-   pipeline runs on **PySpark / Spark MLlib**.
-2. **Medical imaging** — breast **MRI/DBT** DICOM series from **TCIA**
-   (`Breast-Cancer-Screening-DBT` collection) with their segmentations, and the
-   **BreakHis** histopathology images from Kaggle.
-
-The long-term goal (see `Main.py`) is to combine the strongest features from both
-the quantitative and imaging pipelines into a single model.
+It uses **medical imaging** — breast **MRI/DBT** DICOM series from **TCIA**
+(`Breast-Cancer-Screening-DBT` and `Duke-Breast-Cancer-MRI` collections) with their
+annotations.
 
 ## Quick start — the demo
 
@@ -91,9 +89,7 @@ Data flows through three layers, and trained artefacts are kept apart from it:
 ```
 data/
 ├── raw_data/          exactly what the source published, never written to again
-│   ├── tcia/          DICOM series + annotation tables (~80 GB)
-│   ├── wisconsin/     the UCI CSV
-│   └── breakhis/      the Kaggle archive
+│   └── tcia/          DICOM series + annotation tables (~80 GB)
 ├── preprocessed_data/ z-normalised volumes + masks, one .npz per series
 │   ├── dbt/           from preprocess_dbt_with_boxes: annotated exams, lesion-cropped
 │   ├── dbt_exams/     from preprocess_dbt_exams: every exam at 384x384, cancer or not
@@ -134,16 +130,14 @@ cannot drift apart.
 ```bash
 pip install -e ".[dev]"
 ruff check .        # lint
-pytest              # 232 tests, ~100 s, no GPU or dataset needed
+pytest              # 202 tests, ~25 s, no GPU or dataset needed
 ```
 
 [CI](.github/workflows/ci.yml) runs both on every push and pull request. The suite
 covers the metric definitions, the storage-layout contract, the orchestration logic,
 and the assets the demo needs — including whether git actually *tracks* the checkpoint
 and the demo cases, which is the failure that would otherwise surface five minutes
-before a pitch. On a machine with a JVM, one more test compares the exported tabular
-model against Spark and adds ~80 s on its own; CI installs neither Spark nor Java, so
-it skips there.
+before a pitch.
 
 Pipelines log through `logging` (see [logging_setup.py](logging_setup.py)), with a
 timestamp per line and a copy under `logs/`. Turn the volume up with
@@ -152,16 +146,9 @@ timestamp per line and a copy under `logs/`. Turn the volume up with
 ## Prerequisites
 
 - Python 3.12 or higher
-- **Java 17 or newer (a JVM)** on the `PATH` — required by **PySpark 4** for the
-  quantitative pipeline (e.g. Temurin/OpenJDK 17; set `JAVA_HOME`).
 - **TCIA** access via `tcia_utils` / `nbia` (for the MRI/DBT dataset)
-- A **Kaggle** account and API token (for the BreakHis dataset)
 
 ## Setup
-
-### Kaggle (for BreakHis)
-1. Create a Kaggle account and generate an API token (`kaggle.json`).
-2. Place it at `.kaggle/kaggle.json` in the project directory.
 
 ### TCIA (for MRI/DBT)
 The MRI download uses `tcia_utils.nbia`; public collections such as
@@ -169,27 +156,6 @@ The MRI download uses `tcia_utils.nbia`; public collections such as
 change `TCIA_DIR` in `config.py` to put them elsewhere.
 
 ## Usage
-
-### Quantitative pipeline (Wisconsin)
-Run the full extract → transform (PCA) → analyze pipeline:
-```bash
-python Main.py
-```
-This downloads the Wisconsin dataset, lifts it into a **Spark DataFrame** (via a
-JVM-native `spark.read` of the fetched table), then uses **Spark MLlib** to
-impute/standardize it, apply PCA (smallest number of components retaining 95% of the
-variance), and train several classifiers (Logistic Regression, Random Forest, Linear
-SVM, Gradient-Boosted Trees, and a Multilayer Perceptron). It writes metric tables to
-`reports/` and figures to `plots/`. Requires a JVM (see Prerequisites). See
-`Final_Report.md` for a summary of the outcomes.
-
-> **Migration note:** the quantitative pipeline was moved from scikit-learn/XGBoost
-> to PySpark / Spark MLlib. `KNeighborsClassifier` has no MLlib equivalent and was
-> replaced by Gradient-Boosted Trees (which also subsumes the old XGBoost model), and
-> `SVC` maps to MLlib's linear `LinearSVC`. Spark PCA takes a fixed component count,
-> so the 95%-variance target is met by fitting once at full rank and selecting `k`.
-> The imaging pipeline is intentionally **not** on Spark — DICOM I/O, image
-> resampling (SimpleITK/ITK) and U-Net training (PyTorch) have no MLlib equivalent.
 
 ### Imaging pipeline
 
@@ -354,30 +320,6 @@ python -m imaging.sliceclf --slice-bank data/curated_data/slice_bank_p2 --epochs
 It is selected on top-1 accuracy — "is the volume's highest-scoring slice really
 lesion-bearing?" — the metric the segmentation confidence scored 0 on.
 
-#### Lesion classifier (benign vs cancer, step 2 from the image)
-
-`imaging.lesionclf` answers step 2's question — is this lesion benign or malignant? —
-from the DBT crops instead of from a cytology form, using the `label` that
-`preprocess_dbt_with_boxes` stores:
-
-```bash
-python -m imaging.lesionclf --data-dir data/preprocessed_data/dbt --folds 5
-```
-
-It is **not** a detection model: the volume is cropped around the annotated box, so
-the lesion's location is given. Nothing it reports says anything about finding a
-cancer in a screening exam — that is the separate exam-level head, which needs full
-frames and normal exams.
-
-It cross-validates instead of holding out one test split, because 130 patients split
-15 % leaves about 8 cancers in test and an interval that would cover nearly
-everything; the folds are stratified by class over patients, and every patient is
-scored once by a model that never saw it. No checkpoint or epoch is chosen on the
-held-out patients. Writes `models/lesionclf/cv_report.json` (patient ROC-AUC with a
-patient-bootstrap CI, plus sensitivity/specificity/PPV **and the prevalence they were
-measured at**) and `cv_predictions.csv` (one row per patient). Validate the loop with
-no dataset via `python -m imaging.lesionclf --smoke-test`.
-
 #### Exam classifier (cancer / no-cancer, step 1 from the image)
 
 `imaging.examclf` is step 1's actual decision head: cancer or not, from a **full**
@@ -391,24 +333,20 @@ python -m imaging.examclf --data-dir data/preprocessed_data/dbt_exams --folds 5
 The label is exam-level but the signal is not — most slices of a cancer exam show
 nothing — so a bag's score is the **max** over a sample of its slices at training
 time and over every one of its slices at evaluation (multiple-instance learning,
-`imaging.exambank` paying the decompression cost of ~870 full exams once). Same
-cross-validation discipline as the lesion classifier: 5 folds stratified by patient,
-no checkpoint chosen on held-out patients, a patient's score is the max over their
-own exams. Writes `models/examclf/cv_report.json` and `cv_predictions.csv`; validate
-the loop with no dataset via `python -m imaging.examclf --smoke-test`.
+`imaging.exambank` paying the decompression cost of ~870 full exams once). Cross-
+validates rather than holding out one test split, for the same reason as above: 5
+folds stratified by patient, no checkpoint chosen on held-out patients, a patient's
+score is the max over their own exams. Writes `models/examclf/cv_report.json` and
+`cv_predictions.csv`; validate the loop with no dataset via
+`python -m imaging.examclf --smoke-test`.
 
 **Measured on 870 exams, 272 patients, 56 with a cancer, and it does not work**:
 patient ROC-AUC 0.457 [0.369-0.544], and at threshold 0.5 the model calls every
 single patient negative (sensitivity 0.0) — the same accuracy as always answering
-"no cancer". Detail, diagnosis and leads: `plan.md` §4.7.
-
-### Histopathology (BreakHis)
-```bash
-python ExtractBreakHis.py
-```
+"no cancer". A bigger MIL bag (32 vs 16 slices) was tried next and made it slightly
+worse (0.414 [0.334-0.497]), not better. Detail, diagnosis and next leads: `plan.md`
+§4.7 and "Prochaines pistes pour l'étape 1".
 
 ## Acknowledgments
 
 - [TCIA](https://www.cancerimagingarchive.net/) — MRI/DBT imaging data
-- [UCI ML Repository](https://archive.ics.uci.edu/) — Breast Cancer Wisconsin dataset
-- [Kaggle](https://www.kaggle.com/) — BreakHis histopathology dataset

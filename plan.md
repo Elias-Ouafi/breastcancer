@@ -1,7 +1,9 @@
 # plan.md — décisions de conception et journal des mesures
 
-> **Outil visé** : deux étapes — (1) un examen en entrée, dire s'il y a un cancer ;
-> (2) les retours de la biopsie en entrée, dire si c'est malin ou bénin.
+> **Outil visé** : une seule étape — un examen de dépistage (DBT ou IRM) en entrée,
+> dire s'il y a un cancer. **L'étape 2 (malin/bénin depuis une biopsie) a été retirée
+> du dépôt le 2026-09-14** — voir "Retrait de l'étape 2" ci-dessous — pour concentrer
+> l'effort sur l'étape 1, seule à ne pas avoir de modèle qui marche.
 > **Modalités** : étape 1 sur **DBT / mammographie** (`Breast-Cancer-Screening-DBT`),
 > décision du 2026-09-12, voir la section suivante. L'IRM multiphase (DCE-MRI, DICOM)
 > reste la modalité de la brique de **localisation**, qui s'active après l'étape 1.
@@ -12,6 +14,149 @@ Ce document garde ce qui ne se déduit pas du code : la charte graphique appliqu
 l'app (Partie 3) et le journal daté de ce qui a été mesuré, y compris les échecs
 (§4.1 à §4.3). Le reste — comment lancer la démo, où vivent les données, comment
 tourne le pipeline — est dans [README.md](README.md), au plus près du code.
+
+## Retrait de l'étape 2, focus exclusif sur l'étape 1 (2026-09-14)
+
+Décision : retirer complètement du dépôt tout ce qui répondait à la question « cette
+lésion est-elle bénigne ou maligne ? » — tabulaire (Wisconsin/Spark) et image
+(`lesionclf`) — pour ne garder que la question « y a-t-il un cancer dans cet examen ? »
+(étape 1). Pas une dépréciation en place : suppression, avec l'historique dans git.
+
+**Pourquoi maintenant.** L'étape 2 n'a jamais manqué d'un modèle qui marche — le
+tabulaire Wisconsin sert `/biopsie` à 99,9 % de ROC-AUC (avec une réserve connue et
+non corrigée, la fuite de préprocessing avant split, restée ouverte depuis le
+2026-08-18). L'étape 1, elle, vient d'accumuler son **troisième résultat négatif
+d'affilée** — `lesionclf` (§4.5, AUC 0,513), `examclf` (§4.7, AUC 0,457), et
+`examclf --bag-size 32` (§4.7, AUC 0,414, mesuré le 2026-09-14, un peu pire) — sans
+qu'aucune piste n'ait encore été essayée à fond. Diviser l'attention entre une étape
+qui fonctionne déjà et une étape qui accumule des échecs mesurés n'a plus de sens :
+l'étape 1 est le seul goulot, elle mérite tout l'effort.
+
+**Ce qui a été retiré** (fichiers, pas seulement du code mort) :
+
+| Domaine | Fichiers |
+|---|---|
+| Pipeline tabulaire Wisconsin/Spark | `Main.py`, `AnalyzeData.py`, `train_tabular_model.py`, `tabular_export.py`, `Final_Report.md`, la fonction `extract_breast_cancer_wisconsin_diagnostic_data` d'`ExtractData.py`, les fonctions Spark/PCA de `TransformData.py` (`_get_spark`, `clean_data`, `apply_pca`, `transform_data`, etc.) |
+| Route `/biopsie` | `app/templates/biopsy.html`, la section « Step 2 » d'`app/server.py`, la section tabulaire d'`inference.py` (`predict_tabular`, `predict_tabular_spark`, `load_tabular_scorer`) |
+| Étape 2 en image | `imaging/lesionclf.py` |
+| BreakHis (histopathologie, support image de l'étape 2) | `ExtractBreakHis.py` |
+| Artefacts versionnés | `models/tabular/`, `models/lesionclf/`, `plots/model_comparison.png` |
+| Tests | `tests/test_tabular_export.py`, `tests/test_lesionclf.py`, `tests/test_biopsy_route.py`, les deux tests biopsie de `test_result_page_claims.py` |
+| Config / packaging | constantes Wisconsin/tabulaire de `config.py`, dépendances `pyspark`/`ucimlrepo`/`kaggle` de `pyproject.toml`, `COPY tabular_export.py`/`COPY models/tabular/` du `Dockerfile`, blocs correspondants de `.gitignore`/`.dockerignore` |
+
+**Ce qui reste, vérifié partagé et donc gardé intégralement** : `TransformData.py`
+(tout ce qui prétraite DBT/MRI), `validation.py`, `lineage.py`, `imaging/dataset.py`,
+`imaging/metrics.py`, `imaging/sliceclf.py` (son encodeur sert aussi `examclf` et
+`predict_dce_mri`), `app/predictor.py`, tout `inference.py` à partir de la section
+imagerie. `reports/experiments/` (ablations U-Net DCE-MRI) n'a jamais contenu de
+fichier tabulaire — seul `reports/model_results.csv`, jamais versionné, disparaît
+avec son producteur.
+
+**Vérifié après coup** : 202 tests passent (`ruff check .` propre), l'app Flask
+démarre et rend `/` sans la carte « Étape 2 » ni erreur console, `/biopsie` répond
+404. Le compte de tests référencé dans `README.md` est mis à jour (232 → 202 ; les
+tests retirés testaient exclusivement le code supprimé, aucune perte de couverture sur
+l'étape 1 — `roc_auc`/`bootstrap_auc` restent couverts par `tests/test_examclf.py`).
+
+## Prochaines pistes pour l'étape 1 (recherche du 2026-09-14)
+
+Revue de littérature ciblée sur le problème exact d'`examclf` (§4.7) : un label
+d'examen, un signal utile sur <1 % des coupes, 56 patients cancer, une perte qui ne
+descend dans aucun pli. Classée par effort attendu, pas par promesse — dans l'esprit
+du reste de ce document, ce sont des pistes à mesurer, pas des solutions.
+
+**1. Réutiliser le `sliceclf` déjà entraîné pour initialiser l'encodeur d'`examclf`,
+au lieu de partir de zéro à chaque pli.** Gain le moins cher de la liste : aucune
+donnée nouvelle, un changement de quelques lignes dans `train_one_fold`
+(`imaging/examclf.py:191`, `SliceClassifier(...).to(device)` part actuellement de
+poids aléatoires). `sliceclf` atteint déjà 0,803 d'AUC intra-volume (§4.3) — un
+signal de tri de coupe existe, appris par supervision de boîtes, qu'`examclf`
+réapprend aujourd'hui de zéro sur 56 patients cancer avec un objectif MIL bien plus
+faible (label d'examen, pas de coupe). C'est aussi la piste la plus directement
+motivée par le diagnostic du §4.7 : la perte n'y **descend dans aucun pli**, ce qui
+ressemble à un encodeur qui n'a pas le temps d'apprendre quoi que ce soit d'utile
+avant la fin du budget d'époques — un point de départ non aléatoire change ce calcul.
+
+**2. Pooler les trois splits BCS-DBT annotés.** Déjà chiffré dans ce document (ligne
+P2 « reprendre l'étape 2 en version image », mais le même corpus alimente `examclf`) :
+les boîtes du split test de la collection (`BCS-DBT-boxes-test`, 136 lignes, 60
+patients, 30 cancers) n'ont jamais été utilisées ici. Les pooler porte le corpus
+annoté de 141 à 201 patients, et surtout les cancers disponibles de 56 à 89 — tous
+ceux que la collection contient. C'est le levier que le diagnostic du §4.7 nomme en
+premier, pas encore tiré.
+
+**3. Remplacer le max pur par un top-k moyenné.** `examclf` agrège un sac par
+`logits.max(dim=1)` (`imaging/examclf.py:205`) : le gradient ne traverse que la
+coupe la plus suspecte du sac, un choix documenté et défendable (une coupe saine ne
+doit pas être diluée), mais aussi fragile à une coupe mal classée par excès de
+confiance. Le top-k généralise le max (k=1) et la moyenne (k=N) : moyenner les k
+scores les plus hauts est le compromis que plusieurs travaux de MIL médical
+retiennent précisément pour les petites lésions rares, où le max seul est bruité par
+construction (Avg-TopK, *Expert Systems with Applications* 2023 ; la même
+justification revient dans DSMIL et les benchmarks de MIL en pathologie — la
+prédiction instance-level d'une seule coupe surestime facilement, moyenner plusieurs
+coupes hautes la stabilise). Changement d'une ligne, à mesurer avec la même
+validation croisée.
+
+**4. Échantillonnage de sac orienté plutôt qu'aléatoire.** Déjà une piste notée au
+§4.7 (« sac plus intelligent »), maintenant recoupée par la littérature :
+sur-échantillonner les coupes voisines d'une coupe déjà suspecte au sein d'un examen
+positif (curriculum / hard-instance mining), au lieu du tirage uniforme actuel
+(`ExamBagDataset.__getitem__`). Le facteur mesuré au §4.7 — un sac aléatoire de 16
+coupes manque toutes les coupes peintes d'un examen cancer une fois sur quatre — est
+exactement ce qu'un tirage orienté vers les coupes déjà suspectes réduirait.
+
+**5. Pertes auxiliaires multi-tâches.** Prédire en plus du label cancer des
+attributs disponibles sans coût (vue, latéralité, éventuellement densité) régularise
+l'entraînement sur un signal principal rare — c'est une des techniques documentées
+de la 1ʳᵉ place du concours Kaggle/RSNA de détection de cancer du sein en
+mammographie 2023, sur un problème de prévalence comparable (~2 % d'images
+positives ; ici ~13 % d'examens, mais 56 patients cancer seulement). Coût
+d'implémentation modéré (têtes de sortie supplémentaires, `BCS-DBT-file-paths-*.csv`
+porte déjà la vue), à essayer après les pistes 1-2 plutôt qu'avant.
+
+**6. Pré-entraînement auto-supervisé sur les DBT normaux non annotés.** La
+collection compte 4 581 patients normaux, dont 150 seulement sont téléchargés ici
+(§« Ce que la cible coûte en données »). Un pré-entraînement contrastif (SimCLR,
+DINO) sur ces volumes sans aucune étiquette, avant le fine-tuning MIL supervisé, est
+documenté pour la mammographie par au moins un framework dédié (DITL, 2024) — mais
+la preuve est mitigée : un benchmark 2026 sur la segmentation de densité mammaire
+trouve un gain **négligeable ou négatif** du SSL générique face à un pré-entraînement
+ImageNet nu, et seule une variante contrastive multi-vues fait mieux. À tester, pas à
+supposer gagnant — le premier test bon marché est justement de comparer contre la
+piste 1 (warm-start supervisé), qui pourrait suffire.
+
+**7. Repenser l'architecture plutôt que le sac : un module global léger + un module
+local haute capacité (style GMIC / 3D-GMIC).** La piste la plus proche du problème
+exact posé ici, publiée par l'équipe NYU sur le screening mammographique : GMIC (MLMI
+2019) puis sa variante 3D pour les volumes DBT/tomosynthèse (3D-GMIC, *IEEE TMI*
+2023) évitent justement l'échantillonnage aléatoire de coupes qu'`examclf` pratique
+— elles scorent le volume 3D entier via un module global bas-coût qui produit une
+carte de saillance, puis affinent seulement les régions les plus suspectes avec un
+module local haute capacité, entraînées avec le seul label d'examen. 3D-GMIC est
+validé sur DBT externe (Duke) et atteint 0,831 d'AUC par sein sur la cohorte NYU —
+mais entraîné sur 85 526 patients, 335× le corpus disponible ici. À considérer comme
+direction à moyen terme (ré-architecturer, pas juste ré-entraîner), pas comme
+prochain essai.
+
+**8. Repère de référence, pas une piste à répliquer : le détecteur de Buda et al.**
+Le papier qui a publié ce même jeu de données BCS-DBT (*JAMA Network Open* 2021)
+fournit aussi son propre modèle — un DenseNet 2D par grille de cellules, perte focale
+pour la rareté du positif, 65 % de sensibilité à 2 faux positifs par sein sur son
+split test (460 études). C'est un cadrage différent (détection par boîte, pas
+classification MIL par label d'examen) entraîné sur 4 838 études majoritairement
+annotées — hors de portée du volume de boîtes disponible ici (299 lignes) — mais
+c'est le chiffre auquel comparer n'importe quel futur modèle DBT de ce dépôt, et sa
+perte focale est directement réutilisable dans le code existant (`imaging/metrics.py`
+a déjà des pertes de segmentation dans cet esprit).
+
+**Sources** : Buda et al., [*A Data Set and Deep Learning Algorithm for the Detection
+of Masses and Architectural Distortions in Digital Breast Tomosynthesis Images*](https://arxiv.org/pdf/2011.07995),
+JAMA Netw Open 2021 · Shen et al., [*GMIC*](https://arxiv.org/pdf/2002.07613), MLMI
+2019 · [*3D-GMIC*](https://arxiv.org/abs/2210.08645v1), IEEE TMI 2023 · dangnh0611,
+[1ʳᵉ place, RSNA Screening Mammography Breast Cancer Detection AI Challenge](https://github.com/dangnh0611/kaggle_rsna_breast_cancer)
+2023 · [*Avg-TopK: A new pooling method for CNNs*](https://www.sciencedirect.com/science/article/abs/pii/S0957417423003937),
+Expert Systems with Applications 2023.
 
 ## Cible chiffrée et voie retenue (2026-09-12)
 
@@ -282,10 +427,9 @@ le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 | P1 | Corpus DBT à deux classes, d'une seule source | **Fait le 2026-09-13**, voir Livré : le filtre « patients annotés » est levé, **150 patients normaux sont téléchargés** (660 séries, 46,8 Go mesurés — 312 Mo par patient, pas les ~200 Mo qu'un premier patient laissait croire), l'étiquette vient du statut par vue, et `preprocess_dbt_exams` écrit les deux classes dans **une seule géométrie**. Reste à publier les chiffres du corpus construit — la passe sur 926 séries tourne |
 | P1 | Tête de décision au niveau examen | Mesurée le 2026-09-13 et négative, voir Livré : ROC-AUC patient 0,457 [0,369 – 0,544] sur 870 examens / 272 patients / 56 cancers, IC contenant 0,5, 0 cancer détecté au seuil 0,5. Diagnostic, chiffres et pistes au §4.7 |
 | P1 | Choisir et publier le point de fonctionnement | Seuil fixé sur la **validation** pour Se = 82,8 % ; spécificité, VPP et **prévalence du jeu de test** rapportées sur le **test**, avec IC. Le panneau « Limites connues » cite Se/Sp/IC/prévalence au lieu du Dice |
-| P2 | Reprendre l'étape 2 en version image **si le corpus grossit** | Mesurée le 2026-09-12 et négative : ROC-AUC patient 0,513 [0,411 – 0,615] sur 130 patients, l'IC contient le hasard (§4.5). Le levier identifié est le nombre de patients, pas le modèle. Le réseau n'est plus l'obstacle (2026-09-13) : ce qui reste à décider est le volume disque. Le plus court chemin est désormais chiffré — les boîtes du **split test** de la collection existent (`BCS-DBT-boxes-test`, 136 lignes, 60 patients, 30 cancers) et n'ont jamais été utilisées ici : pooler les trois splits porte le corpus annoté de 141 à **201 patients, dont 89 cancers**, soit tous les cancers annotés de la collection |
-| P2 | Donner à l'étape 2 tabulaire une mesure qui lui appartienne | `train_tabular_model.py` fait un split (ou une VC) et persiste les métriques du modèle **servi** ; `AnalyzeData` ajuste imputation/scaler/PCA **après** le split ; `reports/model_results.csv` recommité |
-| P2 | Trancher le sort de BreakHis | Un modèle bénin/malin entraîné et mesuré, ou le script et `BREAKHIS_DIR` supprimés. Rétrogradé de fait : `Class` fournit un pendant image moins cher |
-| P3 | Trancher le sort du pipeline tabulaire Spark | Assumé et documenté comme démo Spark, ou retiré. Rétrogradé de P2 : depuis l'export, la JVM n'est plus qu'une dépendance d'entraînement, plus une condition pour servir |
+| P1 | Pooler les trois splits BCS-DBT annotés pour `examclf` | Porte le corpus annoté de 141 à 201 patients, les cancers de 56 à 89 — tous ceux de la collection. Chiffré, pas fait ; voir "Prochaines pistes pour l'étape 1" |
+| P1 | Initialiser l'encodeur d'`examclf` depuis le checkpoint `sliceclf` | Changement bon marché (pas de nouvelle donnée) motivé par le diagnostic du §4.7 (la perte ne descend dans aucun pli) ; voir "Prochaines pistes pour l'étape 1" |
+| P2 | Top-k pooling et échantillonnage de sac orienté pour `examclf` | Deux pistes bon marché supplémentaires, voir "Prochaines pistes pour l'étape 1" |
 | P3 | Bug NaN fp16 non résolu | La divergence (§4.2, repoussée époque 11 → 15) est localisée dans le forward pass et corrigée, ou documentée comme acceptée. Rétrogradé de P2 : le U-Net DCE-MRI quitte le chemin critique de l'étape 1. Le checkpoint servi reste un instantané pré-divergence (époque ≤ 14 sur 30) |
 | P3 | Retirer le code mort | `app/run_unet.py`, `DbtUNetPredictor` et `predict_dbt` pointent un checkpoint qui n'existe plus (`models/dbt/unet_best.pt`, écrasé par un smoke test, §4.1). À réécrire pour la nouvelle tête DBT ou à supprimer, pas à laisser documenté comme disponible dans `app/README.md` |
 | P3 | Réparer le paquet | `pyproject.toml` omet `logging_setup`, `validation` et `lineage` de `py-modules` : hors du répertoire du dépôt, `import inference` échoue. Masqué parce qu'on lance toujours depuis la racine |
@@ -406,17 +550,17 @@ documentation, pas de code, et se décident une par une. Ce qu'un utilisateur vo
 | Constat | Où | État |
 |---|---|---|
 | « mesurée sur 20 % des 569 cas **tenus à l'écart de l'entraînement** » — le modèle servi est ajusté sur 569/569, sans split. Les 97,67 % viennent d'un autre modèle, celui d'`AnalyzeData` | `app/templates/biopsy.html` vs `train_tabular_model.py` (`pipeline.fit(labelled)`) | Corrigé le 2026-09-12 |
-| Parité annoncée « sur les 569 lignes, écart max 1 × 10⁻¹⁵ » ; le test compare **5 lignes** à 1e-9, et le dit dans son propre commentaire | `plan.md`, docstring `inference.predict_tabular` vs `tests/test_tabular_export.py` | Ouvert |
-| Les métriques tabulaires renvoient à `reports/model_results.csv`, **absent du disque** — comme `pca_info.csv`, `feature_contributions.csv`, `scree_plot.png` | `Final_Report.md` | Ouvert |
+| Parité annoncée « sur les 569 lignes, écart max 1 × 10⁻¹⁵ » ; le test compare **5 lignes** à 1e-9, et le dit dans son propre commentaire | `plan.md`, docstring `inference.predict_tabular` vs `tests/test_tabular_export.py` | Caduc le 2026-09-14 : code retiré, voir "Retrait de l'étape 2" |
+| Les métriques tabulaires renvoient à `reports/model_results.csv`, **absent du disque** — comme `pca_info.csv`, `feature_contributions.csv`, `scree_plot.png` | `Final_Report.md` | Caduc le 2026-09-14 : `Final_Report.md` retiré |
 | « 87 tests, ~7 s » ; il y en a **174**, tous passants (116 à l'audit, plus 9 pour le P0, 16 pour la colonne `Class`, 6 pour le split stratifié, 7 pour l'appariement et 20 pour l'étape 2 en image) | `README.md` §Development | Corrigé le 2026-09-13 : **198**, après les tests de la jointure et des labels |
 | « 0,76 s par volume, 4,5 ms par coupe » ; l'artefact dit **0,825 s** et **4,83 ms** | `plan.md` §4.3 et `DEMO.md` vs `eval_report.json` | Ouvert |
 | « temps de calcul ~110 ms » ; mesuré 69-73 ms à chaud, 585 ms au premier appel | `README.md`, `DEMO.md` | Ouvert |
 | Checkpoint par défaut documenté `results_mri_p2/unet_best.pt` ; c'est `models/dce_mri_p2_negfix/unet_best.pt` | docstring `inference.predict_dce_mri` | Ouvert |
 | Backend `unet` présenté comme disponible ; son checkpoint n'existe plus | `app/README.md`, `app/predictor.py` | Ouvert |
-| Logs annonçant `data/transformed_data.csv`, `data/pca_info.csv`, `data/scree_plot.png` ; le code écrit dans `reports/` et `plots/` | `TransformData.transform_data` | Ouvert |
+| Logs annonçant `data/transformed_data.csv`, `data/pca_info.csv`, `data/scree_plot.png` ; le code écrit dans `reports/` et `plots/` | `TransformData.transform_data` | Caduc le 2026-09-14 : fonction retirée |
 | IC 95 % top-1 `[25,0 – 60,7]` : aucun code ni artefact versionné ne la produit | `plan.md` §4.3 | Ouvert |
-| Fuite de préprocessing : imputation, scaler et PCA ajustés sur les 569 lignes **avant** le `randomSplit`, donc les 97,67 % / 99,89 % sont optimistes | `TransformData.transform_data` → `AnalyzeData.prepare_data` | Ouvert |
-| Étape 2 annoncée « livrée » ; la branche `ameliore-le-mvp` est locale, absente d'`origin` | `plan.md` §Livrés | Ouvert |
+| Fuite de préprocessing : imputation, scaler et PCA ajustés sur les 569 lignes **avant** le `randomSplit`, donc les 97,67 % / 99,89 % sont optimistes | `TransformData.transform_data` → `AnalyzeData.prepare_data` | Caduc le 2026-09-14 : les deux fonctions retirées |
+| Étape 2 annoncée « livrée » ; la branche `ameliore-le-mvp` est locale, absente d'`origin` | `plan.md` §Livrés | Caduc le 2026-09-14 : étape 2 retirée du dépôt |
 | `/biopsie` affichait les pastilles Dice 0,53 / sensibilité 88 % / faux positifs 99,97 % — les chiffres du modèle d'imagerie, sous un texte disant que ce modèle-ci ne lit pas d'image | `app/templates/base.html` (bloc de limites partagé) | Corrigé le 2026-09-12 |
 | La pastille de moteur du bandeau est **vide** sur `/biopsie` : la route ne passe pas `backend` au gabarit, que `base.html` attend | `app/server.py` (`biopsy_form`, `biopsy_predict`) vs `base.html` | Ouvert — cosmétique, aucune affirmation fausse |
 | Un `cudaErrorIllegalAddress` sur `/demo/1` dans le serveur Flask, **observé une fois, non reproduit** : le même appel passe en direct (coupe 52/176, 1,0000) et le GPU calcule normalement juste après. Noté parce qu'un plantage de service ne doit pas rester sans trace, pas parce qu'il est caractérisé | `app/predictor.py` (`DceMriUNetPredictor`) | Ouvert — à re-observer avant d'enquêter |

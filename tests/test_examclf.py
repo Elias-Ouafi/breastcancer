@@ -1,9 +1,9 @@
 """The exam-level decision head: max-pooling MIL, and the aggregation it depends on.
 
 The label is exam-level ("this exam has a cancer somewhere"), but the signal is not:
-most slices of a cancer exam show nothing. Averaging over slices -- what ``lesionclf``
-does, correctly, for a corpus already cropped to the lesion -- would wash out the
-minority that matters here. So a bag's score is the **max** over its slices, and that
+most slices of a cancer exam show nothing. Averaging over slices, the way a corpus
+already cropped to the lesion could get away with, would wash out the minority that
+matters here. So a bag's score is the **max** over its slices, and that
 is the one property these tests protect: a single suspicious slice must be able to
 carry the whole exam, and a whole patient must be carried by their single most
 suspicious exam, not diluted by the other views.
@@ -169,7 +169,7 @@ def test_auc_rewards_separating_the_pooled_patient_scores():
 
 
 def test_bootstrap_resamples_patients_not_slices():
-    """Same guard as lesionclf's: the CI must not shrink by pretending N is bigger."""
+    """The CI must not shrink by pretending N is bigger than the patient count."""
     rng = np.random.default_rng(0)
     y = np.array([0] * 15 + [1] * 5)
     s = y + rng.normal(0, 0.3, size=20)

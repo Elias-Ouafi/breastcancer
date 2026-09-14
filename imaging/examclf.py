@@ -16,10 +16,9 @@ cancer series (56 cancer patients).
 Multiple-instance learning, and why max rather than mean
 ----------------------------------------------------------
 The label is exam-level -- cancer or not -- but the signal, when it exists, occupies a
-handful of slices out of 24-114. ``lesionclf`` could average over a patient's lesion
-slices because *every* slice it sees already contains the lesion (the corpus is
-cropped to it); that assumption is false here; most slices of a cancer exam show
-nothing. Averaging a mostly-empty exam down to one score would wash out exactly the
+handful of slices out of 24-114: most slices of a cancer exam show nothing, unlike a
+corpus already cropped to the lesion, where every slice could safely be averaged.
+Averaging a mostly-empty exam down to one score would wash out exactly the
 minority of slices that matter, and is the same failure mode ``sliceclf``'s docstring
 already names: "for detection ... one suspicious slice is enough". So a bag's score is
 the **max** over its slices, at both training and evaluation. Training samples a
@@ -31,10 +30,10 @@ whichever sampled slice currently looks most suspicious is pushed further that w
 a negative bag, every sampled slice is pushed down, because a negative bag truly holds
 no positive instance to spare.
 
-The encoder is ``sliceclf.SliceClassifier``, reused rather than re-derived, for the
-same reason ``lesionclf`` reuses it: the GroupNorm stack, not BatchNorm, and its
-avg+max pooled head already separate "how much of the slice looks abnormal" from "is
-there one abnormal spot" -- exactly the two things a single suspicious region needs.
+The encoder is ``sliceclf.SliceClassifier``, reused rather than re-derived: its
+GroupNorm stack, not BatchNorm (see plan.md §4.1 on why BatchNorm collapses here), and
+its avg+max pooled head already separate "how much of the slice looks abnormal" from
+"is there one abnormal spot" -- exactly the two things a single suspicious region needs.
 224 is chosen for the bank's ``image_size`` because it is ``32 * 7``: the five stride-2
 pooling stages divide it with no rounding.
 
@@ -46,9 +45,9 @@ leave roughly 8-9 cancer patients, an interval wide enough to be compatible with
 chance. Pooling out-of-fold predictions scores every patient exactly once, with a
 model that never saw them -- coverage, not independence, since the folds share a
 corpus and a hyper-parameter choice. No checkpoint or epoch is selected on held-out
-patients: the epoch budget is fixed in advance and the last epoch is scored, the same
-discipline ``lesionclf`` documents and this project has already published one metric
-that skipped (``AnalyzeData``, plan.md).
+patients: the epoch budget is fixed in advance and the last epoch is scored -- the
+project has already published one metric that skipped this discipline and paid for it
+in an optimistic number (plan.md, "Écarts doc <-> code").
 
 Patient level, not exam level
 -------------------------------

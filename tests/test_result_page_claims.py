@@ -1,19 +1,15 @@
-"""The two screens must not claim more than the code delivers.
+"""The result screen must not claim more than the code delivers.
 
-These are wording tests, deliberately. Both screens carried a number that the code
-contradicts -- a "Confiance 100 %" pill computed from a saturated constant, and a
-"mesurée sur 20 % des 569 cas tenus à l'écart de l'entraînement" that describes a
-different model than the one being served (see plan.md, "Écarts doc <-> code relevés
-le 2026-09-12"). A claim removed by hand comes back by hand, so it is pinned here.
+This is a wording test, deliberately: the screen carried a "Confiance 100 %" pill
+computed from a saturated constant (see plan.md, "Écarts doc <-> code relevés le
+2026-09-12"). A claim removed by hand comes back by hand, so it is pinned here.
 
-The templates are rendered directly rather than through /predict or /biopsie: both
-routes need a checkpoint or an exported model, and neither is needed to check what
-the page says. Fabricated result dicts stand in, carrying exactly the saturated
-value the served checkpoint produces.
+The template is rendered directly rather than through /predict: that route needs a
+checkpoint, which is not needed to check what the page says. A fabricated result dict
+stands in, carrying exactly the saturated value the served checkpoint produces.
 """
 from __future__ import annotations
 
-import pytest
 from flask import render_template
 
 # The constant the served DCE-MRI checkpoint returns: max per-pixel lesion
@@ -72,34 +68,6 @@ def test_the_mock_backend_reports_no_model_value_at_all():
     assert "Probabilité max. par pixel" not in body
     assert "Confiance" not in body
     assert "0,6200" not in body
-
-
-@pytest.mark.parametrize("stale", [
-    "tenus à l'écart de l'entraînement",  # the served model is fitted on 569/569
-    "97,7",                               # accuracy of another model entirely
-    "99,8",                               # its ROC-AUC
-])
-def test_the_biopsy_page_claims_no_out_of_sample_measurement(stale):
-    from app.server import _biopsy_form_context
-
-    body = render("biopsy.html", backend="mock", **_biopsy_form_context(
-        result={"prediction": 1.0, "diagnosis": "Malignant",
-                "malignant_probability": 0.9999999999991}))
-    assert stale not in body
-    assert "sans jeu de test" in body
-
-
-def test_the_biopsy_page_borrows_no_imaging_metric():
-    """Dice, lesion sensitivity and false positives per volume belong to the U-Net.
-
-    They sat in base.html's shared limits panel, so step 2 displayed them right under
-    a sentence saying this model never reads an image.
-    """
-    from app.server import _biopsy_form_context
-
-    body = render("biopsy.html", backend="mock", **_biopsy_form_context())
-    for imaging_only in ("Dice", "0,53", "99,97 %"):
-        assert imaging_only not in body
 
 
 def test_the_imaging_pages_keep_them():
