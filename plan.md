@@ -60,22 +60,81 @@ l'étape 1 — `roc_auc`/`bootstrap_auc` restent couverts par `tests/test_examcl
 
 ## Prochaines pistes pour l'étape 1 (recherche du 2026-09-14)
 
+> **Verdict de la fin de journée, à lire avant la liste (§4.8 à §4.10).** Cette liste a
+> été écrite le matin depuis la littérature ; l'après-midi l'a largement réfutée, et
+> elle est gardée telle quelle parce que savoir *ce qu'on croyait* explique les mesures
+> qui ont suivi. Ce qui tient désormais :
+>
+> - **Les pistes 1 et 3 sont mesurées et négatives** (§4.8, §4.10) : warm start
+>   0,426 [0,338 – 0,513], score relatif 0,465 [0,382 – 0,551], contre 0,457 pour la
+>   ligne de base. **La piste « Run B » (top-k seul) est annulée**, raison au §4.9.
+> - **Les pistes 4 et 5** (échantillonnage de sac, pertes auxiliaires) tombent avec
+>   elles : elles réarrangent une agrégation, alors que le §4.10 montre qu'il n'y a
+>   rien à agréger — trois têtes entraînées font le même score qu'une statistique sans
+>   modèle.
+> - **La piste 2** (plus de patients) a abouti côté données — 86 patients cancer
+>   disponibles au lieu de 56 — mais elle ne débloque rien seule.
+> - **La piste 6** (auto-supervision) reste non testée et non prioritaire.
+> - **Les pistes 7 et 8 remontent en tête**, et la 8 devient la suivante à essayer :
+>   la question n'est pas la luminosité à une résolution ou à une autre — mesurée à
+>   trois échelles, jusqu'au natif — mais la **forme**, qui demande des features
+>   apprises sous la supervision la plus riche disponible, les **boîtes**.
+>
+> **Prochaine étape retenue** : reprendre le cadrage de Buda et al. — détection
+> supervisée par boîtes en résolution native, puis agrégation en décision d'examen —
+> sur les 86 patients cancer désormais téléchargés.
+
 Revue de littérature ciblée sur le problème exact d'`examclf` (§4.7) : un label
 d'examen, un signal utile sur <1 % des coupes, 56 patients cancer, une perte qui ne
 descend dans aucun pli. Classée par effort attendu, pas par promesse — dans l'esprit
 du reste de ce document, ce sont des pistes à mesurer, pas des solutions.
 
-**1. Réutiliser le `sliceclf` déjà entraîné pour initialiser l'encodeur d'`examclf`,
-au lieu de partir de zéro à chaque pli.** Gain le moins cher de la liste : aucune
-donnée nouvelle, un changement de quelques lignes dans `train_one_fold`
-(`imaging/examclf.py:191`, `SliceClassifier(...).to(device)` part actuellement de
-poids aléatoires). `sliceclf` atteint déjà 0,803 d'AUC intra-volume (§4.3) — un
-signal de tri de coupe existe, appris par supervision de boîtes, qu'`examclf`
-réapprend aujourd'hui de zéro sur 56 patients cancer avec un objectif MIL bien plus
-faible (label d'examen, pas de coupe). C'est aussi la piste la plus directement
-motivée par le diagnostic du §4.7 : la perte n'y **descend dans aucun pli**, ce qui
-ressemble à un encodeur qui n'a pas le temps d'apprendre quoi que ce soit d'utile
-avant la fin du budget d'époques — un point de départ non aléatoire change ce calcul.
+**1. Pré-entraîner l'encodeur d'`examclf` sur l'étiquette par coupe, au lieu de partir
+de zéro à chaque pli.** Gain le moins cher de la liste : aucune donnée nouvelle, la
+banque porte déjà ce qu'il faut. Piste la plus directement motivée par le diagnostic
+du §4.7 — la perte n'y **descend dans aucun pli**, ce qui ressemble à un encodeur qui
+n'apprend jamais à quoi ressemble une lésion depuis 107 sacs positifs dont le signal
+fait ~5 coupes sur 68.
+
+> **Correction du 2026-09-14, le jour même.** La première rédaction de cette piste
+> disait « réutiliser le checkpoint `sliceclf` déjà entraîné » et citait son AUC
+> intra-volume de 0,803 (§4.3). **C'était faux, et de la pire façon : la bonne
+> justification pour le mauvais objet.** `models/sliceclf/sliceclf_best.pt` est
+> entraîné sur `slice_bank_p2`, c'est-à-dire sur de la **DCE-MRI** — le 0,803
+> appartient à une autre modalité que celle d'`examclf`. Le réutiliser tel quel serait
+> un transfert inter-modalité, pas le « il sait déjà faire ça » que la phrase laissait
+> entendre.
+
+La version **dans le domaine** est meilleure et ne coûte pas plus cher : la banque
+d'examens stocke déjà `has_lesion` par coupe, posé par les boîtes que
+`preprocess_dbt_exams` peint. Mesuré sur la banque réelle avant d'écrire une ligne de
+code :
+
+| | |
+|---|---:|
+| Coupes de la banque | 59 529 |
+| Coupes peintes (`has_lesion`) | **1 401** (2,35 %) |
+| — dont dans un examen cancer | 583 |
+| — dont dans un examen non-cancer (lésions bénignes) | 818 |
+| Examens cancer ayant ≥ 1 coupe peinte | **107 / 107** |
+| Profondeur moyenne d'un examen | 68,4 coupes |
+
+1 401 étiquettes **localisées en profondeur**, contre 870 étiquettes d'examen : c'est
+une supervision plus dense sur la seule question « à quoi ressemble une lésion ? », et
+elle laisse à la phase MIL la question pour laquelle elle existe — cancer ou pas, à
+laquelle une boîte peinte ne répond pas, puisque deux tiers des coupes peintes ici
+sont des lésions **bénignes**.
+
+**Implémenté le 2026-09-14** (`imaging/examclf.py`, `--warm-start-epochs`,
+`WarmStartSliceDataset`, `warm_start_encoder`), avec deux garde-fous : les négatifs
+sont rééchantillonnés à chaque époque (8 par positif, sinon une époque de warm start
+coûterait quatre époques MIL pour une phase qui n'a qu'à initialiser un encodeur), et
+surtout **seuls les examens d'entraînement du pli** sont lus. L'étiquette par coupe
+vient des mêmes annotations que l'étiquette d'examen : pré-entraîner sur les coupes
+d'un patient tenu à l'écart ferait fuiter sa réponse dans l'encodeur qui le note
+ensuite — la faille exacte que la validation croisée existe pour empêcher,
+réintroduite une couche plus bas. C'est la propriété qu'un test protège
+(`test_the_warm_start_never_reads_a_held_out_patients_slice`).
 
 **2. Pooler les trois splits BCS-DBT annotés.** Déjà chiffré dans ce document (ligne
 P2 « reprendre l'étape 2 en version image », mais le même corpus alimente `examclf`) :
@@ -95,8 +154,29 @@ retiennent précisément pour les petites lésions rares, où le max seul est br
 construction (Avg-TopK, *Expert Systems with Applications* 2023 ; la même
 justification revient dans DSMIL et les benchmarks de MIL en pathologie — la
 prédiction instance-level d'une seule coupe surestime facilement, moyenner plusieurs
-coupes hautes la stabilise). Changement d'une ligne, à mesurer avec la même
-validation croisée.
+coupes hautes la stabilise). **Implémenté le 2026-09-14** (`--top-k`,
+`examclf.bag_logit`), appliqué à l'identique à l'entraînement et à l'évaluation —
+optimiser une moyenne de top-k puis noter au max pur ferait diverger les deux. `k=1`
+reste le défaut et reproduit exactement le max mesuré jusqu'ici, ce qu'un test vérifie.
+
+### Protocole de mesure de ces pistes, fixé avant de lancer quoi que ce soit
+
+Le §4.5 et le §4.7 s'arrêtent tous les deux à une mesure, et disent pourquoi : régler
+des hyper-paramètres contre cette même validation croisée jusqu'à ce que le chiffre
+monte la viderait de son sens. Implémenter deux pistes d'un coup puis lancer cinq
+variantes serait la version rapide de la même faute. Donc, **annoncé avant les
+résultats** :
+
+- **Run A** — warm start seul (`--warm-start-epochs 5 --top-k 1`), pour isoler la
+  piste 1. Lancé le 2026-09-14 à 12h50.
+- **Run B** — top-k seul (`--top-k 3 --warm-start-epochs 0`), pour isoler la piste 3.
+- Une éventuelle **Run C** combinant les deux **seulement si** l'une des deux bouge
+  l'AUC hors-pli au-delà de son IC actuel ; sinon on publie deux négatifs de plus et
+  on passe à la piste 2 (plus de patients), qui est la seule que le diagnostic du §4.7
+  désigne comme structurelle.
+- Les chiffres fixés d'avance et non ajustés ensuite : 5 époques de warm start,
+  8 négatifs par positif, k=3, 25 époques MIL, 5 plis, graine 42 — les mêmes que la
+  ligne de base partout ailleurs.
 
 **4. Échantillonnage de sac orienté plutôt qu'aléatoire.** Déjà une piste notée au
 §4.7 (« sac plus intelligent »), maintenant recoupée par la littérature :
@@ -1235,6 +1315,295 @@ plutôt que vers le taux de sacs sans coupe peinte. Rapport versionné
 pour le reste : pas le checkpoint.
 
 **Ce que ça ne bloque pas.** La démo sert toujours le modèle DCE-MRI pour la
-localisation et le tabulaire Wisconsin pour l'étape 2 ; aucun des deux ne dépend de
-cette tête. Son échec mesuré est la première fois que l'étape 1 a un chiffre du tout —
-et c'est ce chiffre qui est publié, pas un chiffre plus flatteur obtenu en cherchant.
+localisation ; elle ne dépend pas de cette tête. Son échec mesuré est la première fois
+que l'étape 1 a un chiffre du tout — et c'est ce chiffre qui est publié, pas un chiffre
+plus flatteur obtenu en cherchant. *(Mise à jour du 2026-09-14 : la deuxième moitié de
+cette phrase, « le tabulaire Wisconsin pour l'étape 2 », ne vaut plus — l'étape 2 est
+retirée du dépôt, voir la section en tête de document.)*
+
+### 4.8 Run A — le warm start ne marche pas, et son diagnostic déplace le problème (2026-09-14)
+
+Première des deux mesures pré-enregistrées plus haut (« Protocole de mesure de ces
+pistes »). Piste 1 isolée : `--warm-start-epochs 5 --top-k 1`, tout le reste identique
+à la ligne de base du §4.7. Rapport versionné dans
+`models/examclf/warmstart5/cv_report.json`.
+
+**Le résultat au niveau examen, celui qui était annoncé d'avance.**
+
+| Mesure | Ligne de base (§4.7) | Run A (warm start) |
+|---|---:|---:|
+| ROC-AUC patient | 0,457 [0,369 – 0,544] | **0,426 [0,338 – 0,513]** |
+| Sensibilité à 0,5 | 0,0 % | **0,0 %** |
+| Exactitude | 79,4 % | 79,4 % |
+| « Toujours pas de cancer » | 79,4 % | 79,4 % |
+
+Aucune amélioration ; l'IC contient toujours 0,5 par sa borne haute, et le modèle ne
+prédit toujours aucun cancer. **Négatif, publié comme tel.**
+
+**Mais le diagnostic ajouté pour ce run vaut plus que la mesure elle-même.** Il pose au
+modèle la question *par coupe* sur des coupes tenues à l'écart, là où `has_lesion`
+fournit une vérité terrain — une fois après le warm start, une fois après la phase MIL.
+Jamais utilisé pour sélectionner quoi que ce soit.
+
+| Pli | AUC par coupe après warm start | après MIL |
+|---|---:|---:|
+| 0 | 0,514 | 0,464 |
+| 1 | 0,517 | 0,537 |
+| 2 | 0,532 | 0,557 |
+| 3 | 0,433 | 0,457 |
+| 4 | 0,516 | 0,535 |
+| **Moyenne** | **0,502** | **0,510** |
+
+**Le hasard, dans les cinq plis, avant comme après.** Et la perte du warm start le
+confirme par un autre chemin : elle converge à **1,2364**, contre **1,2323** pour le
+meilleur prédicteur *constant* possible à cet équilibre de classes (calculé, pas
+estimé : avec `neg_per_pos=8` et `pos_weight=8` les deux classes se compensent
+exactement, donc l'optimum constant est p = 0,5). L'encodeur ne trouve rien de mieux
+qu'ignorer l'image.
+
+**Ce que ça change dans la lecture du §4.7.** Le diagnostic y disait « la tâche est plus
+dure que celle de `lesionclf` », en désignant l'objectif MIL et la rareté des sacs
+positifs. C'était incomplet. Avec une étiquette **10 fois plus dense et localisée en
+profondeur** (1 401 coupes peintes contre 870 étiquettes d'examen), le même encodeur
+n'apprend toujours rien. Le goulot n'est donc **pas l'agrégation** — ce qui rétrograde
+d'un coup les pistes 3, 4 et 5 (top-k, échantillonnage de sac, pertes auxiliaires) :
+elles réarrangent toutes la façon d'agréger des features qui ne portent aucun signal.
+Un top-k sur du bruit reste du bruit.
+
+**La résolution, suspect n°1, est largement disculpée.** Mesuré sur les 299 boîtes
+annotées, en propageant la géométrie du prétraitement (natif 2457 lignes → 384 dans
+`dbt_exams` → 224 dans la banque, facteur 0,091) :
+
+| | Médiane | p10 | Part de la trame |
+|---|---:|---:|---:|
+| Boîte en natif | 212 × 201 px | — | 0,91 % |
+| à 384 (`dbt_exams`) | 33 × 31 px | 15 px | 0,91 % |
+| à 224 (banque MIL) | **19 × 18 px** | 8,9 px | 0,91 % |
+
+13 % des boîtes passent sous 8 px de côté à 224, **aucune** sous 4 px. Une lésion
+médiane occupe donc ~19 px dans une trame de 224 : petit, mais pas au point d'expliquer
+une AUC de 0,50 sur une tâche de présence.
+
+**Le suspect qui reste, et c'est un défaut de définition de cible, pas de modèle.**
+`preprocess_dbt_exams` peint `slice_margin=2`, soit 5 coupes autour de l'unique coupe
+que BCS-DBT annote. Une masse en tomosynthèse reste visible bien au-delà : les coupes
+juste en dehors de la bande peinte montrent **la même lésion** tout en portant
+l'étiquette inverse. On demande à l'encodeur de séparer z+2 de z+3, deux images quasi
+identiques. Mesuré sur la banque : une bande d'exclusion de ±10 coupes écarte 5 275 des
+17 104 négatifs des examens annotés (30,8 %), et il en reste ~53 000 ailleurs — donc
+l'hypothèse est testable sans manquer de négatifs.
+
+**Test en cours** (`--warm-start-exclude-band`, implémenté et testé le même jour) : une
+seule séparation 80/20 par patient, bande ±10, 15 époques au lieu de 5. Les deux
+explications candidates — bruit d'étiquette en profondeur, budget d'entraînement — y
+sont relâchées **ensemble et à dessein** : la question posée est binaire (« ce signal
+est-il apprenable ici, oui ou non ? »), pas « laquelle des deux mérite le crédit ». Si
+l'AUC décolle, on isolera ensuite ; si elle reste à 0,50, les deux hypothèses tombent
+ensemble et la question suivante devient la capacité de l'encodeur et la géométrie du
+prétraitement, pas l'agrégation.
+
+### 4.9 Le signal est relatif à l'examen — et c'est pourquoi rien ne marchait (2026-09-14)
+
+Le test annoncé au §4.8 a répondu, puis quatre mesures sur les pixels ont trouvé la
+cause. C'est la première chose positive mesurée de toute cette chaîne, et elle désigne
+un **défaut de conception de la tête**, pas un manque de données.
+
+**Le test discriminant : les deux hypothèses tombent ensemble.** Bande d'exclusion
+±10 coupes, 15 époques au lieu de 5, une séparation 80/20 par patient (684 examens
+d'entraînement, 186 tenus à l'écart) :
+
+| Époque | 1 | 3 | 5 | 8 | 12 | 15 |
+|---|---:|---:|---:|---:|---:|---:|
+| Perte d'entraînement | 1,2462 | 1,2356 | 1,2342 | **1,2323** | 1,2330 | 1,2327 |
+| AUC par coupe hors-pli | 0,517 | 0,450 | 0,532 | 0,537 | 0,482 | 0,529 |
+
+Plancher du prédicteur constant : **1,2323**, atteint exactement à l'époque 8. AUC
+finale sur les seules coupes non ambiguës (211 peintes contre 11 290 éloignées) :
+**0,532**. Le modèle **n'arrive pas à sur-ajuster son propre jeu d'entraînement** — ce
+n'est pas un défaut de généralisation, c'est une incapacité à optimiser. Ni le bruit
+d'étiquette en profondeur ni le budget d'époques n'expliquent donc quoi que ce soit.
+
+**Quatre mesures sur les pixels, dont une qui ne prouvait rien.**
+
+1. *Les masques sont-ils sur du tissu ?* Oui : intensité moyenne +1,529 dans la boîte
+   contre −0,013 ailleurs, 0 boîte sur 117 plus sombre que sa coupe. **Mais cette
+   comparaison était vide** — « ailleurs » contient 54 % d'air, donc elle dit seulement
+   que la boîte est dans le sein. Le §4.4 posait ce test pour détecter des masques sur
+   du fond ; le reprendre tel quel ici répondait à une autre question que la mienne.
+2. *La lésion se distingue-t-elle du **tissu normal de sa propre coupe** ?* Oui, et
+   nettement : +1,535 contre +0,725, soit un **d de Cohen de 1,15**, et la lésion est
+   plus brillante que son tissu dans **117 examens sur 117**. Le signal existe, il est
+   large, et il est visible par une simple intensité.
+3. *Alors une statistique triviale devrait trouver la coupe peinte.* Elle la trouve —
+   mais seulement **à l'intérieur d'un examen** :
+
+   | Statistique par coupe | AUC intra-examen |
+   |---|---:|
+   | maximum | 0,501 |
+   | **99ᵉ percentile** | **0,732** |
+   | moyenne des 100 plus hauts | 0,534 |
+   | aire au-dessus de 1,5 | 0,637 |
+
+4. *Et mise en commun entre examens ?* **C'est là que tout s'effondre**, et c'est le
+   chiffre central de cette section :
+
+   | 99ᵉ percentile, 8 387 coupes de 117 examens annotés | AUC |
+   |---|---:|
+   | **mise en commun entre examens** | **0,532** |
+   | **normalisée par examen** | **0,736** |
+
+**Conclusion.** Le pouvoir discriminant est **entièrement relatif à l'examen**. Le
+niveau absolu varie tellement d'un patient à l'autre qu'il noie une différence pourtant
+large (d = 1,15). Or `examclf` produit un score **absolu** par coupe, en prend le max,
+et compare ces maxima **entre patients** pour tracer une ROC patient. On lui demande
+exactement ce que la donnée ne permet pas. 0,50 par coupe et 0,46 par examen ne sont
+donc pas deux échecs, c'en est un seul, vu à deux niveaux.
+
+**Une correction évidente, et réfutée par la mesure.** Si le niveau absolu varie, une
+normalisation d'intensité mieux posée devrait le corriger : z-normaliser sur le
+**tissu seul** plutôt que sur un volume à 54 % d'air. Mesuré avant d'écrire la moindre
+ligne de production : AUC mise en commun **0,520**, contre 0,532 pour la normalisation
+actuelle. **Aucun gain — hypothèse abandonnée.** Ce que le §4.6 disait de l'appariement
+vaut ici : une correction plausible qui ne mesure pas mieux n'est pas une correction.
+
+**Ce qui est implémenté à la place** (`--bag-relative`, `examclf.bag_logit`) : le score
+d'un sac devient l'écart entre sa coupe la plus suspecte et **sa propre médiane**, à
+l'entraînement comme à l'évaluation. La médiane plutôt que la moyenne, un sac étant
+surtout fait de coupes banales. Deux conséquences à assumer : le score n'est plus une
+probabilité calibrée mais un **score de rang** — le seuil 0,5 n'y veut plus rien dire,
+et c'est de toute façon le P1 « choisir le point de fonctionnement sur la validation »
+qui doit le fixer ; et `torch.median` renvoie la valeur inférieure des deux centrales
+sur un sac de taille paire, ce qu'un test épingle parce que ça décale tous les scores.
+
+**Sur le protocole.** Cette piste ne vient pas de la liste pré-enregistrée, et il faut
+dire pourquoi ce n'est pas du réglage déguisé : elle sort de mesures faites **sur les
+pixels et sur des statistiques écrites à la main**, qui n'ont jamais touché ni les plis
+de la validation croisée ni un modèle entraîné. Le mécanisme a été identifié d'abord,
+mesuré ensuite. **Run B (top-k seul) est abandonnée** plutôt que lancée : le §4.8 a
+montré qu'il n'y a rien à agréger tant que les scores ne sont pas comparables, et
+dépenser deux heures de GPU pour le confirmer n'apprendrait rien — c'est une
+annulation motivée, écrite ici pour qu'elle ne passe pas pour un résultat non publié.
+
+### 4.10 Le score relatif ne marche pas non plus — et une ligne de numpy bat le CNN (2026-09-14)
+
+**La mesure.** `--bag-relative`, tout le reste identique à la ligne de base
+(`models/examclf/relative/cv_report.json`) : ROC-AUC patient **0,465 [0,382 – 0,551]**,
+contre 0,457 [0,369 – 0,544]. Inchangé. La perte d'entraînement descend un peu plus bas
+qu'avant (1,21-1,22 contre ~1,35), donc l'objectif relatif est marginalement plus facile
+à optimiser, mais **rien n'arrive jusqu'à l'AUC hors-pli**. Au seuil 0,5 : sensibilité
+1,0, spécificité 0,0 — exactement ce que le §4.9 annonçait pour un score de rang, où ce
+seuil ne veut rien dire.
+
+**Le tableau qui manquait.** Le §4.9 comparait le CNN *mis en commun* (0,50) au p99
+*intra-examen* (0,73) : deux métriques différentes, donc une comparaison qui ne valait
+rien. Calculées sur le même modèle (checkpoint du pli 0) et les mêmes examens tenus à
+l'écart :
+
+| | AUC intra-examen | AUC mise en commun |
+|---|---:|---:|
+| **CNN entraîné** | **0,592** | 0,464 |
+| **99ᵉ percentile, une ligne de numpy** | **0,732** | 0,532 |
+
+Le CNN apprend donc *quelque chose* (0,592 > 0,5), et **se fait battre de 0,14 par une
+statistique triviale** sur la tâche pour laquelle il est entraîné. Un modèle qui
+n'atteint pas ce qu'une ligne de code capture ne souffre pas d'un manque de données.
+
+**Et la mesure qui referme tout : la même statistique, sur la vraie question.** Aucun
+modèle, aucun entraînement, 272 patients, 56 cancers, score patient = max sur ses
+examens :
+
+| Statistique par examen | AUC patient |
+|---|---:|
+| max absolu du p99 | 0,433 [0,350 – 0,523] |
+| **max relatif (z par examen)** | **0,366 [0,292 – 0,444]** |
+| max − médiane | 0,442 [0,365 – 0,526] |
+| moyenne des 3 plus hauts, relatifs | 0,371 [0,296 – 0,447] |
+
+**Rien ne bat le hasard, et deux sont significativement en dessous** — leur IC entier
+est sous 0,5, donc la statistique est *anti*-corrélée au cancer. À rapprocher des
+0,457 / 0,426 / 0,465 des trois têtes entraînées : elles font toutes, à peu près, ce
+que fait une statistique sans modèle.
+
+**Ce que ça veut dire, et c'est la leçon de la journée.** Le §4.9 avait trouvé un signal
+intra-examen à 0,736 et j'en avais tiré un espoir mal placé. **Trouver la lésion annotée
+n'est pas détecter un cancer** : deux tiers des coupes peintes de ce corpus sont des
+lésions *bénignes*, donc ce que le p99 trie, c'est « il se passe quelque chose ici », et
+« quelque chose » est plus souvent bénin que malin. Le signal mesuré et la cible visée
+ne sont pas la même quantité, et aucun réglage d'agrégation ne transforme l'un en
+l'autre.
+
+**Conclusion provisoire, formulée pour être réfutable.** Au niveau de prétraitement
+actuel — trame entière, 2457 lignes ramenées à 384 puis 224, z-normalisation par
+volume — **il n'y a pas de signal de cancer au niveau examen mesurable**, ni par un CNN
+entraîné de trois façons différentes, ni par des statistiques d'intensité écrites à la
+main. Ce n'est pas un manque de patients : 56 cancers suffiraient largement à détecter
+un effet de la taille de celui que le §4.9 mesure sur la lésion (d = 1,15). C'est la
+représentation qui ne porte pas la question.
+
+Ce qui recadre la piste 2 (plus de patients) : elle reste nécessaire, elle n'est plus
+suffisante — et elle ne devrait pas être la prochaine dépense. Ce que la comparaison
+avec Buda et al. suggérait déjà, sans que j'en tire les conséquences : leur 65 % de
+sensibilité à 2 FP/sein est obtenu **en résolution native**, par un détecteur à grille
+de cellules 96×96 supervisé par les boîtes — pas par une classification faiblement
+supervisée d'une trame réduite à 224 px. La différence n'est pas l'architecture, c'est
+ce qu'on donne à voir au modèle.
+
+**Et ce n'est pas la banque qui perd le signal.** Vérifié, parce que c'était
+l'explication la plus confortable : les mêmes statistiques calculées sur le corpus
+stocké à **384 px**, avant le sous-échantillonnage de la banque, donnent 0,431 / 0,359 /
+0,469 — identiques aux 0,433 / 0,366 mesurés à 224. La perte, s'il y en a une, se
+produit plus tôt : au passage 2457 → 384, ou dans le cadrage lui-même.
+
+**Prochaine dépense, dans l'ordre.** (1) Refaire cette mesure sans modèle **en
+résolution native**, sur un échantillon de patients : si une statistique d'intensité y
+sépare mieux, le prétraitement est le coupable et la correction est une géométrie, pas
+un modèle. (2) Si elle ne sépare pas mieux non plus, passer au cadrage de Buda et al. —
+détection supervisée par les boîtes, en natif, puis agrégation en décision d'examen —
+plutôt que de continuer à entraîner une classification faiblement supervisée sur une
+représentation dont on aura alors mesuré trois fois qu'elle ne porte pas la question.
+
+**Fait le jour même, et c'est (2) qui l'emporte.** Mesure (1) sur le DICOM brut,
+**60 patients cancer contre 60 normaux** tirés au hasard parmi ceux présents sur
+disque, aucun modèle, aucun entraînement. La statistique n'est plus un percentile mais
+un détecteur de tache grossier : le maximum, sur des blocs de **96 px** — la cellule de
+grille de Buda et al. sur ce jeu de données précis, pas un choix arbitraire — de
+l'écart entre la moyenne du bloc et la médiane du tissu de sa coupe, en écarts-types du
+tissu.
+
+| Résolution | AUC patient, sans modèle |
+|---|---:|
+| **native (2457 lignes, blocs 96 px)** | **0,451 [0,352 – 0,556]** |
+| 384 px (corpus stocké) | 0,431 [0,347 – 0,522] |
+| 224 px (banque MIL) | 0,433 [0,350 – 0,523] |
+
+Moyennes : cancers **3,493 ± 0,835**, normaux **3,717 ± 0,917** — les examens cancer
+sont même très légèrement *moins* contrastés que les normaux, cohérent avec
+l'anti-corrélation relevée plus haut.
+
+**L'hypothèse de la géométrie est donc réfutée.** Ce n'est pas le prétraitement qui a
+détruit le signal : en résolution native, avec la fenêtre d'analyse du détecteur publié
+sur ce jeu de données, une statistique d'intensité ne sépare toujours pas un examen
+cancer d'un examen normal. Ce qui distingue les deux n'est pas une question de
+*luminosité* à une échelle ou à une autre — c'est de la **forme** (spiculation,
+distorsion architecturale), et une forme ne se lit pas dans une moyenne de bloc. Il
+faut des features apprises, et pour les apprendre sur 86 patients cancer il faut la
+supervision la plus riche disponible : les **boîtes**, pas une étiquette d'examen.
+
+C'est exactement ce que fait Buda et al. (65 % de sensibilité à 2 FP/sein), et c'est ce
+qui reste à essayer. Noter ce que cela implique pour l'ordre des pistes : la piste 2
+(plus de patients) vient d'aboutir côté données — les 60 patients du split test sont
+téléchargés, 121/121 séries, **30 patients cancer complets**, ce qui porte le corpus
+annoté à **86 patients cancer** — mais elle ne sert à rien tant que la tâche reste une
+classification faiblement supervisée d'une trame entière.
+
+#### Incident de téléchargement (2026-09-14)
+
+`tcia_utils.nbia` n'impose **aucun timeout** : le téléchargement des patients du split
+test s'est figé sur une seule requête à 13 h 51 et y est resté **2 h 30**, sans erreur,
+sans log, le processus vivant. Deux conséquences. La première est opérationnelle : il
+faut relancer (les séries déjà acquises sont sautées, donc rien n'est perdu). La
+seconde est une leçon sur la façon de rendre compte — j'ai rapporté à 14 h 33 un débit
+de « ~1 min par série » calculé en divisant 73 séries par le temps écoulé, alors que le
+processus était arrêté depuis 40 minutes. **Compter des fichiers ne mesure pas un
+débit** ; il faut lire l'horodatage de la dernière ligne de log, ce que la suite de ce
+document fera.

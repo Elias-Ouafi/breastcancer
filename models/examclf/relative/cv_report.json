@@ -1,0 +1,68 @@
+{
+  "task": "cancer / no-cancer on a full DBT exam (step 1, exam-level decision head)",
+  "protocol": {
+    "folds": 5,
+    "selection": "no checkpoint or epoch chosen on held-out patients; 25 epochs fixed in advance, last epoch scored",
+    "aggregation": "max slice probability per exam, then max exam score per patient (one suspicious slice/view is enough)",
+    "bag_size": 16,
+    "epochs": 25,
+    "top_k": 1,
+    "bag_relative": true,
+    "warm_start_epochs": 0,
+    "warm_start_neg_per_pos": 8,
+    "warm_start_exclude_band": 0,
+    "warm_start_target": null,
+    "image_size": 224,
+    "base_channels": 16,
+    "lr": 0.0003,
+    "seed": 42
+  },
+  "corpus": {
+    "exams": 870,
+    "slices": 59529,
+    "patients": 272,
+    "cancer_patients": 56,
+    "noncancer_patients": 216
+  },
+  "auc_patient": {
+    "auc": 0.46494708994708994,
+    "lo": 0.38223363595349213,
+    "hi": 0.5505509235445937,
+    "n": 272,
+    "n_positive": 56,
+    "n_usable": 10000
+  },
+  "operating_point_0.5": {
+    "threshold": 0.5,
+    "sensitivity": 1.0,
+    "specificity": 0.0,
+    "ppv": 0.20588235294117646,
+    "npv": NaN,
+    "accuracy": 0.20588235294117646,
+    "prevalence": 0.20588235294117646,
+    "counts": {
+      "tp": 56,
+      "fp": 216,
+      "tn": 0,
+      "fn": 0
+    }
+  },
+  "always_negative_accuracy": 0.7941176470588235,
+  "diagnostics_slice_lesion_auc": [
+    {
+      "slice_auc_after_mil": 0.5160248759053939
+    },
+    {
+      "slice_auc_after_mil": 0.5056802177237543
+    },
+    {
+      "slice_auc_after_mil": 0.5626157097359883
+    },
+    {
+      "slice_auc_after_mil": 0.5568198287687433
+    },
+    {
+      "slice_auc_after_mil": 0.46774290131521645
+    }
+  ]
+}

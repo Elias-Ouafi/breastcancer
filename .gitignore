@@ -123,3 +123,14 @@ models/examclf/*
 !models/examclf/cv_predictions.csv
 !models/examclf/cv_report_bag32.json
 !models/examclf/cv_predictions_bag32.csv
+# Same rule for the two leads measured on 2026-09-14 (plan.md 4.8, 4.10): the reports
+# are the evidence that a warm-started encoder and a relative bag score do not help,
+# and the fold-0 checkpoints beside them are not versioned for the same reason as above.
+!models/examclf/warmstart5/
+models/examclf/warmstart5/*
+!models/examclf/warmstart5/cv_report.json
+!models/examclf/warmstart5/cv_predictions.csv
+!models/examclf/relative/
+models/examclf/relative/*
+!models/examclf/relative/cv_report.json
+!models/examclf/relative/cv_predictions.csv
