@@ -1068,14 +1068,27 @@ protocole de son sens. Pistes, par ordre de rapport attendu, pas de promesses :
 
 - **Plus de patients cancer.** 56 sur les 89 de toute la collection (§ »reste ouvert«,
   ligne P2 étape 2 image) — le même levier qu'au §4.5, pas encore tiré ici non plus.
-- **Un sac plus grand ou plus intelligent** : monter `--bag-size` au-delà de 16 réduit
-  mécaniquement le quart de pas sans signal ci-dessus ; échantillonner en excès les
-  coupes voisines d'une coupe déjà suspecte (curriculum) est une autre piste, non
-  tentée pour ne pas ajouter un paramètre de plus à cette même validation croisée.
+- ~~**Un sac plus grand.**~~ Essayée et négative, voir ci-dessous.
+- **Un sac plus intelligent** : échantillonner en excès les coupes voisines d'une
+  coupe déjà suspecte (curriculum), non tentée pour ne pas ajouter un paramètre de
+  plus à cette même validation croisée.
 - **Des features pré-entraînées**, écartées pour les mêmes raisons d'accès qu'au §4.1
   et au §4.5.
 - **Une agrégation top-k plutôt que max pur**, moins sensible à une seule coupe bruitée
   que le max, sans diluer la minorité comme le ferait une moyenne.
+
+**Le sac plus grand, essayé (2026-09-14) : pas d'effet.** `--bag-size 32` (contre 16),
+`--batch-size` divisé par deux en compensation pour garder le même nombre de coupes
+par pas (128) et donc le même budget mémoire GPU — le premier essai à budget non
+compensé a saturé les 8 Go de la carte (7,6 Go, 100 % d'utilisation, ~30× plus lent)
+et a été arrêté avant d'écrire quoi que ce soit. Une fois corrigé : ROC-AUC patient
+**0,414 [0,334 – 0,497]**, un intervalle qui ne contient presque plus 0,5 que par sa
+borne haute, sensibilité toujours nulle au seuil 0,5. Doubler le sac ne corrige donc
+pas le manque de signal — au mieux ne change rien, au pire l'aggrave légèrement — ce
+qui pointe vers la tâche elle-même (trame entière, encodeur de zéro, 56 cancers)
+plutôt que vers le taux de sacs sans coupe peinte. Rapport versionné
+(`models/examclf/cv_report_bag32.json`, `cv_predictions_bag32.csv`), même règle que
+pour le reste : pas le checkpoint.
 
 **Ce que ça ne bloque pas.** La démo sert toujours le modèle DCE-MRI pour la
 localisation et le tabulaire Wisconsin pour l'étape 2 ; aucun des deux ne dépend de

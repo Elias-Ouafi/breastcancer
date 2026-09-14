@@ -128,11 +128,14 @@ models/lesionclf/*
 
 # Exam classifier (imaging.examclf): same reasoning as lesionclf just above -- the
 # reports are the evidence for a *negative* result (plan.md section 4.7), the
-# checkpoint is a model that detects none of its 56 held-out cancers.
+# checkpoint is a model that detects none of its 56 held-out cancers. _bag32 is a
+# second measurement (larger MIL bag, a lead from section 4.7) that did not help.
 !models/examclf/
 models/examclf/*
 !models/examclf/cv_report.json
 !models/examclf/cv_predictions.csv
+!models/examclf/cv_report_bag32.json
+!models/examclf/cv_predictions_bag32.csv
 
 # The tabular model, flattened by tabular_export: 13 KB of JSON, and the only copy
 # that can be served without a JVM. Versioned for the same reason as the checkpoints
