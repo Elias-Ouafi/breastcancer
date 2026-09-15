@@ -517,7 +517,7 @@ le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 |---|---|---|
 | P1 | Corpus DBT à deux classes, d'une seule source | **Fait le 2026-09-13**, voir Livré : le filtre « patients annotés » est levé, **150 patients normaux sont téléchargés** (660 séries, 46,8 Go mesurés — 312 Mo par patient, pas les ~200 Mo qu'un premier patient laissait croire), l'étiquette vient du statut par vue, et `preprocess_dbt_exams` écrit les deux classes dans **une seule géométrie**. Reste à publier les chiffres du corpus construit — la passe sur 926 séries tourne |
 | P1 | Tête de décision au niveau examen | Mesurée le 2026-09-13 et négative, voir Livré : ROC-AUC patient 0,457 [0,369 – 0,544] sur 870 examens / 272 patients / 56 cancers, IC contenant 0,5, 0 cancer détecté au seuil 0,5. Diagnostic, chiffres et pistes au §4.7 |
-| P1 | Choisir et publier le point de fonctionnement | Seuil fixé sur la **validation** pour Se = 82,8 % ; spécificité, VPP et **prévalence du jeu de test** rapportées sur le **test**, avec IC. Le panneau « Limites connues » cite Se/Sp/IC/prévalence au lieu du Dice |
+| P1 | Choisir et publier le point de fonctionnement | **Mesuré et publié le 2026-09-15, et négatif** — voir §4.11 : Se 78,6 % [67,2 – 88,9], Sp 20,4 % [15,3 – 25,9], VPP 20,4 % à une prévalence de 20,6 %, seuil pris hors du pli noté. Fait au sens du critère — un point de fonctionnement mesuré, avec ses IC et sa prévalence — pas au sens d'un point utilisable. Le critère d'origine disait « le panneau *Limites connues* cite Se/Sp au lieu du Dice » : **ce n'était pas applicable tel quel** et la raison est au §4.11 — le Dice décrit le localisateur DCE-MRI, les Se/Sp décrivent `examclf`, et substituer les seconds aux premiers sur l'écran du premier serait la faute P0 déjà corrigée sur `/biopsie`. Le panneau nomme les deux modèles séparément |
 | P1 | Pooler les trois splits BCS-DBT annotés pour `examclf` | Porte le corpus annoté de 141 à 201 patients, les cancers de 56 à 89 — tous ceux de la collection. Chiffré, pas fait ; voir "Prochaines pistes pour l'étape 1" |
 | P1 | Initialiser l'encodeur d'`examclf` depuis le checkpoint `sliceclf` | Changement bon marché (pas de nouvelle donnée) motivé par le diagnostic du §4.7 (la perte ne descend dans aucun pli) ; voir "Prochaines pistes pour l'étape 1" |
 | P2 | Top-k pooling et échantillonnage de sac orienté pour `examclf` | Deux pistes bon marché supplémentaires, voir "Prochaines pistes pour l'étape 1" |
@@ -1641,3 +1641,68 @@ de « ~1 min par série » calculé en divisant 73 séries par le temps écoulé
 processus était arrêté depuis 40 minutes. **Compter des fichiers ne mesure pas un
 débit** ; il faut lire l'horodatage de la dernière ligne de log, ce que la suite de ce
 document fera.
+
+### 4.11 Le point de fonctionnement, enfin publié — et la VPP vaut la prévalence (2026-09-15)
+
+Le P1 « choisir et publier le point de fonctionnement » traînait depuis le 2026-09-12.
+Il est fait, et il rend le résultat d'`examclf` lisible par quelqu'un qui ne lit pas une
+aire sous une courbe.
+
+**Le protocole, et pourquoi le seuil est pris hors du pli.** Une AUC n'est pas une
+décision : un outil qui répond « y a-t-il un cancer ? » répond à **un seuil**, et le
+couple à viser est celui du programme national — Se 82,8 %, Sp 91,4 %. Le seuil est
+donc calé sur la sensibilité cible, jamais choisi pour maximiser une exactitude, et
+la spécificité est **lue**, pas négociée. Surtout, il est calé **hors du pli noté** :
+chaque patient est jugé par un seuil venu des quatre autres plis. Le caler sur les 272
+scores qu'il note ensuite dirait à quel point une règle ajustée à ces patients décrit
+ces patients — la faute de la validation croisée, refaite une couche plus bas.
+`imaging/oppoint.py` lit `cv_predictions.csv` et ne réentraîne rien, ce qui ferme aussi
+la porte au réglage : il n'y a pas de seuil à réessayer jusqu'à ce que le chiffre monte.
+
+| Mesure | Valeur | IC 95 % | Cible |
+|---|---:|---|---:|
+| Sensibilité | 78,6 % | 67,2 – 88,9 | 82,8 % |
+| Spécificité | **20,4 %** | 15,3 – 25,9 | 91,4 % |
+| VPP | **20,4 %** | 15,2 – 25,7 | — |
+| NPV | 78,6 % | 67,3 – 88,9 | — |
+| Prévalence du jeu | 20,6 % | — | — |
+
+TP 44 · FP 172 · TN 44 · FN 12, sur 272 patients dont 56 cancers.
+
+**Le chiffre qui referme le dossier : VPP 20,4 %, prévalence 20,6 %.** La valeur
+prédictive positive *est* la prévalence — très légèrement en dessous. Apprendre que le
+modèle a répondu « cancer » ne change pas la probabilité qu'il y en ait un : l'annonce
+ne transporte aucune information. C'est le 0,457 d'AUC redit dans l'unité où la section
+« Ce qu'on ne vise pas : la VPP » l'attendait, et c'est plus parlant qu'une aire.
+
+**Le repère qui va avec.** À la sensibilité réellement atteinte (78,6 %), un classifieur
+aléatoire donnerait **21,4 %** de spécificité — il échange l'une contre l'autre
+exactement. Le modèle en donne 20,4 % : *en dessous*. Le rapport imprime cette ligne à
+côté du chiffre, parce que « 20 % de spécificité » se lit comme un résultat faible tant
+qu'on ne voit pas qu'il est sous le hasard.
+
+**Deux constats de méthode, publiés parce qu'ils sont des mesures.** (1) La cible de
+sensibilité n'est **pas atteinte** : 78,6 % contre 82,8 %. Le seuil calé sur quatre plis
+ne transporte pas jusqu'au cinquième — exactement ce que le §4.9 a mesuré sur les
+pixels, un score dont l'échelle ne veut rien dire d'un groupe de patients à l'autre.
+(2) Le seuil naïf, calé sur les scores qu'il note ensuite, donne Se 83,9 % / Sp 13,4 %.
+L'écart avec la version honnête **ne raconte pas l'histoire habituelle de l'optimisme**,
+et il faut le dire plutôt que de le laisser croire : quand un modèle est au niveau du
+hasard, il n'y a rien à sur-estimer. Les deux chiffres sont dans le rapport, le naïf
+étiqueté comme non citable.
+
+**Ce que le critère d'origine demandait, et pourquoi il change.** Il disait : « le
+panneau *Limites connues* cite Se/Sp/IC/prévalence **au lieu du Dice** ». Non
+applicable tel quel, et pas par commodité : le Dice décrit le **localisateur DCE-MRI**,
+les Se/Sp décrivent **`examclf`**, deux modèles sur deux corpus. Remplacer les uns par
+les autres sur l'écran du premier ferait lire les chiffres du second comme les siens —
+la faute P0 du 2026-09-12, corrigée une fois déjà quand `/biopsie` empruntait les
+pastilles du modèle d'imagerie. Le panneau garde donc les pastilles du localisateur, et
+ajoute un bloc qui **nomme** l'autre modèle, son corpus (272 patients, 56 cancers) et
+son échec, avec le renvoi au rapport. Trois tests de rendu l'épinglent, dont un qui
+vérifie que les chiffres d'`examclf` ne remontent pas dans la rangée de pastilles.
+
+**Livré** : `imaging/oppoint.py` (CLI), `imaging.metrics.threshold_for_sensitivity` et
+`bootstrap_operating_point`, `reports/examclf_operating_point.{json,md}`, 19 tests
+(`tests/test_oppoint.py`) dont celui qui vérifie qu'un seuil ne voit jamais les patients
+qu'il juge, et 3 de plus dans `tests/test_result_page_claims.py`.

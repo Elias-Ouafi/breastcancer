@@ -73,3 +73,39 @@ def test_the_mock_backend_reports_no_model_value_at_all():
 def test_the_imaging_pages_keep_them():
     body = render_result()
     assert "Dice" in body and "0,53" in body
+
+
+def test_the_page_says_the_detection_question_has_no_operating_point():
+    """The screen localises; it does not decide whether there is a cancer.
+
+    Saying nothing about the second question let the first one's numbers stand in for
+    it -- a reader sees "Sensibilité 88 %" on a cancer-detection tool and reads it as
+    the detection rate. The panel now names the gap and the model that owns it.
+    """
+    body = render_result()
+    assert "y a-t-il un cancer" in body
+    assert "aucun point de fonctionnement publiable" in body.lower()
+
+
+def test_the_detection_numbers_are_attributed_to_their_own_corpus():
+    """A number in this panel must say which model and which corpus it came from.
+
+    The exam-level figures are measured on 272 patients / 56 cancers; the Dice pills
+    above them on 28 DCE-MRI test patients. Printing the first set without its corpus
+    beside it is how they get read as the second's.
+    """
+    body = render_result()
+    assert "272 patients" in body and "56 cancers" in body
+    assert "20,4 %" in body and "20,6 %" in body
+
+
+def test_the_page_does_not_promote_the_broken_head_into_a_headline_pill():
+    """The exam-level numbers stay in prose, behind a disclosure.
+
+    Adding a "Spécificité 20,4 %" pill next to "Dice 0,53" would put two models'
+    metrics on one row, which is exactly what was removed from /biopsie once already.
+    """
+    body = render_result()
+    metrics_row = body.split('<div class="metrics">')[1].split("</div>")[0]
+    assert "20,4" not in metrics_row
+    assert "Spécificité" not in metrics_row

@@ -264,3 +264,79 @@ def operating_point(labels, scores, threshold=0.5):
         "prevalence": ratio(tp + fn, labels.size),
         "counts": {"tp": tp, "fp": fp, "tn": tn, "fn": fn},
     }
+
+
+def threshold_for_sensitivity(labels, scores, target):
+    """Lowest threshold whose sensitivity still reaches ``target``.
+
+    A screening tool does not pick its threshold to maximise an accuracy: the
+    programme it is compared against publishes a sensitivity (82.8 %, plan.md "Cible
+    chiffrée"), and everything else is what that sensitivity costs. So the sensitivity
+    is fixed first and the specificity is *read off*, never the reverse.
+
+    Catching ``k`` of the ``n`` positives means thresholding at the k-th highest
+    positive score, with ``k = ceil(target * n)``: the smallest k that reaches the
+    target. Ties can drag extra cases over the line, so the achieved sensitivity is
+    ``>= target`` rather than equal to it -- read it from :func:`operating_point`
+    rather than assuming the target was met.
+
+    Returns ``nan`` when the set holds no positive: a sensitivity is undefined there,
+    and a threshold that pretends otherwise would quietly classify everything.
+    """
+    labels = np.asarray(labels).astype(float).ravel() > 0
+    scores = np.asarray(scores, dtype=float).ravel()
+    positives = np.sort(scores[labels])[::-1]
+    if positives.size == 0:
+        return float("nan")
+
+    k = int(np.ceil(float(target) * positives.size))
+    k = min(max(k, 1), positives.size)
+    return float(positives[k - 1])
+
+
+def bootstrap_operating_point(labels, decisions, n_resamples=10000, alpha=0.05, seed=0):
+    """Percentile bootstrap CIs for one operating point, resampling **cases**.
+
+    Takes decisions already made (a 0/1 array), not scores and a threshold, because
+    the threshold is not always one number: chosen fold by fold, each case is judged
+    by a threshold its own fold never saw, and there is no single value to re-apply to
+    a resample. Resampling the decisions keeps whatever rule produced them fixed,
+    which is the property an interval on that rule's behaviour needs.
+
+    Resamples missing a class are dropped the way :func:`bootstrap_auc` drops them --
+    a specificity over zero negatives is undefined, not 0 -- and ``n_usable`` reports
+    how many survived.
+    """
+    labels = np.asarray(labels).astype(float).ravel() > 0
+    decisions = np.asarray(decisions).astype(float).ravel() > 0
+
+    rng = np.random.default_rng(seed)
+    draws = {"sensitivity": [], "specificity": [], "ppv": [], "npv": []}
+    usable = 0
+    for picks in rng.integers(0, labels.size, size=(n_resamples, labels.size)):
+        y, d = labels[picks], decisions[picks]
+        if not y.any() or y.all():
+            continue
+        usable += 1
+        tp = int((d & y).sum())
+        fp = int((d & ~y).sum())
+        tn = int((~d & ~y).sum())
+        fn = int((~d & y).sum())
+        draws["sensitivity"].append(tp / (tp + fn))
+        draws["specificity"].append(tn / (tn + fp))
+        if tp + fp:
+            draws["ppv"].append(tp / (tp + fp))
+        if tn + fn:
+            draws["npv"].append(tn / (tn + fn))
+
+    out = {}
+    for name, values in draws.items():
+        arr = np.asarray(values, dtype=float)
+        out[name] = {
+            "lo": float(np.percentile(arr, 100 * alpha / 2)) if arr.size else float("nan"),
+            "hi": float(np.percentile(arr, 100 * (1 - alpha / 2))) if arr.size else float("nan"),
+            "n_usable": int(arr.size),
+        }
+    out["n"] = int(labels.size)
+    out["n_usable"] = int(usable)
+    return out

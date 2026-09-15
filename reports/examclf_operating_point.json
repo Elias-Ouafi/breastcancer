@@ -1,0 +1,94 @@
+{
+  "target": {
+    "sensitivity": 0.828,
+    "specificity": 0.914,
+    "source": "Sant\u00e9 publique France, d\u00e9pistage organis\u00e9 50-74"
+  },
+  "corpus": {
+    "patients": 272,
+    "cancers": 56,
+    "prevalence": 0.20588235294117646,
+    "folds": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  "auc": {
+    "auc": 0.4566385582010582,
+    "lo": 0.36908278724724186,
+    "hi": 0.5434108344018485,
+    "n": 272,
+    "n_positive": 56,
+    "n_usable": 10000
+  },
+  "out_of_fold_threshold": {
+    "sensitivity": 0.7857142857142857,
+    "specificity": 0.2037037037037037,
+    "ppv": 0.2037037037037037,
+    "npv": 0.7857142857142857,
+    "accuracy": 0.3235294117647059,
+    "prevalence": 0.20588235294117646,
+    "counts": {
+      "tp": 44,
+      "fp": 172,
+      "tn": 44,
+      "fn": 12
+    },
+    "bootstrap": {
+      "sensitivity": {
+        "lo": 0.6721311475409836,
+        "hi": 0.8888888888888888,
+        "n_usable": 10000
+      },
+      "specificity": {
+        "lo": 0.15283842794759825,
+        "hi": 0.2590909090909091,
+        "n_usable": 10000
+      },
+      "ppv": {
+        "lo": 0.15165876777251186,
+        "hi": 0.25728515812746316,
+        "n_usable": 10000
+      },
+      "npv": {
+        "lo": 0.6727194357366771,
+        "hi": 0.8888888888888888,
+        "n_usable": 10000
+      },
+      "n": 272,
+      "n_usable": 10000
+    },
+    "thresholds_by_fold": {
+      "0": 0.14174,
+      "1": 0.160331,
+      "2": 0.14174,
+      "3": 0.14174,
+      "4": 0.14174
+    }
+  },
+  "naive_threshold": {
+    "threshold": 0.142849,
+    "sensitivity": 0.8392857142857143,
+    "specificity": 0.13425925925925927,
+    "ppv": 0.20085470085470086,
+    "npv": 0.7631578947368421,
+    "accuracy": 0.27941176470588236,
+    "prevalence": 0.20588235294117646,
+    "counts": {
+      "tp": 47,
+      "fp": 187,
+      "tn": 29,
+      "fn": 9
+    }
+  },
+  "chance_reference": {
+    "specificity_at_achieved_sensitivity": 0.2142857142857143,
+    "beats_chance": false
+  },
+  "n_resamples": 10000,
+  "seed": 42,
+  "predictions": "models/examclf/cv_predictions.csv"
+}
