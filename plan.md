@@ -52,11 +52,22 @@ imagerie. `reports/experiments/` (ablations U-Net DCE-MRI) n'a jamais contenu de
 fichier tabulaire — seul `reports/model_results.csv`, jamais versionné, disparaît
 avec son producteur.
 
-**Vérifié après coup** : 202 tests passent (`ruff check .` propre), l'app Flask
-démarre et rend `/` sans la carte « Étape 2 » ni erreur console, `/biopsie` répond
-404. Le compte de tests référencé dans `README.md` est mis à jour (232 → 202 ; les
-tests retirés testaient exclusivement le code supprimé, aucune perte de couverture sur
-l'étape 1 — `roc_auc`/`bootstrap_auc` restent couverts par `tests/test_examclf.py`).
+**Vérifié après coup** : la suite passe (`ruff check .` propre), l'app Flask démarre et
+rend `/` sans la carte « Étape 2 » ni erreur console, `/biopsie` répond 404. Les tests
+retirés testaient exclusivement le code supprimé, aucune perte de couverture sur
+l'étape 1 — `roc_auc`/`bootstrap_auc` restent couverts par `tests/test_examclf.py`.
+
+> **Correction du 2026-09-15.** Cette ligne annonçait « 202 tests passent » et un
+> `README.md` mis à jour « 232 → 202 ». Les deux chiffres sont faux : la suite en
+> compte **176** aujourd'hui, et depuis ce jour-là des tests ont été *ajoutés*
+> (`test_examclf.py` +128 lignes, `test_exambank.py` +12), jamais retirés — donc 202
+> n'a jamais été mesuré, il a été estimé puis écrit comme une mesure. Ce n'est pas un
+> accident isolé : le message du commit `acd4099`, deux jours plus tard, annonce « the
+> local Windows run keeps all 209 » — un troisième chiffre, tout aussi impossible.
+> C'est exactement
+> la faute que l'incident de téléchargement du §4.10 décrit sous « compter des fichiers
+> ne mesure pas un débit », commise sur un compte de tests. Les chiffres de cette ligne
+> sont remplacés par la nature du constat, qui, elle, tient.
 
 ## Prochaines pistes pour l'étape 1 (recherche du 2026-09-14)
 
@@ -511,9 +522,9 @@ le 2026-09-12 : la cible chiffrée et la bascule DBT déplacent ce qui bloque.
 | P1 | Initialiser l'encodeur d'`examclf` depuis le checkpoint `sliceclf` | Changement bon marché (pas de nouvelle donnée) motivé par le diagnostic du §4.7 (la perte ne descend dans aucun pli) ; voir "Prochaines pistes pour l'étape 1" |
 | P2 | Top-k pooling et échantillonnage de sac orienté pour `examclf` | Deux pistes bon marché supplémentaires, voir "Prochaines pistes pour l'étape 1" |
 | P3 | Bug NaN fp16 non résolu | La divergence (§4.2, repoussée époque 11 → 15) est localisée dans le forward pass et corrigée, ou documentée comme acceptée. Rétrogradé de P2 : le U-Net DCE-MRI quitte le chemin critique de l'étape 1. Le checkpoint servi reste un instantané pré-divergence (époque ≤ 14 sur 30) |
-| P3 | Retirer le code mort | `app/run_unet.py`, `DbtUNetPredictor` et `predict_dbt` pointent un checkpoint qui n'existe plus (`models/dbt/unet_best.pt`, écrasé par un smoke test, §4.1). À réécrire pour la nouvelle tête DBT ou à supprimer, pas à laisser documenté comme disponible dans `app/README.md` |
-| P3 | Réparer le paquet | `pyproject.toml` omet `logging_setup`, `validation` et `lineage` de `py-modules` : hors du répertoire du dépôt, `import inference` échoue. Masqué parce qu'on lance toujours depuis la racine |
-| P3 | Exécuter le lineage sur le corpus | Aucun `manifest.json` n'existe sous `data/preprocessed_data/` : le code est écrit et testé, jamais passé sur les données réelles |
+| P3 | Retirer le code mort | **Fait le 2026-09-15** : supprimé, pas réécrit — `app/run_unet.py`, `DbtUNetPredictor`, la branche `unet` de `get_predictor`, `inference.predict_dbt`, `load_dbt_dicom`, `config.DBT_UNET_CKPT`, et la branche `raw_loader` de `_load_volume_and_offset` devenue inatteignable. Réécrire « pour la nouvelle tête DBT » n'avait plus d'objet : le §4.10 mesure que la suite du côté DBT n'est pas un U-Net de segmentation. `imaging.train` écrit toujours un checkpoint DBT si on en entraîne un ; le resservir redevient un acte délibéré |
+| P3 | Réparer le paquet | **Fait le 2026-09-15** : `logging_setup`, `validation` et `lineage` ajoutés à `py-modules`. Vérifié sur la roue construite (`pip wheel . --no-deps`) et non sur une promesse — les trois fichiers y sont désormais, ils n'y étaient pas |
+| P3 | Exécuter le lineage sur le corpus | **Fait — la ligne était périmée, corrigée le 2026-09-15.** Deux manifestes existent et viennent de vraies passes : `dbt/manifest.json` (260 cas, révision `c22bc81-dirty`, 2026-09-13) et `dbt_exams/manifest.json` (870 cas, révision `060b40f`, 0 avertissement de validation). Reste ouvert, plus petit : `dce_mri_p2/` n'en a pas (le corpus précède `lineage.py`), et le manifeste DBT porte `output_dir: data/preprocessed_data/dbt_join` alors qu'il est lu depuis `dbt/` — le dossier a été renommé après la passe, donc ce champ ne dit pas où le manifeste se trouve |
 | P3 | Registre de traitement RGPD | Une page : base légale, nature des données, finalité, conservation, sécurité |
 | P3 | Nom de produit + logo | Choisi et intégré au header de l'app |
 
@@ -558,6 +569,20 @@ et savoir qu'ils ont dérivé une fois dit où regarder la prochaine fois.
 | `README.md` annonçait « 68 tests, ~6 s » ; il y en a 87, en ~7 s | `README.md` §Development | Corrigé le 2026-08-18 |
 | `Final_Report.md` pointait `data/model_results.csv` ; le code écrit `reports/model_results.csv` | `Final_Report.md` vs `config.py` (`TABULAR_RESULTS_CSV`) | Corrigé le 2026-08-18 |
 | `models/dce_mri_p2_negfix/` nomme une expérience, pas une couche — contredit la règle « layers, not experiments » posée dans `config.py` | `config.py` | Ouvert — un renommage casse les chemins versionnés dont dépend la démo |
+
+### Relevés et corrigés le 2026-09-15
+
+Même principe : gardés une fois corrigés. Tous relevés en relisant la doc **contre le
+dépôt qui tourne**, pas contre la doc.
+
+| Constat | Où | État |
+|---|---|---|
+| `README.md` annonçait « 202 tests, ~25 s » ; il y en a **176**, en ~38 s. Le chiffre ne pouvait pas être juste : depuis la ligne qui l'a écrit (2026-09-14), des tests ont été **ajoutés** et aucun retiré | `README.md` §Development, et la ligne « 202 tests passent » du §Retrait de l'étape 2 | Corrigé le 2026-09-15 |
+| `app/__init__.py` documentait le vrai backend comme `MRI_APP_BACKEND=unet` — un backend qui ne démarrait pas, puis qui n'existe plus | `app/__init__.py` | Corrigé : `dce_mri` |
+| `inference.predict_dce_mri` documentait son checkpoint comme `results_mri_p2/unet_best.pt` ; `config.DCE_MRI_UNET_CKPT` dit `models/dce_mri_p2_negfix/unet_best.pt` | `inference.py` docstring | Corrigé le 2026-09-15 |
+| La table « Ce qui reste ouvert » annonçait qu'aucun `manifest.json` n'existait sous `data/preprocessed_data/` ; deux existent depuis le 2026-09-13 | `plan.md` §Ce qui reste ouvert | Corrigé le 2026-09-15 — la doc était en retard sur le code, le sens inhabituel de l'écart |
+| `app/README.md` listait trois backends servables ; le troisième (`unet`) nommait un checkpoint inexistant | `app/README.md` | Corrigé avec le retrait du code mort |
+| `README.md` annonçait `~80 GB` de DICOM sous `data/raw_data/tcia/` ; le dossier en fait **138 Go**. L'écart est le coût du split test téléchargé le 2026-09-14 (§4.10) et des 150 patients normaux, jamais reporté sur cette ligne | `README.md` §Where things live | Corrigé le 2026-09-15, avec la date de la mesure dans le texte — un volume qui grossit à chaque téléchargement se périme, le dater dit quand le recompter |
 
 ### Incident réseau du 2026-09-12, et ce que les labels ont appris (2026-09-13)
 
@@ -1172,6 +1197,13 @@ laquelle des acquisitions répétées elle est ; elles restent non appariées. E
 réentraîné sur ce corpus, l'inférence devra appliquer la même règle, sinon une moitié
 des examens arrivera dans le mauvais repère.
 
+> **2026-09-15** : `load_dbt_dicom` a été supprimée avec le reste du chemin
+> d'inférence DBT (voir §Écarts relevés le 2026-09-15). La contrainte, elle, ne
+> disparaît pas — elle change seulement d'adresse : le jour où un chemin d'inférence
+> DBT est réécrit, il doit appliquer la règle de latéralité de
+> `TransformData.image_laterality`, sinon une moitié des examens arrivera dans le
+> mauvais repère. C'est noté ici plutôt que résolu.
+
 ### 4.6 Appariement boîte ↔ série : la collection le dit, il suffisait de le lire (2026-09-13)
 
 Le §4.4 a remplacé un tag qui mentait par une **inférence** sur les pixels. Elle était
@@ -1228,7 +1260,9 @@ latéralité par les pixels reste (`image_laterality`), pour le retournement.
 **Ce qui reste ouvert ici.** `inference.load_dbt_dicom` ne normalise toujours aucune
 latéralité : un modèle réentraîné sur ce corpus verra une moitié des examens dans le
 mauvais repère si l'inférence n'applique pas la même règle. C'était déjà la dernière
-ligne du §4.4 ; la jointure ne la traite pas.
+ligne du §4.4 ; la jointure ne la traite pas. *(La fonction est supprimée depuis le
+2026-09-15 ; la contrainte reste, reportée sur le futur chemin d'inférence DBT — voir
+la note du §4.4.)*
 
 ### 4.7 Tête de décision au niveau examen : mesurée, et elle n'apprend rien (2026-09-13)
 

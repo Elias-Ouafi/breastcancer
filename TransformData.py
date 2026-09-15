@@ -454,11 +454,10 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
     ``crop`` (default True) keeps the historical behaviour of cropping to the lesion
     ROI, which keeps files small but only teaches the model to localise within an
     already-zoomed-in view. Pass ``crop=False`` to train on full, un-cropped frames
-    instead — required if the model needs to run on a raw uploaded scan (see
-    ``inference.predict_dbt``/``load_dbt_dicom``), since a model trained only on
-    tight crops has never seen the zoomed-out scale/context of a full frame and
-    over-predicts lesion almost everywhere on one (observed: ~70% of pixels flagged
-    positive on a full-frame test upload).
+    instead — required if the model needs to run on a raw uploaded scan, since a model
+    trained only on tight crops has never seen the zoomed-out scale/context of a full
+    frame and over-predicts lesion almost everywhere on one (observed: ~70% of pixels
+    flagged positive on a full-frame test upload).
 
     ``slice_margin`` extends each annotated box by this many slices on either side of
     the labelled ``Slice`` (clamped to the volume). The BCS-DBT annotation only marks

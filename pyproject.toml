@@ -46,12 +46,21 @@ orchestration = [
 
 [tool.setuptools]
 # Flat layout: modules live at the repository root rather than under src/.
+#
+# The list must cover the *transitive* imports, not just the entry points. It was
+# missing logging_setup, validation and lineage until 2026-09-15 -- all three are
+# imported by modules listed here (inference and TransformData), so an installed copy
+# raised ModuleNotFoundError on `import inference` from any directory but the repo
+# root. Nothing caught it because every caller here runs from the root.
 py-modules = [
     "config",
     "inference",
     "ExtractData",
     "TransformData",
     "run_demo",
+    "logging_setup",
+    "validation",
+    "lineage",
 ]
 
 [tool.setuptools.packages.find]

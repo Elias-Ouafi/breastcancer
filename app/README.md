@@ -1,6 +1,6 @@
 # MRI Cancer-Detection Web App
 
-A small Flask app: upload a breast **MRI/DBT** study, get a lesion verdict
+A small Flask app: upload a breast **DCE-MRI** study, get a lesion verdict
 (present/absent + the localised slice and box). The verdict carries no calibrated
 exam-level score: `confidence` is a max per-pixel probability, saturated at 1.0 with
 the served checkpoint, and the UI reports it under that name. Ships with a **mock**
@@ -32,22 +32,25 @@ configurable, via `MRI_APP_PORT`.
 ## Connecting the real AI (later)
 
 The web layer only talks to a `Predictor` (see [`predictor.py`](predictor.py)).
-Three backends exist:
+Two backends exist:
 
 | Backend | Selected by | What it does |
 |---------|-------------|--------------|
 | `mock` (default) | — | Fabricates a plausible result; ignores pixels. |
-| `unet` | `MRI_APP_BACKEND=unet` | DBT lesion localisation via `inference.predict_dbt` (checkpoint `models/dbt/unet_best.pt`). |
 | `dce_mri` | `MRI_APP_BACKEND=dce_mri` | DCE-MRI lesion localisation via `inference.predict_dce_mri` (checkpoint `models/dce_mri_p2_negfix/unet_best.pt` -- 2nd post-contrast pass, scratch GroupNorm U-Net, 186-patient sample; see `plan.md` §4.1), scored on the post-minus-pre subtraction volume. |
 
-To go live, set one env var (the matching checkpoint must exist and the upload must
-be a preprocessed `.npz` volume -- for `dce_mri`, produced by
+A third backend, `unet`, served a DBT checkpoint at `models/dbt/unet_best.pt`. It was
+removed on 2026-09-15: that checkpoint had been overwritten by a smoke test
+(`plan.md` §4.1) and never rebuilt, so the row above promised a backend that could not
+start. See `inference.py`'s module docstring for why it was not simply re-pointed.
+
+To go live, set one env var (the checkpoint must exist and the upload must be a
+preprocessed `.npz` volume, produced by
 `TransformData.preprocess_dce_mri_with_boxes`):
 
 ```bash
 # Windows PowerShell
-$env:MRI_APP_BACKEND = "unet"; python -m app.server      # DBT
-$env:MRI_APP_BACKEND = "dce_mri"; python -m app.server   # DCE-MRI
+$env:MRI_APP_BACKEND = "dce_mri"; python -m app.server
 ```
 
 **Known limitation (`dce_mri` backend, see `plan.md` §4.2):** automatic slice
