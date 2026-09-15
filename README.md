@@ -347,6 +347,29 @@ single patient negative (sensitivity 0.0) — the same accuracy as always answer
 worse (0.414 [0.334-0.497]), not better. Detail, diagnosis and next leads: `plan.md`
 §4.7 and "Prochaines pistes pour l'étape 1".
 
+#### The operating point, which is what an AUC does not tell you
+
+An AUC is not a decision. A tool that answers "is there a cancer?" answers at **one
+threshold**, and the pair to be judged on is the screening programme's — sensitivity
+82.8 %, specificity 91.4 % (`plan.md`, "Cible chiffrée"). `imaging.oppoint` turns the
+stored out-of-fold predictions into that pair, without re-training anything:
+
+```bash
+python -m imaging.oppoint          # writes reports/examclf_operating_point.{json,md}
+```
+
+The threshold is fixed at the target **sensitivity** — never chosen to maximise an
+accuracy — and taken **out of fold**: each patient is judged by a threshold the other
+four folds produced. Fitting it on the same 272 scores it then grades would report how
+well a rule fitted to these patients describes these patients; `--naive` prints that
+number too, labelled as not citable, so the gap can be read rather than asserted.
+
+**The result closes the file on this head.** Sensitivity 78.6 % [67.2-88.9],
+specificity 20.4 % [15.3-25.9], **PPV 20.4 % at a prevalence of 20.6 %** — the PPV *is*
+the prevalence. Learning that the model said "cancer" does not change the probability
+that there is one. At the sensitivity actually reached, chance would give 21.4 %
+specificity; the model gives 20.4 %, below it. Full table and method: `plan.md` §4.11.
+
 ## Acknowledgments
 
 - [TCIA](https://www.cancerimagingarchive.net/) — MRI/DBT imaging data
