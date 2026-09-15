@@ -89,7 +89,7 @@ Data flows through three layers, and trained artefacts are kept apart from it:
 ```
 data/
 ├── raw_data/          exactly what the source published, never written to again
-│   └── tcia/          DICOM series + annotation tables (~80 GB)
+│   └── tcia/          DICOM series + annotation tables (138 GB measured 2026-09-15)
 ├── preprocessed_data/ z-normalised volumes + masks, one .npz per series
 │   ├── dbt/           from preprocess_dbt_with_boxes: annotated exams, lesion-cropped
 │   ├── dbt_exams/     from preprocess_dbt_exams: every exam at 384x384, cancer or not
@@ -130,7 +130,7 @@ cannot drift apart.
 ```bash
 pip install -e ".[dev]"
 ruff check .        # lint
-pytest              # 202 tests, ~25 s, no GPU or dataset needed
+pytest              # 176 tests, ~38 s, no GPU or dataset needed
 ```
 
 [CI](.github/workflows/ci.yml) runs both on every push and pull request. The suite

@@ -84,8 +84,11 @@ DCE_MRI_UNET_CKPT = os.path.join(DCE_MRI_MODEL_DIR, "unet_best.pt")
 SLICE_CLF_DIR = os.path.join(MODELS_DIR, "sliceclf")
 SLICE_CLF_CKPT = os.path.join(SLICE_CLF_DIR, "sliceclf_best.pt")
 
+# Where `imaging.train` writes when it is pointed at the DBT corpus. There is no
+# DBT_UNET_CKPT constant any more: nothing loads that checkpoint since the `unet`
+# serving backend was removed (2026-09-15), and a path constant no reader uses is a
+# claim that a model is available.
 DBT_MODEL_DIR = os.path.join(MODELS_DIR, "dbt")
-DBT_UNET_CKPT = os.path.join(DBT_MODEL_DIR, "unet_best.pt")
 
 
 def ensure_dirs(*dirs):

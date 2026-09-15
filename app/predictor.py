@@ -6,8 +6,8 @@ app ships with :class:`MockPredictor` so the UI is fully usable *before* any mod
 wired in, and swapping in the real AI later is a **one-line change** in
 :func:`get_predictor` (or one environment variable).
 
-The result contract is aligned with ``inference.predict_dbt`` so the future
-:class:`DbtUNetPredictor` can forward its output almost verbatim:
+The result contract is aligned with ``inference.predict_dce_mri`` so
+:class:`DceMriUNetPredictor` can forward its output almost verbatim:
 
     {
         "lesion_detected": bool,      # cancer / lesion present?
@@ -109,30 +109,11 @@ class _CachedUNetPredictor(Predictor):
         return result
 
 
-class DbtUNetPredictor(_CachedUNetPredictor):
-    """Real backend: the trained 2D U-Net via ``inference.predict_dbt``.
-
-    Left un-wired by default. To connect the AI, set ``MRI_APP_BACKEND=unet`` (the
-    checkpoint at ``models/dbt/unet_best.pt`` must exist and the upload must be a
-    preprocessed ``.npz`` volume). Everything else in the app stays the same.
-    """
-
-    name = "unet"
-
-    def predict(self, file_path: str) -> dict:
-        from inference import DEFAULT_UNET_CKPT, predict_dbt
-
-        model, device = self._ensure_model(DEFAULT_UNET_CKPT)
-        result = self._timed(lambda: predict_dbt(file_path, model=model, device=device))
-        result.setdefault("backend", self.name)
-        return result
-
-
 class DceMriUNetPredictor(_CachedUNetPredictor):
     """Real backend: the trained 2D U-Net via ``inference.predict_dce_mri``.
 
-    Trained on Duke-Breast-Cancer-MRI subtraction volumes (post minus pre-contrast),
-    distinct from the DBT U-Net above. Set ``MRI_APP_BACKEND=dce_mri`` to connect it
+    Trained on Duke-Breast-Cancer-MRI subtraction volumes (post minus pre-contrast).
+    Set ``MRI_APP_BACKEND=dce_mri`` to connect it
     (the checkpoint at ``models/dce_mri_p2_negfix/unet_best.pt`` must exist -- second
     post-contrast pass, scratch GroupNorm U-Net, 186-patient full-frame sample; see
     plan.md §4.1). The upload must be a preprocessed ``.npz`` (see
@@ -175,9 +156,7 @@ def get_predictor() -> Predictor:
     """
     backend = os.environ.get("MRI_APP_BACKEND", "mock").lower()
     if backend not in _PREDICTORS:
-        if backend == "unet":
-            _PREDICTORS[backend] = DbtUNetPredictor()
-        elif backend == "dce_mri":
+        if backend == "dce_mri":
             _PREDICTORS[backend] = DceMriUNetPredictor()
         else:
             _PREDICTORS[backend] = MockPredictor()

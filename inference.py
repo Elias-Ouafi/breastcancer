@@ -3,13 +3,21 @@
 One entry point per imaging backend, so a demo/UI can get a prediction in one call
 without re-running the batch training scripts:
 
-* :func:`predict_dbt` — runs the trained 2D U-Net (``models/dbt/unet_best.pt``) over
-  a preprocessed DBT ``.npz`` volume (or a raw volume array) and returns the localised
-  lesion: best slice, bounding box, and the max per-pixel lesion probability -- which
-  is not a calibrated detection score, see :func:`_localize_lesion`.
-* :func:`predict_dce_mri` — the same, for the DCE-MRI U-Net.
+* :func:`predict_dce_mri` — runs the trained 2D U-Net
+  (``models/dce_mri_p2_negfix/unet_best.pt``) over a preprocessed DCE-MRI ``.npz``
+  volume (or a raw volume array) and returns the localised lesion: best slice,
+  bounding box, and the max per-pixel lesion probability -- which is not a calibrated
+  detection score, see :func:`_localize_lesion`.
 
-Neither entry point retrains anything; both load saved ``torch`` checkpoints.
+There used to be a twin ``predict_dbt`` here, serving a DBT checkpoint at
+``models/dbt/unet_best.pt``. It is gone (2026-09-15) rather than left documented as
+available: that checkpoint was overwritten by a smoke test (plan.md §4.1) and never
+rebuilt, so the entry point named a file that does not exist. What replaces it on the
+DBT side is not another segmentation U-Net — plan.md §4.10 measures why — so there was
+nothing to re-point it at. ``imaging.train`` still writes a DBT checkpoint if you train
+one; wiring it back into a serving path is a deliberate act, not a leftover.
+
+The entry point retrains nothing; it loads a saved ``torch`` checkpoint.
 """
 from __future__ import annotations
 
@@ -26,13 +34,11 @@ from logging_setup import setup_logging
 log = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
-# Imaging inference (DBT lesion localisation, 2D U-Net / PyTorch)
+# Imaging inference (lesion localisation, 2D U-Net / PyTorch)
 # --------------------------------------------------------------------------- #
 
-DEFAULT_UNET_CKPT = config.DBT_UNET_CKPT
 
-
-def load_unet(checkpoint: str = DEFAULT_UNET_CKPT, base: int = 32, device=None):
+def load_unet(checkpoint: str, base: int = 32, device=None):
     """Load the trained U-Net in eval mode. Returns ``(model, device)``.
 
     ``base`` must match what the checkpoint was trained with
@@ -53,28 +59,6 @@ def load_unet(checkpoint: str = DEFAULT_UNET_CKPT, base: int = 32, device=None):
     model.load_state_dict(torch.load(checkpoint, map_location=device))
     model.to(device).eval()
     return model, device
-
-
-def load_dbt_dicom(path):
-    """Read a single (possibly multi-frame) DBT DICOM file into a normalised volume.
-
-    BCS-DBT series are stored as one multi-frame DICOM file per view (see
-    ``TransformData.preprocess_dbt_with_boxes``, which reads only the first ``.dcm``
-    in a series folder), so a single uploaded file is enough to reconstruct the full
-    ``(depth, H, W)`` stack. Intensities are normalised with
-    ``TransformData.normalize_intensity`` — the same convention used to build the
-    training data — so a raw upload is scored on the distribution the model saw at
-    training time, not the raw pixel values.
-    """
-    import pydicom
-
-    from TransformData import normalize_intensity
-
-    ds = pydicom.dcmread(path)
-    volume = ds.pixel_array.astype(np.float32)
-    if volume.ndim == 2:
-        volume = volume[None]
-    return normalize_intensity(volume)
 
 
 def _bounding_box(binary_mask):
@@ -126,7 +110,7 @@ def _rank_slices(vol, classifier, device, image_size=256, batch_size=32):
 
 def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_offset=(0, 0, 0),
                      forced_slice=None, source_n_slices=None, classifier=None):
-    """Shared slice-scan loop behind :func:`predict_dbt` and :func:`predict_dce_mri`.
+    """Shared slice-scan loop behind :func:`predict_dce_mri`.
 
     Scores every axial slice of ``vol`` (a ``(depth, H, W)`` z-normalised array) with
     ``model``, keeps the slice with the highest lesion probability, and returns its
@@ -216,14 +200,18 @@ def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_off
     }
 
 
-def _load_volume_and_offset(volume, raw_loader, raw_extensions):
+def _load_volume_and_offset(volume):
     """Resolve ``volume`` to a ``(vol, crop_offset, forced_slice, source_n_slices)`` tuple.
 
     ``.npz`` paths use their ``volume``/``crop_offset`` keys (as written by
     ``TransformData.save_preprocessed``) plus ``forced_slice`` and
-    ``source_n_slices`` if present (as written by
-    ``TransformData.make_demo_case``); paths ending in ``raw_extensions`` go
-    through ``raw_loader``; anything else is treated as an already-loaded array.
+    ``source_n_slices`` if present (as written by ``TransformData.make_demo_case``);
+    anything else is treated as an already-loaded array.
+
+    It used to take a ``raw_loader``/``raw_extensions`` pair, for the DBT entry point
+    that accepted a raw ``.dcm`` upload. That caller is gone, and DCE-MRI has no
+    single-file raw path by construction — a subtraction needs two whole series — so
+    the branch was unreachable.
     """
     crop_offset = (0, 0, 0)
     forced_slice = None
@@ -239,12 +227,8 @@ def _load_volume_and_offset(volume, raw_loader, raw_extensions):
                     forced_slice = int(data["forced_slice"])
                 if "source_n_slices" in data.files:
                     source_n_slices = int(data["source_n_slices"])
-        elif lower.endswith(raw_extensions):
-            vol = raw_loader(volume)
         else:
-            raise ValueError(
-                f"Unsupported volume file {volume!r}: expected .npz or {raw_extensions}."
-            )
+            raise ValueError(f"Unsupported volume file {volume!r}: expected .npz.")
     else:
         vol = np.asarray(volume, dtype=np.float32)
 
@@ -253,48 +237,6 @@ def _load_volume_and_offset(volume, raw_loader, raw_extensions):
     if vol.ndim != 3:
         raise ValueError(f"Expected a (depth, H, W) volume, got shape {vol.shape}.")
     return vol, crop_offset, forced_slice, source_n_slices
-
-
-def predict_dbt(volume: Union[str, np.ndarray],
-                checkpoint: str = DEFAULT_UNET_CKPT,
-                image_size: int = 256,
-                threshold: float = 0.5,
-                model=None,
-                device=None):
-    """Localise a lesion in a preprocessed DBT volume with the trained U-Net.
-
-    Parameters
-    ----------
-    volume : str or np.ndarray
-        Path to a preprocessed ``.npz`` (uses its ``volume`` key, and ``crop_offset``
-        if present to map the box back to full-frame coordinates), a raw DBT
-        ``.dcm``/``.dicom`` file (single multi-frame series, normalised on the fly
-        via :func:`load_dbt_dicom`), or a raw ``(depth, H, W)`` z-normalised volume
-        array.
-    checkpoint, image_size, threshold : see training defaults.
-    model, device : optional preloaded ``load_unet(...)`` result, to score many
-        volumes without reloading the weights.
-
-    Returns
-    -------
-    dict
-        ``{"lesion_detected": bool, "slice_preselected": bool, "confidence": float,
-        "best_slice": int, "box_xywh": (x, y, w, h) | None,
-        "box_full_frame_xywh": ... | None,
-        "n_slices": int}``. ``confidence`` is the max lesion-probability over the
-        volume; ``best_slice`` is the slice achieving it (in the given volume's
-        indexing). Boxes are on the best slice at the original slice resolution.
-    """
-    vol, crop_offset, forced_slice, source_n_slices = _load_volume_and_offset(
-        volume, load_dbt_dicom, (".dcm", ".dicom"))
-
-    if model is None:
-        model, device = load_unet(checkpoint, device=device)
-    elif device is None:
-        device = next(model.parameters()).device
-
-    return _localize_lesion(vol, model, device, image_size, threshold, crop_offset,
-                            forced_slice, source_n_slices)
 
 
 DEFAULT_MRI_UNET_CKPT = config.DCE_MRI_UNET_CKPT
@@ -316,15 +258,14 @@ def predict_dce_mri(volume: Union[str, np.ndarray],
     volume : str or np.ndarray
         Path to a preprocessed ``.npz`` (post-minus-pre subtraction volume, as
         written by ``preprocess_dce_mri_with_boxes``) or a raw ``(depth, H, W)``
-        z-normalised subtraction array. Unlike DBT, there is no single-file raw
-        DICOM path here: DCE-MRI needs two whole series (pre + post-contrast) to
-        compute the subtraction, so a web upload must be the already-preprocessed
-        ``.npz``.
+        z-normalised subtraction array. There is no single-file raw DICOM path here:
+        DCE-MRI needs two whole series (pre + post-contrast) to compute the
+        subtraction, so a web upload must be the already-preprocessed ``.npz``.
     checkpoint, image_size, threshold : see training defaults. ``checkpoint``
-        defaults to the DCE-MRI checkpoint (``results_mri_p2/unet_best.pt`` --
-        second post-contrast pass, scratch GroupNorm U-Net, 186-patient full-frame
-        sample; see plan.md §4.1 for how this configuration was chosen), distinct
-        from the DBT one, since the two are trained on different modalities.
+        defaults to ``config.DCE_MRI_UNET_CKPT``
+        (``models/dce_mri_p2_negfix/unet_best.pt`` -- second post-contrast pass,
+        scratch GroupNorm U-Net, 186-patient full-frame sample; see plan.md §4.1 for
+        how this configuration was chosen).
     model, device : optional preloaded ``load_unet(...)`` result, to score many
         volumes without reloading the weights.
     classifier, use_classifier : the slice-ranking model (see
@@ -337,13 +278,12 @@ def predict_dce_mri(volume: Union[str, np.ndarray],
     Returns
     -------
     dict
-        Same contract as :func:`predict_dbt` (``lesion_detected``, ``confidence``,
-        ``best_slice``, ``box_xywh``, ``box_full_frame_xywh``, ``n_slices``), plus
+        ``lesion_detected``, ``confidence``, ``best_slice``, ``box_xywh``,
+        ``box_full_frame_xywh``, ``n_slices``, plus
         ``slice_selector`` -- ``"pinned"``, ``"classifier"`` or
         ``"segmentation_confidence"``.
     """
-    vol, crop_offset, forced_slice, source_n_slices = _load_volume_and_offset(
-        volume, raw_loader=None, raw_extensions=())
+    vol, crop_offset, forced_slice, source_n_slices = _load_volume_and_offset(volume)
 
     if model is None:
         model, device = load_unet(checkpoint, device=device)
@@ -483,9 +423,9 @@ def render_slice_strip(volume: Union[str, np.ndarray], best_slice: int, box_xywh
 def render_overlay_png(volume: Union[str, np.ndarray], best_slice: int, box_xywh=None):
     """Render the scored slice with the detected lesion box drawn on top, as PNG bytes.
 
-    Meant to be called right after :func:`predict_dbt`/:func:`predict_dce_mri` with
-    their own ``best_slice``/``box_xywh`` (the *local*, cropped-volume-relative box
-    -- not ``box_full_frame_xywh``), on the same ``.npz``/array that was scored.
+    Meant to be called right after :func:`predict_dce_mri` with its own
+    ``best_slice``/``box_xywh`` (the *local*, cropped-volume-relative box -- not
+    ``box_full_frame_xywh``), on the same ``.npz``/array that was scored.
 
     ``best_slice`` is the *full-frame* index those functions return (offset by the
     stored ``crop_offset``); this re-reads ``crop_offset`` from the ``.npz`` to map
@@ -537,9 +477,9 @@ if __name__ == "__main__":
     # Tiny smoke path for the imaging side: score the first preprocessed volume.
     from glob import glob
 
-    npzs = sorted(glob(os.path.join(config.DBT_PREPROCESSED_DIR, "*.npz")))
+    npzs = sorted(glob(os.path.join(config.DCE_MRI_PREPROCESSED_DIR, "*.npz")))
     if npzs:
         log.info(f"Scoring {npzs[0]} ...")
-        log.info(predict_dbt(npzs[0]))
+        log.info(predict_dce_mri(npzs[0]))
     else:
-        log.info("No preprocessed .npz volumes found to demo predict_dbt.")
+        log.info("No preprocessed .npz volumes found to demo predict_dce_mri.")
