@@ -39,6 +39,18 @@ def write_exam(directory, patient, label, exam="s0", depth=6, size=16, with_labe
 
 def test_exam_id_is_the_filename_stem():
     assert exam_id_for_path("/a/b/DBT-P1-rmlo.npz") == "DBT-P1-rmlo"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="a backslash is a legal filename character "
+                                            "on POSIX, so there is no directory to strip")
+def test_exam_id_strips_a_windows_directory():
+    """Only meaningful where the backslash separates directories.
+
+    This assertion used to run everywhere and failed the whole suite on CI's Linux
+    runner: there, ``C:\\a\\b\\DBT-P1-rmlo.npz`` is one filename rather than a path,
+    so returning it whole is correct rather than a bug. The function is fed paths from
+    ``glob`` on the running platform, which never mixes the two conventions.
+    """
     assert exam_id_for_path(r"C:\a\b\DBT-P1-rmlo.npz") == "DBT-P1-rmlo"
 
 
