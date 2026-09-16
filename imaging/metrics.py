@@ -240,7 +240,7 @@ def operating_point(labels, scores, threshold=0.5):
     The prevalence of the evaluated set is returned alongside, and not as decoration:
     sensitivity and specificity are properties of the model at this threshold, while
     PPV and NPV are not -- they move with prevalence. A PPV quoted without the
-    prevalence it was measured at is a number without a unit (plan.md, "Ce qu'on ne
+    prevalence it was measured at is a number without a unit (docs/journal.md, "Ce qu'on ne
     vise pas : la VPP").
     """
     labels = np.asarray(labels).astype(float).ravel() > 0
@@ -270,7 +270,7 @@ def threshold_for_sensitivity(labels, scores, target):
     """Lowest threshold whose sensitivity still reaches ``target``.
 
     A screening tool does not pick its threshold to maximise an accuracy: the
-    programme it is compared against publishes a sensitivity (82.8 %, plan.md "Cible
+    programme it is compared against publishes a sensitivity (82.8 %, docs/journal.md "Cible
     chiffrée"), and everything else is what that sensitivity costs. So the sensitivity
     is fixed first and the specificity is *read off*, never the reverse.
 

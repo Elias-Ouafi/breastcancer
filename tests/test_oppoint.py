@@ -225,7 +225,7 @@ def _toy_report(n_resamples=200):
 
 
 def test_the_report_quotes_prevalence_beside_ppv():
-    """A PPV without its prevalence is a number without a unit (plan.md)."""
+    """A PPV without its prevalence is a number without a unit (docs/journal.md)."""
     report = _toy_report()
     honest = report["out_of_fold_threshold"]
 

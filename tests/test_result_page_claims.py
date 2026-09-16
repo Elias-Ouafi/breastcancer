@@ -1,7 +1,7 @@
 """The result screen must not claim more than the code delivers.
 
 This is a wording test, deliberately: the screen carried a "Confiance 100 %" pill
-computed from a saturated constant (see plan.md, "Écarts doc <-> code relevés le
+computed from a saturated constant (see docs/journal.md, "Écarts doc <-> code relevés le
 2026-09-12"). A claim removed by hand comes back by hand, so it is pinned here.
 
 The template is rendered directly rather than through /predict: that route needs a

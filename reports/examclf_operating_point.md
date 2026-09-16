@@ -29,7 +29,7 @@ La VPP est **au niveau de la prévalence** : savoir que le modèle a répondu «
 
 À la sensibilité réellement atteinte (78,6 %), **le hasard donnerait 21,4 % de spécificité** — un classifieur aléatoire échange l'une contre l'autre exactement. Le modèle en donne 20,4 % : **en dessous**.
 
-La cible de sensibilité n'est pas atteinte (78,6 % contre 82,8 %) : le seuil calé sur quatre plis ne transporte pas jusqu'au cinquième, ce qui est en soi une mesure — celle d'un score dont l'échelle ne veut rien dire d'un groupe de patients à l'autre (plan.md §4.9).
+La cible de sensibilité n'est pas atteinte (78,6 % contre 82,8 %) : le seuil calé sur quatre plis ne transporte pas jusqu'au cinquième, ce qui est en soi une mesure — celle d'un score dont l'échelle ne veut rien dire d'un groupe de patients à l'autre (docs/journal.md §4.9).
 
 ## Seuil naïf, pour comparaison
 

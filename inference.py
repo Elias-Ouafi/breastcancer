@@ -11,9 +11,9 @@ without re-running the batch training scripts:
 
 There used to be a twin ``predict_dbt`` here, serving a DBT checkpoint at
 ``models/dbt/unet_best.pt``. It is gone (2026-09-15) rather than left documented as
-available: that checkpoint was overwritten by a smoke test (plan.md §4.1) and never
+available: that checkpoint was overwritten by a smoke test (docs/journal.md §4.1) and never
 rebuilt, so the entry point named a file that does not exist. What replaces it on the
-DBT side is not another segmentation U-Net — plan.md §4.10 measures why — so there was
+DBT side is not another segmentation U-Net — docs/journal.md §4.10 measures why — so there was
 nothing to re-point it at. ``imaging.train`` still writes a DBT checkpoint if you train
 one; wiring it back into a serving path is a deliberate act, not a leftover.
 
@@ -191,7 +191,7 @@ def _localize_lesion(vol, model, device, image_size=256, threshold=0.5, crop_off
         # test patients and on 160/160 slices of Breast_MRI_001 -- 136 of which hold
         # no lesion -- so ``lesion_detected`` above is a constant, and the UI reports
         # this value under its own name rather than as a "confidence". An exam-level
-        # decision head is tracked in plan.md.
+        # decision head is tracked in docs/journal.md.
         "confidence": best_conf,
         "best_slice": best_slice + crop_offset[0],
         "box_xywh": box,
@@ -264,7 +264,7 @@ def predict_dce_mri(volume: Union[str, np.ndarray],
     checkpoint, image_size, threshold : see training defaults. ``checkpoint``
         defaults to ``config.DCE_MRI_UNET_CKPT``
         (``models/dce_mri_p2_negfix/unet_best.pt`` -- second post-contrast pass,
-        scratch GroupNorm U-Net, 186-patient full-frame sample; see plan.md §4.1 for
+        scratch GroupNorm U-Net, 186-patient full-frame sample; see docs/journal.md §4.1 for
         how this configuration was chosen).
     model, device : optional preloaded ``load_unet(...)`` result, to score many
         volumes without reloading the weights.
@@ -320,7 +320,7 @@ def _to_display_image(slice_array, window, rgb=True):
 
 
 def _draw_box(pil_img, box_xywh):
-    """Draw the lesion box in the brand accent (plan.md Partie 3), in place."""
+    """Draw the lesion box in the brand accent (docs/journal.md Partie 3), in place."""
     from PIL import ImageDraw
 
     x, y, w, h = box_xywh
@@ -458,7 +458,7 @@ def render_overlay_png(volume: Union[str, np.ndarray], best_slice: int, box_xywh
     if box_xywh is not None:
         x, y, w, h = box_xywh
         # Brand accent (--accent, #FF7A59 -- "rehaussement"/overlay lesion, per
-        # plan.md Partie 3) rather than an arbitrary red.
+        # docs/journal.md Partie 3) rather than an arbitrary red.
         ImageDraw.Draw(pil_img).rectangle([x, y, x + w, y + h], outline=(255, 122, 89), width=2)
 
     # Upscale small crops so the box is legible in the UI (nearest-neighbour to

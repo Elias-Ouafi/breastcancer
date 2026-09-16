@@ -2,7 +2,7 @@
 
 The commands and design notes behind each stage of the data pipeline. The overview and
 the architecture diagram are in the [README](../README.md); the dated measurement log
-(in French) is [plan.md](../plan.md). Unlike the demo, everything here needs the TCIA
+(in French) is [journal.md](journal.md). Unlike the demo, everything here needs the TCIA
 datasets on disk.
 
 ## Running the DCE-MRI pipeline as one flow
@@ -116,7 +116,7 @@ gone: the DICOM laterality tag reads `L` on all 262 downloaded series (147 of 25
 matched, 23 masks on background), and deriving laterality from the pixels was right 237
 times out of 262, found 253 of the 260 annotated series, and took the box of the *other*
 acquisition of a repeated view (`lmlo` vs `lmlo1`) 4 times — a case no pixel can decide
-(plan.md §4.4). Preprocessing then z-normalises the image, paints the box(es) into a
+(journal.md §4.4). Preprocessing then z-normalises the image, paints the box(es) into a
 binary mask with `create_mask`, crops to the lesion region of interest, and stores the
 real `PatientID` inside the `.npz` (as `case_id`).
 
@@ -186,12 +186,12 @@ python -m imaging.evaluate --data-dir data/preprocessed_data/dce_mri_p2 \
 ```
 
 It writes `eval_report.json` (summary) and `eval_per_patient.csv` (one row per
-patient, so any figure can be traced back). Current results are in `plan.md` §4.3.
+patient, so any figure can be traced back). Current results are in `journal.md` §4.3.
 
 ## Slice classifier
 
 The segmentation U-Net cannot pick a lesion's slice out of a full volume (see
-`plan.md` §4.2/§4.3). `imaging.sliceclf` trains a separate model for that ranking
+`journal.md` §4.2/§4.3). `imaging.sliceclf` trains a separate model for that ranking
 task alone, on *every* slice rather than a sampled subset of negatives:
 
 ```bash
@@ -225,14 +225,14 @@ score is the max over their own exams. Writes `models/examclf/cv_report.json` an
 patient ROC-AUC 0.457 [0.369-0.544], and at threshold 0.5 the model calls every
 single patient negative (sensitivity 0.0) — the same accuracy as always answering
 "no cancer". A bigger MIL bag (32 vs 16 slices) was tried next and made it slightly
-worse (0.414 [0.334-0.497]), not better. Detail, diagnosis and next leads: `plan.md`
+worse (0.414 [0.334-0.497]), not better. Detail, diagnosis and next leads: `journal.md`
 §4.7 and "Prochaines pistes pour l'étape 1".
 
 ## The operating point, which is what an AUC does not tell you
 
 An AUC is not a decision. A tool that answers "is there a cancer?" answers at **one
 threshold**, and the pair to be judged on is the screening programme's — sensitivity
-82.8 %, specificity 91.4 % (`plan.md`, "Cible chiffrée"). `imaging.oppoint` turns the
+82.8 %, specificity 91.4 % (`journal.md`, "Cible chiffrée"). `imaging.oppoint` turns the
 stored out-of-fold predictions into that pair, without re-training anything:
 
 ```bash
@@ -249,4 +249,4 @@ number too, labelled as not citable, so the gap can be read rather than asserted
 specificity 20.4 % [15.3-25.9], **PPV 20.4 % at a prevalence of 20.6 %** — the PPV *is*
 the prevalence. Learning that the model said "cancer" does not change the probability
 that there is one. At the sensitivity actually reached, chance would give 21.4 %
-specificity; the model gives 20.4 %, below it. Full table and method: `plan.md` §4.11.
+specificity; the model gives 20.4 %, below it. Full table and method: `journal.md` §4.11.

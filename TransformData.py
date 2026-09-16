@@ -234,7 +234,7 @@ def image_laterality(frame):
 # therefore a join on those three columns, not an inference from the pixels: the
 # collection states it. Measured on the 262 downloaded series, the inference this
 # replaces was right 237 times, found 253 of 260 annotated series, and took the box of
-# the other acquisition of the same view 4 times (plan.md, sections 4.4 and 2026-09-13).
+# the other acquisition of the same view 4 times (docs/journal.md, sections 4.4 and 2026-09-13).
 FILE_PATHS_COLUMNS = ("PatientID", "StudyUID", "View", "classic_path")
 _VIEW_REPEAT_DIGITS = "0123456789"
 
@@ -348,7 +348,7 @@ def dbt_patient_status(labels_csv):
 
 # The column that says what an annotated box actually is. It shipped with the
 # collection from the start and nothing read it, so every box -- benign or cancer --
-# was painted into the same mask (plan.md, "Lire la colonne Class").
+# was painted into the same mask (docs/journal.md, "Lire la colonne Class").
 BOX_CLASS_COLUMN = "Class"
 
 # What identifies the series a box belongs to. The inventory gives these three for
@@ -644,7 +644,7 @@ def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
 
 # The in-plane size every exam volume is resampled to. A full DBT frame is 2457 rows by
 # 1890-1996 columns and weighs ~745 MB in float16, so a corpus of full frames is not
-# storable (plan.md: `crop=False` would ask for ~100 GB over 262 series alone). Cropping
+# storable (docs/journal.md: `crop=False` would ask for ~100 GB over 262 series alone). Cropping
 # to the lesion is the other extreme and is worse than expensive: it **presupposes the
 # answer**, since only an annotated exam has a lesion to crop to, and a negative exam
 # would arrive as a full frame. Both classes therefore go through the same geometry.
@@ -721,7 +721,7 @@ def preprocess_dbt_exams(root_dir=config.TCIA_DIR,
     This is the corpus an exam-level decision head needs, and the one the project did
     not have. :func:`preprocess_dbt_with_boxes` is annotation-driven, so every volume it
     writes carries a lesion: 100 % prevalence, and a specificity that cannot be measured
-    at all (plan.md, "Cible chiffrée"). Here the label comes from
+    at all (docs/journal.md, "Cible chiffrée"). Here the label comes from
     ``BCS-DBT-labels-*.csv`` -- the only table that says an exam is *normal* -- so a
     series with no box is a negative rather than a skip.
 
@@ -1219,7 +1219,7 @@ def make_demo_case(source_npz, out_path, slice_index, slim=True, slab=12):
     of scanning the whole volume for the highest-confidence slice. This exists
     because that scan is currently unreliable on full-frame DCE-MRI (confidence
     saturates near 1.0 on almost every slice -- verified 0/186 on held-out patients,
-    see plan.md §4.1/§4.2): the model segments a lesion well *once shown the right
+    see docs/journal.md §4.1/§4.2): the model segments a lesion well *once shown the right
     slice*, it just cannot reliably find that slice on its own yet. Demo cases are
     curated by hand (pick a real, verified-good slice) so the app has something
     trustworthy to show while that ranking problem is being worked on separately --

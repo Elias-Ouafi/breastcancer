@@ -3,6 +3,7 @@
 [![CI](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml/badge.svg)](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
 ![Tests: 198](https://img.shields.io/badge/tests-198-brightgreen)
+[![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 > **Research Use Only — Not for diagnostic use.** Not a medical device, not clinically
 > validated.
@@ -14,6 +15,12 @@ result is served in a small web app that runs from a fresh clone in one command.
 The question behind it: *given a screening exam (DBT or MRI), is there a cancer?* The
 project is built so every figure it reports can be traced back to a file, a commit and
 a patient-level split. That includes the figures that say a model does not work.
+
+![Demo: open a curated MRI case, see the flagged region, sweep through the slices, switch to the MIP view](docs/img/demo.gif)
+
+*The served demo: one-click case, flagged enhancing region, slice sweep, maximum-intensity
+projection. The UI is in French. Rebuilt by
+[scripts/make_demo_gif.py](scripts/make_demo_gif.py).*
 
 ## At a glance
 
@@ -115,30 +122,32 @@ Commands for every stage: [docs/pipeline.md](docs/pipeline.md).
 
 ## Engineering decisions worth reading
 
-Each one started as a measured failure; the full dated record is in
-[plan.md](plan.md) (French).
+Each one started as a measured failure. Every decision has a short record in
+[docs/adr/](docs/adr/), and the full dated measurements are in
+[docs/journal.md](docs/journal.md) (French).
 
 - **Join, don't infer.** The DICOM laterality tag read `L` on all 262 downloaded
   series. Inferring the view from pixels was wrong 25 times out of 262. The
   collection's own `file-paths` table turns the match into a three-key join: 260
-  series matched, 0 empty masks (plan.md §4.4, §4.6).
+  series matched, 0 empty masks ([ADR 0004](docs/adr/0004-match-annotations-by-join.md)).
 - **One geometry for both classes.** Cancer volumes cropped around the lesion
   (45×72×70) next to full-frame normals (2457×1890) can be separated by array shape
   alone. That gives an excellent AUC that measures the preprocessing, not the model.
   Every exam is therefore resampled to the same 384×384 frame, and the same flip rule
-  applies to negatives.
+  applies to negatives ([ADR 0005](docs/adr/0005-one-source-one-geometry.md)).
 - **Positives and negatives from the same source.** Cancers from one hospital's MRI
   and normals from elsewhere would teach the model the scanner. Both classes come
-  from the same screening collection.
+  from the same screening collection ([ADR 0005](docs/adr/0005-one-source-one-geometry.md)).
 - **The threshold never sees the patients it judges.** The operating point is set at
   the national screening programme's target sensitivity (82.8 %), using the other
   four folds. The naive in-sample figure is published next to it and marked as not
-  citable.
+  citable ([ADR 0006](docs/adr/0006-patient-level-evaluation.md)).
 - **Versioned artefacts are tested.** A test fails if git does not *track* the demo
-  checkpoint or cases. That failure would otherwise show up only on a fresh clone.
+  checkpoint or cases. That failure would otherwise show up only on a fresh clone
+  ([ADR 0008](docs/adr/0008-demo-reproducible-from-a-clone.md)).
 - **Only transient failures retry.** A TCIA fetch that times out is retried. A
   crashed training run is not, since retrying would spend another hour hitting the
-  same exception.
+  same exception ([ADR 0003](docs/adr/0003-orchestrate-with-prefect.md)).
 
 ## Results — including what does not work
 
@@ -181,12 +190,22 @@ inference.py        model loading and prediction for the app
 app/                Flask app (HTML + JSON API)          → app/README.md
 tests/              198 tests, synthetic DICOM fixtures, no GPU or dataset
 models/, reports/   versioned checkpoints and metric reports
-docs/               pipeline reference, demo walkthrough
-plan.md             dated decision & measurement log (French)
+scripts/            demo case and demo GIF regeneration
+docs/               pipeline reference, demo walkthrough, ADRs, journal
 ```
 
 `data/` is gitignored and holds the three layers
 (`raw_data/`, `preprocessed_data/`, `curated_data/`). Only the demo cases are versioned.
+
+## Documentation
+
+| Document | For |
+|---|---|
+| [docs/pipeline.md](docs/pipeline.md) | Commands and design notes for every stage |
+| [docs/adr/](docs/adr/) | Architecture decision records: one decision, its context and its cost |
+| [docs/demo.md](docs/demo.md) · [DEMO.md](DEMO.md) | Running and presenting the demo (English · French) |
+| [app/README.md](app/README.md) | The web app: backends, endpoints, result contract |
+| [docs/journal.md](docs/journal.md) | Dated decision and measurement log, failures included (French) |
 
 ## Development
 
@@ -200,9 +219,30 @@ pytest              # 198 tests, no GPU or dataset needed
 through `logging` with timestamps and a copy under `logs/`; set
 `BREASTCANCER_LOG_LEVEL=DEBUG` for more.
 
+## License and data
+
+The **code** is released under the [MIT License](LICENSE).
+
+The **imaging data** is not covered by that license. Both TCIA collections are
+distributed under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)
+and require citation. This covers the three demo cases in
+`data/curated_data/demo_cases/` and the demo GIF, which are derived from
+Duke-Breast-Cancer-MRI: they may be reused with attribution, for non-commercial
+purposes only.
+
+- Saha, A., Harowicz, M. R., Grimm, L. J., Weng, J., Cain, E. H., Kim, C. E., Ghate, S. V.,
+  Walsh, R., & Mazurowski, M. A. (2021). *Dynamic contrast-enhanced magnetic resonance
+  images of breast cancer patients with tumor locations* [Data set]. The Cancer Imaging
+  Archive. <https://doi.org/10.7937/TCIA.e3sv-re93>
+- Buda, M., Saha, A., Walsh, R., Ghate, S., Li, N., Swiecicki, A., Lo, J. Y., Yang, J., &
+  Mazurowski, M. (2020). *Breast Cancer Screening – Digital Breast Tomosynthesis
+  (BCS-DBT)* (Version 5) [Data set]. The Cancer Imaging Archive.
+  <https://doi.org/10.7937/E4WT-CD02>
+
 ## Acknowledgments
 
-- [The Cancer Imaging Archive](https://www.cancerimagingarchive.net/):
-  Breast-Cancer-Screening-DBT and Duke-Breast-Cancer-MRI collections
+- [The Cancer Imaging Archive](https://www.cancerimagingarchive.net/), for hosting both
+  collections
 - Buda et al., *A Data Set and Deep Learning Algorithm for the Detection of Masses and
-  Architectural Distortions in Digital Breast Tomosynthesis Images*, JAMA Netw Open 2021
+  Architectural Distortions in Digital Breast Tomosynthesis Images*, JAMA Netw Open 2021,
+  the reference detector for the DBT data

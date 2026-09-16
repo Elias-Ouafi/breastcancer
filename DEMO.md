@@ -76,7 +76,7 @@ Trois phrases, avant qu'on ne vous les demande :
 Le détail : les trois cas fonctionnent grâce à la clé `forced_slice` dans le `.npz`.
 Sur un volume complet uploadé librement, la sélection automatique reste peu fiable.
 C'est un problème de *sélection*, pas de *segmentation* — détaillé dans
-[plan.md](plan.md) §4.2 et §4.3.
+[docs/journal.md](docs/journal.md) §4.2 et §4.3.
 
 Les chiffres à citer, mesurés sur les 28 patients de test (`imaging.evaluate`,
 détail dans `models/dce_mri_p2_negfix/eval_report.json`) :
