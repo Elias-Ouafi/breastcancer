@@ -134,3 +134,8 @@ models/examclf/warmstart5/*
 models/examclf/relative/*
 !models/examclf/relative/cv_report.json
 !models/examclf/relative/cv_predictions.csv
+
+# dbt artefacts when the catalogue project is run by hand from catalog/dbt/; the
+# build itself writes them under data/curated_data/catalog/, already ignored.
+catalog/dbt/target/
+catalog/dbt/logs/

@@ -1764,3 +1764,63 @@ qu'un avertissement.
 
 **Limites.** DBT seulement : le corpus DCE-MRI n'a pas de manifeste (§ Ce qui reste
 ouvert). La présence sur disque vient de `stat`, pas d'une lecture du DICOM.
+
+### 4.13 Le catalogue passe sous dbt — parité vérifiée ligne à ligne, et deux pièges (2026-09-16)
+
+**Pourquoi.** La première version (§4.12) exécutait ses couches comme des fichiers SQL
+lancés dans l'ordre de leur nom par un petit runner Python. Elle réimplémentait, en
+moins bien, ce que dbt fournit : l'ordre des dépendances, porté par des préfixes de nom
+de fichier ; des tests de grain et de domaine écrits à la main alors qu'ils se résument
+à « unique » ou « une de ces valeurs » ; et ni documentation ni lignage. Décision :
+ADR 0010.
+
+**Ce qui change.** Les couches `stg` et `mart` deviennent un projet dbt
+(`catalog/dbt`, dbt-core 1.12.5, dbt-duckdb 1.11.0) qui tourne sur le même fichier
+DuckDB. Python ne garde que ce que dbt ne sait pas faire : réunir des CSV aux schémas
+différents, lister le disque, aplatir les manifestes JSON, et remplacer le fichier de
+façon atomique. Les contrôles se répartissent en **25 tests génériques** déclarés en
+YAML (`unique`, `not_null`, `accepted_values`, `relationships`) et **11 tests
+singuliers** pour les règles métier ; trois contrôles écrits à la main
+(`labels_key_unique`, `file_paths_series_unique`, `boxes_known_class`) disparaissent au
+profit des génériques. L'interface ne bouge pas : les schémas s'appellent toujours
+`stg` / `mart` / `qa`, et les modèles de staging sont aliasés.
+
+**Parité, mesurée plutôt qu'affirmée.** La version sans dbt a été reconstruite depuis
+`main` dans un worktree temporaire, sur les mêmes données, puis ses quatre tables `mart`
+ont été comparées à celles du build dbt par `EXCEPT ALL` dans les deux sens :
+
+| Table | Lignes | Uniquement avant | Uniquement après | Colonnes identiques |
+|---|---:|---:|---:|---|
+| `fct_series` | 22 032 | 0 | 0 | oui |
+| `dim_patient` | 5 060 | 0 | 0 | oui |
+| `collection_coverage` | 12 | 0 | 0 | oui |
+| `corpus_summary` | 2 | 0 | 0 | oui |
+
+**36 tests sur 36 passent** sur les données réelles. La suite de tests exécute le vrai
+projet dbt sur la collection miniature ; un test générique (`unique` sur la clé des
+labels) y est montré en échec sur une ligne dupliquée, en plus des cinq défauts
+singuliers du §4.12.
+
+**Deux pièges, trouvés par les tests et non en production :**
+
+- **dbt-duckdb écrit le nom de la base dans chaque vue**, et DuckDB tire ce nom du nom
+  du fichier. Le build écrivait dans `tmpXXXX.duckdb` avant de le renommer en
+  `catalog.duckdb` : toutes les vues `stg` pointaient alors vers une base qui n'existait
+  plus (« Catalog "tmpaqfqz0le" does not exist »). Les tables `mart`, matérialisées,
+  masquaient le problème ; c'est un test sur `stg.dbt_boxes` qui l'a fait apparaître.
+  Correction : construire sous le nom définitif, dans un dossier temporaire. Un test de
+  non-régression vérifie désormais que les 7 vues se lient après le déplacement.
+- **dbt-duckdb garde sa connexion ouverte pendant toute la vie du processus.** Sous
+  Windows, le build ne pouvait plus rouvrir le fichier pour y écrire les résultats. La
+  fonction `close_all_connections` de l'adaptateur ne fait que lâcher la référence ;
+  l'environnement est donc fermé explicitement.
+
+**Le coût.** Un build complet prend **9,7 s contre 3,9 s** (trois builds chacun, mêmes
+données) : c'est le démarrage et le parsing de dbt, deux fois. Les 19 tests du
+catalogue prennent ~50 s en local, parce que chacun fait tourner dbt pour de vrai.
+
+**Livré en plus.** `python -m catalog docs` génère le site de documentation dbt ;
+`scripts/make_dbt_lineage_png.py` en capture le graphe de lignage
+(`docs/img/dbt-lineage.png`). dbt-duckdb est une dépendance optionnelle
+(`.[catalog]`) : interroger un catalogue déjà construit ne demande que duckdb, et
+l'installation de la démo n'en tire aucun des deux.

@@ -46,6 +46,12 @@ orchestration = [
     "prefect>=3.0",
 ]
 
+# `python -m catalog build` runs the catalogue's staging, marts and tests with dbt.
+# Querying a built catalogue needs only duckdb, which is in the base install.
+catalog = [
+    "dbt-duckdb>=1.10",
+]
+
 [tool.setuptools]
 # Flat layout: modules live at the repository root rather than under src/.
 #
@@ -69,8 +75,16 @@ py-modules = [
 include = ["app*", "imaging*", "pipelines*", "catalog*"]
 
 [tool.setuptools.package-data]
-# The catalogue's models and checks are SQL files read at run time, not Python modules.
-catalog = ["sql/*/*.sql", "queries/*.sql"]
+# The catalogue's dbt project and example queries are read at run time, not imported.
+catalog = [
+    "dbt/*.yml",
+    "dbt/macros/*.sql",
+    "dbt/models/*/*.sql",
+    "dbt/models/*/*.yml",
+    "dbt/tests/*.sql",
+    "dbt/tests/*.yml",
+    "queries/*.sql",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "imaging"]

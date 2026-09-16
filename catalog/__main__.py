@@ -4,7 +4,8 @@
     python -m catalog checks [--all]
     python -m catalog tables
     python -m catalog query "SELECT * FROM mart.corpus_summary"
-    python -m catalog query --file catalog/queries/data_funnel.sql
+    python -m catalog query --file catalog/queries/01_data_funnel.sql
+    python -m catalog docs             # dbt documentation site with the lineage graph
 
 ``build`` exits with status 1 when an error-severity check fails, so it can gate a
 pipeline or CI job; the catalogue is still written, since it is what you inspect next.
@@ -64,6 +65,8 @@ def main(argv=None) -> int:
 
     sub.add_parser("tables", help="list tables and views with row counts")
 
+    sub.add_parser("docs", help="generate the dbt documentation site (lineage graph)")
+
     p_query = sub.add_parser("query", help="run read-only SQL against the catalogue")
     p_query.add_argument("sql", nargs="?")
     p_query.add_argument("--file")
@@ -87,6 +90,18 @@ def main(argv=None) -> int:
         with duckdb.connect(result.db_path, read_only=True) as con:
             con.sql("SELECT * FROM mart.corpus_summary").show()
             return 1 if _print_checks(con, show_all=False) else 0
+
+    if args.command == "docs":
+        from catalog.build import DBT_PROJECT_DIR, generate_docs
+
+        target = generate_docs(db_path=args.db)
+        rel = os.path.relpath
+        print(f"dbt docs written to {rel(target, config.ROOT)}. To browse them:\n"
+              f"  CATALOG_DB_PATH={rel(args.db, config.ROOT)} dbt docs serve "
+              f"--project-dir {rel(DBT_PROJECT_DIR, config.ROOT)} "
+              f"--profiles-dir {rel(DBT_PROJECT_DIR, config.ROOT)} "
+              f"--target-path {rel(target, config.ROOT)}")
+        return 0
 
     con = _connect(args.db)
     try:

@@ -1,0 +1,10 @@
+# The database path is set per build by catalog/build.py, which writes to a temporary
+# file and moves it into place only once every layer has run.
+catalog:
+  target: build
+  outputs:
+    build:
+      type: duckdb
+      path: "{{ env_var('CATALOG_DB_PATH') }}"
+      schema: main
+      threads: 4
