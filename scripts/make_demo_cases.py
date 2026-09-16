@@ -16,7 +16,7 @@ the *outputs* are committed instead.
 
 The (patient, slice) pairs below are not arbitrary: for every one of the 186
 patients the model was scored on the slice where the ground-truth mask is largest,
-and these are the three best by real IoU (docs/journal.md §4.2). The slice is human-picked
+and these are the three best by real IoU (DOCUMENTATION.md §4.2). The slice is human-picked
 because automatic slice selection does not work yet -- a documented limitation, not
 a hidden shortcut.
 """
@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from TransformData import make_demo_case  # noqa: E402
 
-# (output name, patient id, pinned slice, IoU verified on that slice -- docs/journal.md §4.2)
+# (output name, patient id, pinned slice, IoU verified on that slice -- DOCUMENTATION.md §4.2)
 DEMO_CASES = [
     ("demo_1_Breast_MRI_135.npz", "Breast_MRI_135", 52, 0.830),
     ("demo_2_Breast_MRI_105.npz", "Breast_MRI_105", 62, 0.738),

@@ -13,7 +13,7 @@ The thresholds are calibrated on this dataset rather than guessed
 --------------------------------------------------------------------
 The failure worth catching is the one that already happened: ``crop=True`` recentred
 each volume on the lesion ROI, producing tiny volumes on which the model scored a
-confidence of 1.0000 on 9 test patients out of 9 (docs/journal.md section 4.2). The obvious
+confidence of 1.0000 on 9 test patients out of 9 (DOCUMENTATION.md section 4.2). The obvious
 signal -- "the lesion occupies too much of the volume" -- turns out **not** to work:
 measured over the 28 test patients, the fraction of lesion-bearing slices runs from
 3.3% to 50.9% (median 11.9%) on legitimate full-frame data, so a threshold there
@@ -153,7 +153,7 @@ def validate_volume_and_mask(volume, mask, case_id="<unknown>", expect_full_fram
             f"{where}in-plane size is {volume.shape[1]}x{volume.shape[2]}, below the "
             f"{MIN_IN_PLANE} px expected of a full-frame study. This is the signature of "
             "cropping to the lesion ROI, which makes localisation artificially easy "
-            "(docs/journal.md section 4.2). Pass crop=False, or expect_full_frame=False if the "
+            "(DOCUMENTATION.md section 4.2). Pass crop=False, or expect_full_frame=False if the "
             "crop is intended")
 
     lesion_voxels = int((mask > 0).sum())

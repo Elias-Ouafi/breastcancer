@@ -114,7 +114,7 @@ models/sliceclf/*
 !models/sliceclf/sliceclf_test_metrics.json
 
 # Exam classifier (imaging.examclf): the reports, not the checkpoint. The reports
-# are the evidence for a *negative* result (docs/journal.md section 4.7), the
+# are the evidence for a *negative* result (DOCUMENTATION.md section 4.7), the
 # checkpoint is a model that detects none of its 56 held-out cancers. _bag32 is a
 # second measurement (larger MIL bag, a lead from section 4.7) that did not help.
 !models/examclf/
@@ -123,7 +123,7 @@ models/examclf/*
 !models/examclf/cv_predictions.csv
 !models/examclf/cv_report_bag32.json
 !models/examclf/cv_predictions_bag32.csv
-# Same rule for the two leads measured on 2026-09-14 (docs/journal.md 4.8, 4.10): the reports
+# Same rule for the two leads measured on 2026-09-14 (DOCUMENTATION.md 4.8, 4.10): the reports
 # are the evidence that a warm-started encoder and a relative bag score do not help,
 # and the fold-0 checkpoints beside them are not versioned for the same reason as above.
 !models/examclf/warmstart5/

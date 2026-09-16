@@ -217,7 +217,7 @@ def test_the_warm_start_keeps_every_painted_slice_and_samples_the_rest(tmp_path)
 def test_a_relative_bag_score_ignores_how_bright_the_exam_is_overall():
     """Two exams with the same shape but different offsets must score the same.
 
-    This is the whole point of the relative aggregation (docs/journal.md 4.9): the 99th
+    This is the whole point of the relative aggregation (DOCUMENTATION.md 4.9): the 99th
     percentile of a slice ranks painted slices at 0.736 AUC *within* an exam and 0.532
     pooled *across* exams. An absolute per-slice score carries the exam's overall
     level, which is not comparable between patients; a score measured against the

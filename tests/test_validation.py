@@ -76,7 +76,7 @@ def test_the_error_names_the_case():
 # --- Smells: real, but not a reason to throw the file away --------------------
 
 def test_a_lesion_roi_crop_is_flagged():
-    """The docs/journal.md section 4.2 failure: cropping made localisation artificially easy."""
+    """The DOCUMENTATION.md section 4.2 failure: cropping made localisation artificially easy."""
     volume = _volume(depth=45, height=72, width=70)
     warnings = validate_volume_and_mask(volume, _mask(volume.shape, box=(10, 30)), "case")
     assert any("in-plane" in w for w in warnings), warnings

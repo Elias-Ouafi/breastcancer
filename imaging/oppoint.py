@@ -3,7 +3,7 @@
 `imaging.examclf` cross-validates and reports an AUC. An AUC is not a decision: a tool
 that answers "is there a cancer in this exam?" answers at **one threshold**, and the
 pair it must be judged on is the one the national screening programme publishes --
-sensitivity 82.8 %, specificity 91.4 % (docs/journal.md, "Cible chiffrée"). This module turns
+sensitivity 82.8 %, specificity 91.4 % (DOCUMENTATION.md, "Cible chiffrée"). This module turns
 the stored out-of-fold predictions into that pair, with its confidence intervals and
 the prevalence PPV was measured at.
 
@@ -21,7 +21,9 @@ the gap be read rather than asserted.
     python -m imaging.oppoint --predictions models/examclf/relative/cv_predictions.csv
 
 Writes `reports/examclf_operating_point.json` (every number, machine-readable) and
-`reports/examclf_operating_point.md` (the same, as a table meant to be read).
+prints the same figures as a Markdown section. That section is not written to a
+file of its own: the project keeps one documentation file, and the published copy
+lives in DOCUMENTATION.md (§4.11), pasted from this output.
 """
 from __future__ import annotations
 
@@ -57,7 +59,7 @@ from logging_setup import setup_logging  # noqa: E402
 log = logging.getLogger(__name__)
 
 # Santé publique France, organised screening 50-74. Not a round number chosen here:
-# see docs/journal.md, "Cible chiffrée et voie retenue".
+# see DOCUMENTATION.md, "Cible chiffrée et voie retenue".
 TARGET_SENSITIVITY = 0.828
 TARGET_SPECIFICITY = 0.914
 
@@ -197,7 +199,7 @@ def render_markdown(report, predictions_path):
         f"VPP {_pct(honest['ppv'])} contre une prévalence de {_pct(honest['prevalence'])}."
     )
 
-    return f"""# Point de fonctionnement — tête de décision au niveau examen
+    return f"""#### Rapport de point de fonctionnement — tête de décision au niveau examen
 
 > **Research Use Only — Not for diagnostic use.**
 
@@ -207,7 +209,7 @@ Généré par `python -m imaging.oppoint` depuis `{predictions_path}`. Ne réent
 
 **ROC-AUC patient** : {_num(auc['auc'])} [{_num(auc['lo'])} – {_num(auc['hi'])}]
 
-## Au seuil visé (sensibilité {_pct(report['target']['sensitivity'])})
+##### Au seuil visé (sensibilité {_pct(report['target']['sensitivity'])})
 
 Seuil pris **hors du pli noté** : chaque patient est jugé par un seuil calé sur les
 quatre autres plis, jamais sur le sien.
@@ -222,15 +224,15 @@ quatre autres plis, jamais sur le sien.
 
 TP {c['tp']} · FP {c['fp']} · TN {c['tn']} · FN {c['fn']}
 
-## Ce que ces chiffres disent
+##### Ce que ces chiffres disent
 
 {verdict}
 
 À la sensibilité réellement atteinte ({_pct(honest['sensitivity'])}), **le hasard donnerait {_pct(chance['specificity_at_achieved_sensitivity'])} de spécificité** — un classifieur aléatoire échange l'une contre l'autre exactement. Le modèle en donne {_pct(honest['specificity'])} : {'au-dessus' if chance['beats_chance'] else '**en dessous**'}.
 
-La cible de sensibilité n'est pas atteinte ({_pct(honest['sensitivity'])} contre {_pct(report['target']['sensitivity'])}) : le seuil calé sur quatre plis ne transporte pas jusqu'au cinquième, ce qui est en soi une mesure — celle d'un score dont l'échelle ne veut rien dire d'un groupe de patients à l'autre (docs/journal.md §4.9).
+La cible de sensibilité n'est pas atteinte ({_pct(honest['sensitivity'])} contre {_pct(report['target']['sensitivity'])}) : le seuil calé sur quatre plis ne transporte pas jusqu'au cinquième, ce qui est en soi une mesure — celle d'un score dont l'échelle ne veut rien dire d'un groupe de patients à l'autre (§4.9).
 
-## Seuil naïf, pour comparaison
+##### Seuil naïf, pour comparaison
 
 Calé sur les scores mêmes qu'il note ensuite — publié pour que l'écart soit lisible, pas pour être cité : sensibilité {_pct(naive['sensitivity'])}, spécificité {_pct(naive['specificity'])}, VPP {_pct(naive['ppv'])}, seuil {_num(naive['threshold'], 4)}.
 
@@ -239,19 +241,16 @@ L'écart ne raconte pas l'histoire habituelle de l'optimisme, et il faut le dire
 
 
 def write_report(report, output_dir, predictions_path):
-    """Write both files. The source path is stored repo-relative -- a versioned report
+    """Write the JSON report. The source path is stored repo-relative -- a versioned report
     should not name someone's home directory (the rule ``lineage.relative_path`` already
     applies to manifests)."""
     predictions_path = relative_path(predictions_path)
     report = dict(report, predictions=predictions_path)
     os.makedirs(output_dir, exist_ok=True)
     json_path = os.path.join(output_dir, "examclf_operating_point.json")
-    md_path = os.path.join(output_dir, "examclf_operating_point.md")
     with open(json_path, "w") as f:
         json.dump(report, f, indent=2)
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write(render_markdown(report, predictions_path))
-    return json_path, md_path
+    return json_path
 
 
 def build_arg_parser():
@@ -261,7 +260,7 @@ def build_arg_parser():
     p.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     p.add_argument("--target-sensitivity", type=float, default=TARGET_SENSITIVITY,
                    help="The sensitivity the threshold is fixed at, not an accuracy to "
-                        "maximise (docs/journal.md, 'Cible chiffrée').")
+                        "maximise (DOCUMENTATION.md, 'Cible chiffrée').")
     p.add_argument("--bootstrap", type=int, default=10000)
     p.add_argument("--seed", type=int, default=42)
     return p
@@ -283,8 +282,11 @@ def main(argv=None):
     if not report["chance_reference"]["beats_chance"]:
         log.warning("Specificity is at or below what chance gives at this sensitivity.")
 
-    json_path, md_path = write_report(report, args.output_dir, args.predictions)
-    log.info(f"Wrote {json_path} and {md_path}")
+    json_path = write_report(report, args.output_dir, args.predictions)
+    log.info(f"Wrote {json_path}; the section below goes in DOCUMENTATION.md §4.11")
+    if hasattr(sys.stdout, "reconfigure"):  # French text on a cp1252 Windows console
+        sys.stdout.reconfigure(encoding="utf-8")
+    print(render_markdown(report, relative_path(args.predictions)))
     return report
 
 

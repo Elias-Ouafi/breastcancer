@@ -1,5 +1,5 @@
 -- Is the exam corpus balanced across views and sides? A class concentrated in one view
--- or one breast is a shortcut a model can learn instead of the lesion (ADR 0005).
+-- or one breast is a shortcut a model can learn instead of the lesion (DOCUMENTATION.md, ADR 0005).
 SELECT
     view_position,
     laterality,
