@@ -28,7 +28,7 @@ python run_demo.py --check
 3. Cliquer sur **Cas 1** — pas de sélecteur de fichier à manipuler en plein pitch.
    (Le dépôt de fichier reste disponible pour un examen à vous.)
 4. Dérouler le résultat, dans cet ordre :
-   - le verdict et la confiance, avec le temps de calcul (~110 ms)
+   - le verdict et la confiance, avec le temps de calcul (~70 ms à chaud, ~0,6 s au premier appel)
    - la coupe annotée, cadre orange sur la zone de réhaussement
    - **faire glisser le curseur** — la lésion apparaît, culmine, disparaît sur les
      25 coupes. C'est le moment qui convainc.
@@ -88,7 +88,7 @@ détail dans `models/dce_mri_p2_negfix/eval_report.json`) :
 | Sensibilité, centre visé juste | 81 % | 74 – 88 % |
 | Faux positifs par examen | 222 | 205 – 237 |
 | Coupes saines déclenchant une alarme | 99,97 % | 99,92 – 100 % |
-| Temps de calcul par volume (RTX 5060) | 0,76 s | — |
+| Temps de calcul par volume (RTX 5060) | 0,82 s | — |
 
 Le Dice n'est pas comparable à la littérature (~0,80) : les masques d'entraînement
 sont des **boîtes englobantes** TCIA, pas des contours experts, ce qui plafonne
