@@ -26,12 +26,13 @@ jobs:
       # flask (rendering the result page) were missing, so collection failed on three
       # files and the whole run errored out -- red on every commit from 2026-09-13 to
       # 2026-09-15 without anyone noticing. Adding a test that imports something new
-      # means adding it here too.
+      # means adding it here too. duckdb is the metadata catalogue's engine
+      # (tests/test_catalog.py builds one from miniature tables).
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install numpy pandas pydicom flask pytest ruff
+          pip install numpy pandas pydicom flask duckdb pytest ruff
 
       - name: Lint
         run: ruff check .

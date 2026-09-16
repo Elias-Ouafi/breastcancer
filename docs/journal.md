@@ -1711,3 +1711,56 @@ vérifie que les chiffres d'`examclf` ne remontent pas dans la rangée de pastil
 `bootstrap_operating_point`, `reports/examclf_operating_point.{json,md}`, 19 tests
 (`tests/test_oppoint.py`) dont celui qui vérifie qu'un seuil ne voit jamais les patients
 qu'il juge, et 3 de plus dans `tests/test_result_page_claims.py`.
+
+### 4.12 Un catalogue de métadonnées DuckDB — et ce qu'il a vu dès le premier build (2026-09-16)
+
+**Pourquoi.** Chaque question sur les données — combien de cancers du split validation
+sont téléchargés, chaque étiquette de corpus est-elle d'accord avec sa source — passait
+par un script pandas jetable : trois CSV, deux manifestes, un listing de dossier, une
+jointure réécrite, jamais testée, jamais gardée. `python -m catalog build` les charge une
+fois dans un fichier DuckDB, en couches `raw` → `stg` → `mart`, et fait tourner 14
+contrôles de qualité écrits en SQL. Décision et alternatives : ADR 0009 ; schéma et
+requêtes : `docs/catalog.md`.
+
+**Mesuré au premier build** (3,9 s, trois builds complets, disque et Parquet compris) :
+
+| | |
+|---|---:|
+| Lignes `labels` / `file-paths` (trois splits) | 22 032 / 22 032 |
+| Boîtes | 435 |
+| Séries sur disque | 1 047 (82,6 Go de DBT) |
+| Cas des manifestes (`dbt` + `dbt_exams`) | 260 + 870 |
+| Contrôles qui passent | **14 / 14** |
+
+Les statuts patient recalculés en SQL — 4 581 normaux, 278 actionable, 112 bénins,
+89 cancers — reproduisent **indépendamment** ceux de `TransformData.dbt_patient_status`.
+Les corpus se relisent tels que publiés : 260 séries / 132 patients / 56 cancers pour
+`dbt`, 870 / 272 / 56 pour `dbt_exams`.
+
+**14 contrôles qui passent ne prouvent rien seuls** — une requête incapable de renvoyer
+une ligne passe aussi. `tests/test_catalog.py` injecte donc cinq défauts dans une
+collection miniature (étiquette d'examen fausse, étiquette de lésion fausse, cas attaché
+au mauvais patient, score d'un patient hors corpus, étiquette de score fausse) et
+vérifie que le contrôle correspondant échoue ; une série brute supprimée ne doit lever
+qu'un avertissement.
+
+**Ce que le catalogue a fait apparaître, et que ce journal ne disait pas :**
+
+- **Trois patients cancer du split validation n'ont jamais été téléchargés** —
+  DBT-P03621, DBT-P03628, DBT-P04596 — avec six bénins du même split. C'est l'écart,
+  jamais expliqué, entre les 89 cancers publiés et les 86 sur disque du §4.10. Coût
+  estimé : ~0,5 Go (6 séries à la moyenne de 85 Mo des séries cancer présentes). Non
+  téléchargés à ce stade ; la cause (plafond de volume de l'appel, ou interruption) n'est
+  pas établie.
+- **Les 60 patients annotés du split test sont sur disque mais dans aucun corpus** :
+  téléchargés le 2026-09-14, après la construction du corpus d'examens (2026-09-13).
+- **152 patients normaux sont sur disque**, là où ce journal en annonce 150 téléchargés.
+  Non investigué.
+- **Le score d'`examclf` est en moyenne plus haut chez les normaux (0,187) que chez les
+  cancers (0,181)** — l'AUC de 0,457 du §4.11, lisible dans un `GROUP BY`.
+- Les 48 séries lues en miroir du corpus d'examens sont **toutes des vues gauches** :
+  conséquence attendue de la règle de retournement (ADR 0005), à savoir avant d'utiliser
+  `mirrored` comme variable.
+
+**Limites.** DBT seulement : le corpus DCE-MRI n'a pas de manifeste (§ Ce qui reste
+ouvert). La présence sur disque vient de `stat`, pas d'une lecture du DICOM.

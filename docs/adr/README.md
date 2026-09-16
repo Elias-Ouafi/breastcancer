@@ -14,3 +14,4 @@ the full measurements.
 | [0006](0006-patient-level-evaluation.md) | Patient-level evaluation, out-of-fold operating threshold | 2026-09-15 |
 | [0007](0007-groupnorm-over-pretrained-encoder.md) | GroupNorm from scratch over an ImageNet-pretrained encoder | 2026-08-02 |
 | [0008](0008-demo-reproducible-from-a-clone.md) | The demo runs from a clone: versioned, tested artefacts and a narrow image | 2026-08-18 |
+| [0009](0009-duckdb-metadata-catalogue.md) | A DuckDB metadata catalogue with SQL layers and SQL checks | 2026-09-16 |

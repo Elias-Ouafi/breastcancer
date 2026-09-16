@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml/badge.svg)](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
-![Tests: 198](https://img.shields.io/badge/tests-198-brightgreen)
+![Tests: 220](https://img.shields.io/badge/tests-220-brightgreen)
 [![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 > **Research Use Only — Not for diagnostic use.** Not a medical device, not clinically
@@ -31,8 +31,9 @@ projection. The UI is in French. Rebuilt by
 | Exam-level corpus built | 870 exams · 272 patients · 56 cancers, one geometry for both classes |
 | Lesion corpus built | 260 annotated DBT series · 132 patients, 0 validation warnings |
 | Demo model | DCE-MRI lesion localiser, 186 patients, evaluated on 28 held-out ones |
-| Quality gates | 198 tests (no GPU, no dataset), ruff, GitHub Actions |
-| Stack | Python 3.12 · pydicom · NumPy · pandas · PyTorch · Prefect · Flask · Docker |
+| Metadata catalogue | DuckDB, raw → staging → marts, 14 SQL data-quality checks, rebuilt in ~4 s |
+| Quality gates | 220 tests (no GPU, no dataset), ruff, GitHub Actions |
+| Stack | Python 3.12 · SQL · DuckDB · Parquet · pydicom · NumPy · pandas · PyTorch · Prefect · Flask · Docker |
 
 ## Architecture
 
@@ -68,6 +69,7 @@ flowchart TB
 
     ART[("models/ · reports/<br/>checkpoints + the metrics that justify them")]
     APP["Flask app + JSON API<br/>Docker, read-only, localhost only"]
+    CAT[("catalog.duckdb<br/>raw → stg → mart · 14 SQL checks · Parquet")]
 
     DBT --> TABLES
     DBT --> SERIES
@@ -79,13 +81,17 @@ flowchart TB
     PRE -.-> LINEAGE
     PRE --> CUR --> TRAIN --> EVAL --> ART
     ART --> APP
+    RAW -.-> CAT
+    LINEAGE -.-> CAT
+    ART -.-> CAT
 ```
 
 The DCE-MRI branch runs as a single [Prefect](https://www.prefect.io) flow,
 `download → preprocess → train → evaluate`
 ([pipelines/dce_mri.py](pipelines/dce_mri.py)). Each stage skips work already done, so
 a run that crashes during training restarts at training instead of repeating the
-download.
+download. The dotted edges feed the metadata catalogue: the annotation tables, the
+disk, the manifests and the model scores, joined and checked in DuckDB.
 
 ## Quick start
 
@@ -116,9 +122,28 @@ Walkthrough, talking points and troubleshooting: [docs/demo.md](docs/demo.md)
 | **Trace** | [lineage.py](lineage.py) | Each output folder gets a `manifest.json` with the git revision (`-dirty` if uncommitted), source, parameters and per-case stats. It is written last, so a missing manifest means the run was interrupted. |
 | **Curate** | [imaging/exambank.py](imaging/exambank.py), [imaging/slicebank.py](imaging/slicebank.py) | Memory-mapped banks decompress ~870 exams once. The slice bank made each epoch 7.1× faster. |
 | **Train / evaluate** | [imaging/](imaging/) | Patient-level splits and cross-validation. Confidence intervals are bootstrapped over patients, and the operating threshold comes from the other folds. |
+| **Catalogue** | [catalog/](catalog/) | Tables, disk inventory, manifests and model scores joined in DuckDB, in `raw` → `stg` → `mart` layers. 14 SQL checks fail the build on a label or key that disagrees with its source. The build is atomic. |
 | **Serve** | [app/](app/), [Dockerfile](Dockerfile) | Flask HTML + JSON API. The image has no JVM or ITK, runs read-only as non-root, and is published on loopback only. |
 
 Commands for every stage: [docs/pipeline.md](docs/pipeline.md).
+
+## Metadata catalogue
+
+```bash
+python -m catalog build     # ~4 s: 22,032 series, 5,060 patients, 14 checks
+python -m catalog query --file catalog/queries/02_annotated_patients_not_downloaded.sql
+```
+
+Every question about the data is a SQL query against checked tables. Two examples from
+the first build:
+
+- **3 cancer patients of the validation split were never downloaded.** They explain the
+  gap between the 89 cancer patients the collection publishes and the 86 on disk.
+- **The exam classifier scores normal patients higher on average than cancer
+  patients** (0.187 vs 0.181): the failed AUC, visible in a single `GROUP BY`.
+
+Schema, checks and example queries: [docs/catalog.md](docs/catalog.md). Why DuckDB:
+[ADR 0009](docs/adr/0009-duckdb-metadata-catalogue.md).
 
 ## Engineering decisions worth reading
 
@@ -188,7 +213,8 @@ pipelines/          Prefect flow for the DCE-MRI branch
 imaging/            datasets, banks, U-Net, classifiers, metrics, evaluation
 inference.py        model loading and prediction for the app
 app/                Flask app (HTML + JSON API)          → app/README.md
-tests/              198 tests, synthetic DICOM fixtures, no GPU or dataset
+catalog/            DuckDB metadata catalogue: SQL models, checks, example queries
+tests/              220 tests, synthetic fixtures, no GPU or dataset
 models/, reports/   versioned checkpoints and metric reports
 scripts/            demo case and demo GIF regeneration
 docs/               pipeline reference, demo walkthrough, ADRs, journal
@@ -202,6 +228,7 @@ docs/               pipeline reference, demo walkthrough, ADRs, journal
 | Document | For |
 |---|---|
 | [docs/pipeline.md](docs/pipeline.md) | Commands and design notes for every stage |
+| [docs/catalog.md](docs/catalog.md) | Metadata catalogue: layers, tables, data-quality checks, example queries |
 | [docs/adr/](docs/adr/) | Architecture decision records: one decision, its context and its cost |
 | [docs/demo.md](docs/demo.md) · [DEMO.md](DEMO.md) | Running and presenting the demo (English · French) |
 | [app/README.md](app/README.md) | The web app: backends, endpoints, result contract |
@@ -212,7 +239,7 @@ docs/               pipeline reference, demo walkthrough, ADRs, journal
 ```bash
 pip install -e ".[dev]"
 ruff check .
-pytest              # 198 tests, no GPU or dataset needed
+pytest              # 220 tests, no GPU or dataset needed
 ```
 
 [CI](.github/workflows/ci.yml) runs both on every push and pull request. Logs go
