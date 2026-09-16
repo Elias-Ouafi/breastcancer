@@ -84,13 +84,13 @@ def build_model(base_channels=32):
     There used to be a second option here, an ImageNet-pretrained
     ``segmentation_models_pytorch`` encoder, on the standard argument that transfer
     learning is the strongest lever when annotated patients are scarce. It was
-    removed after being measured (docs/journal.md §4.1): validation Dice sat at 0.000 from
+    removed after being measured (DOCUMENTATION.md §4.1): validation Dice sat at 0.000 from
     epoch 10 to 30 with no recovery, because that U-Net carries 46 BatchNorm layers
     and hits exactly the failure ``DoubleConv`` above documents. Test Dice 0.414
     against 0.467 from scratch.
 
     Keeping a CLI option that silently produces a broken model is worse than not
-    having it. The idea worth reviving is narrower and is recorded in docs/journal.md §4.1:
+    having it. The idea worth reviving is narrower and is recorded in DOCUMENTATION.md §4.1:
     port the pretrained *convolutional* weights onto GroupNorm blocks, so the
     ImageNet prior comes without the normalisation that breaks it.
     """

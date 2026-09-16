@@ -225,7 +225,7 @@ def _toy_report(n_resamples=200):
 
 
 def test_the_report_quotes_prevalence_beside_ppv():
-    """A PPV without its prevalence is a number without a unit (docs/journal.md)."""
+    """A PPV without its prevalence is a number without a unit (DOCUMENTATION.md)."""
     report = _toy_report()
     honest = report["out_of_fold_threshold"]
 
@@ -250,13 +250,12 @@ def test_the_written_report_names_no_path_outside_the_repository(tmp_path):
     abs_predictions = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                    "models", "examclf", "cv_predictions.csv")
 
-    json_path, md_path = write_report(report, str(tmp_path), abs_predictions)
+    json_path = write_report(report, str(tmp_path), abs_predictions)
 
     stored = json.load(open(json_path))["predictions"]
     assert stored == "models/examclf/cv_predictions.csv"
     assert not os.path.isabs(stored)
-    with open(md_path, encoding="utf-8") as f:
-        assert "C:\\Users" not in f.read()
+    assert os.listdir(tmp_path) == ["examclf_operating_point.json"]  # no .md of its own
 
 
 def test_the_rendered_report_states_research_use_only():

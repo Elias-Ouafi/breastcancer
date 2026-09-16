@@ -437,7 +437,7 @@ def download_normal_dbt_series(labels_csv=None, max_patients=150,
 
     This is the half of the corpus the project never had. Everything downloaded so far
     came from the boxes CSVs, so 100 % of the patients on disk carry a lesion, and a
-    specificity cannot be measured on a corpus without negatives (docs/journal.md, "Cible
+    specificity cannot be measured on a corpus without negatives (DOCUMENTATION.md, "Cible
     chiffrée"). The per-view labels table is what says an exam is normal: 4 581 of the
     5 060 patients, against 89 with a cancer.
 

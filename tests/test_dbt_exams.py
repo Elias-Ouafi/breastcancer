@@ -2,7 +2,7 @@
 
 Everything the project had preprocessed came from the boxes CSVs, so every volume on
 disk carried a lesion: prevalence 100 %, and a specificity that cannot be measured on a
-corpus with no negatives (docs/journal.md, "Cible chiffrée"). ``preprocess_dbt_exams`` labels a
+corpus with no negatives (DOCUMENTATION.md, "Cible chiffrée"). ``preprocess_dbt_exams`` labels a
 series from ``BCS-DBT-labels-*.csv`` instead, where a series with no box is a *negative*
 rather than a skip.
 

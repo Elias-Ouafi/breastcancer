@@ -1,4 +1,4 @@
-"""Capture the dbt lineage graph shown in docs/catalog.md (``docs/img/dbt-lineage.png``).
+"""Capture the dbt lineage graph shown in DOCUMENTATION.md (catalogue section) (``docs/img/dbt-lineage.png``).
 
     python -m catalog build && python -m catalog docs
     python scripts/make_dbt_lineage_png.py

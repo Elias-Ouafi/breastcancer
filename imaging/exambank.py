@@ -3,7 +3,7 @@
 Why this exists
 ----------------
 ``TransformData.preprocess_dbt_exams`` writes every listed DBT series at one fixed
-geometry (384x384 in plane, every slice kept, no cropping) -- see docs/journal.md, "Corpus
+geometry (384x384 in plane, every slice kept, no cropping) -- see DOCUMENTATION.md, "Corpus
 DBT à deux classes". That corpus is what an exam-level cancer / no-cancer decision
 needs, but it cannot be loaded the way a lesion-cropped corpus can, entirely
 decompressed into memory: a lesion crop holds ~5 slices, while a full exam holds
