@@ -772,6 +772,12 @@ def preprocess_dbt_exams(root_dir=config.TCIA_DIR,
     saved, skipped, summary = 0, 0, {}
     saved_by_status = {name: 0 for name in validation.EXAM_STATUSES}
     skipped_unlisted, skipped_unlabelled, skipped_existing, mirrored_count = 0, 0, 0, 0
+    # The manifest describes the corpus, not the last run: a resumed pass carries the
+    # entries of the volumes it skips. Without this, adding one series to an 870-case
+    # corpus wrote a manifest of one case, and everything that reads it (the catalogue)
+    # lost the rest. A volume with no entry comes from an interrupted pass, before its
+    # manifest was written: its provenance is unknown, so it is rebuilt, not trusted.
+    previous_cases = (lineage.read_manifest(output_dir) or {}).get("cases") or {}
     for name in sorted(os.listdir(root_dir)):
         folder = os.path.join(root_dir, name)
         if not os.path.isdir(folder):
@@ -779,7 +785,9 @@ def preprocess_dbt_exams(root_dir=config.TCIA_DIR,
         dcm_files = [f for f in os.listdir(folder) if f.lower().endswith(".dcm")]
         if not dcm_files:
             continue
-        if skip_existing and os.path.exists(os.path.join(output_dir, f"{name}.npz")):
+        if (skip_existing and name in previous_cases
+                and os.path.exists(os.path.join(output_dir, f"{name}.npz"))):
+            summary[name] = previous_cases[name]
             skipped += 1
             skipped_existing += 1
             continue

@@ -69,6 +69,7 @@ py-modules = [
     "logging_setup",
     "validation",
     "lineage",
+    "http_timeouts",
 ]
 
 [tool.setuptools.packages.find]

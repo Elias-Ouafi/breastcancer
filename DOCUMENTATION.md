@@ -231,7 +231,8 @@ et les rapports de validation croisée.
 
 | Étape | Où | Ce qu'elle garantit |
 |---|---|---|
-| **Extraction** | `ExtractData.py` | Téléchargements qui reprennent là où ils s'arrêtent ; plafond exprimé en volume ajouté par l'appel ; examens normaux tirés avec une graine (les ID suivent le site et la date). |
+| **Extraction** | `ExtractData.py`, `http_timeouts.py` | Téléchargements qui reprennent là où ils s'arrêtent ; plafond exprimé en volume ajouté par l'appel ; examens normaux tirés avec une graine (les ID suivent le site et la date) ; délai maximal sur chaque requête ; une série n'est comptée que si son dossier existe. |
+| **Orchestration** | `pipelines/dbt.py`, `pipelines/dce_mri.py` | Deux flows Prefect ; chaque étape de la chaîne DBT décide depuis un plan calculé hors ligne (ADR 0011). |
 | **Stockage** | `config.py` | Trois couches `raw_data` → `preprocessed_data` → `curated_data`, chemins définis une fois. |
 | **Transformation** | `TransformData.py` | Annotations rattachées par **jointure**, jamais inférées ; étiquette tirée de la seule table qui dit « normal » ; même géométrie pour les deux classes. |
 | **Validation** | `validation.py` | Dimensions, type, valeurs finies et masque binaire vérifiés au point unique d'écriture. |
@@ -270,6 +271,62 @@ entraînement qui plante replanterait au même endroit une heure plus tard. Les 
 appellent les mêmes fonctions que les commandes manuelles, qui ne peuvent donc pas
 diverger.
 
+### Chaîne DBT orchestrée (Prefect)
+
+`pipelines/dbt.py` enchaîne `tables → download → preprocess → catalog` :
+
+```bash
+python -m pipelines.dbt --dry-run            # le plan, calculé hors ligne, rien n'est exécuté
+python -m pipelines.dbt                      # exécute ce qui manque
+python -m pipelines.dbt --from preprocess    # sans les étapes réseau
+```
+
+**Chaque étape décide depuis un plan, pas depuis « le dossier existe »** (ADR 0011). La
+couche brute grossit dans le temps, et un corpus construit avant un téléchargement est
+un dossier qui existe et qui est périmé. Chaque étape calcule donc hors ligne, à partir
+des tables de la collection, ce qui devrait exister, le compare à ce qui existe et ne
+s'exécute que s'il manque quelque chose :
+
+| Étape | Plan | Exécution |
+|---|---|---|
+| `tables` | les 9 tables présentes ? | téléchargement, 3 reprises |
+| `download` | séries des patients annotés (splits choisis) + échantillon de normaux (graine), lues dans l'inventaire, contre les dossiers sur disque | seuls les patients incomplets, 2 reprises ; une série ratée lève `DownloadIncomplete` |
+| `preprocess` | séries que chaque corpus devrait contenir d'après le disque, contre les cas de son manifeste | corpus d'examens repris (seules les séries manquantes sont décodées) ; corpus de lésions reconstruit |
+| `catalog` | toujours | build DuckDB + dbt ; un test dbt `error` en échec fait échouer le flow |
+
+Options : `--annotated-splits` (défaut : les trois), `--corpus-splits` (défaut :
+`train,validation`, les corpus de toutes les mesures publiées), `--max-normal-patients`
+(150), `--max-gb-added` (50), `--seed` (0), `--force`.
+
+**Plan réel au 2026-09-16** (`--dry-run`, 10 s, aucun accès réseau) :
+
+```
+  tables      9/9 present -> skip
+  download    201 annotated (train,validation,test) + 150 normal patients -> 1060 series planned, 1047 series on disk
+              -> 15 missing across 9 patient(s): DBT-P03621, DBT-P03628, DBT-P03689, DBT-P03728, DBT-P04097, DBT-P04346...
+  preprocess  lesion corpus (train,validation): 260 expected, 260 in manifest -> skip
+  preprocess  exam corpus (train,validation): 870 expected, 870 in manifest -> skip
+  catalog     always rebuilt -> data\curated_data\catalog\catalog.duckdb
+```
+
+Le plan recoupe le catalogue sans le lire : les 15 séries manquantes sont celles des 9
+patients annotés jamais téléchargés, et le nombre de séries attendues par corpus,
+recalculé depuis les tables et le disque, retombe exactement sur le contenu des
+manifestes. Exécution réelle `--from preprocess` : deux corpus jugés à jour, catalogue
+reconstruit, 36/36 tests dbt, flow `Completed` en 60 s (démarrage du serveur Prefect
+temporaire compris).
+
+**Robustesse des téléchargements.** `tcia_utils` 3.3.4 envoie ses requêtes sans délai
+maximal et avale toutes les exceptions. Deux corrections :
+- `http_timeouts.install(nbia)` ajoute un délai de 30 s à la connexion et de 600 s
+  d'inactivité en lecture à chaque `get`/`post` du client. Un `socket.setdefaulttimeout`
+  ne suffit pas : mesuré, une requête vers un serveur muet restait bloquée après 8 s,
+  alors qu'un `timeout=` explicite lève `ReadTimeout` en 2 s. Le délai de lecture est
+  calibré sur le journal réel (122 séries : médiane 13 s, p90 49 s, pire cas 565 s) ;
+- une série n'est comptée téléchargée que si son dossier existe après l'appel ; avec
+  `raise_on_failure`, le téléchargement termine ce qu'il peut puis lève
+  `DownloadIncomplete`, ce qui déclenche la reprise Prefect.
+
 ### Chaîne DBT (commandes manuelles)
 
 ```python
@@ -306,8 +363,10 @@ uniquement pour `cancer` (`actionable` et `benign` valent 0) et le mot est gard�
 ramenée à 384×384 en gardant les proportions, complétée par des zéros, toutes les coupes
 conservées, aucun recadrage ; le sous-échantillonnage moyenne au lieu d'échantillonner ;
 le même retournement s'applique aux négatifs. Mesuré : 4,9 Mo par série compressée,
-~14 s de décodage chacune, reprise possible (`skip_existing=True`). Résultat : **870
-examens, 272 patients, 56 cancers**.
+~14 s de décodage chacune, reprise possible (`skip_existing=True`) : une passe reprise
+conserve dans le manifeste les cas qu'elle saute, et un volume sans entrée de manifeste
+(passe interrompue) est reconstruit (§4.14). Résultat : **870 examens, 272 patients, 56
+cancers**.
 
 ### Entraînement et évaluation
 
@@ -611,9 +670,10 @@ identifiant de run). Manque : `dce_mri_p2/` n'a pas de manifeste.
 **Contexte** : téléchargement de plusieurs heures, prétraitement CPU, entraînement GPU ;
 un script qui meurt à l'étape 3 perd les étapes 1 et 2. **Décision** : flow Prefect,
 chaque étape vérifie sa sortie, `--from`/`--force`/`--dry-run`, seul le téléchargement
-réessaie. **Coût** : Prefect en dépendance optionnelle. Manques : la chaîne DBT n'est pas
-encore un flow ; `tcia_utils.nbia` n'impose aucun timeout (blocage silencieux de 2 h 30 le
-2026-09-14, qu'aucune reprise ne rattrape).
+réessaie. **Coût** : Prefect en dépendance optionnelle, testé en CI dans un job à part. Manques
+comblés le 2026-09-16 : la chaîne DBT est un flow (ADR 0011), et les requêtes TCIA ont un
+délai maximal — le blocage silencieux de 2 h 30 du 2026-09-14 serait coupé à 10 min et
+repris.
 
 ### ADR 0004 — Rattacher les annotations par jointure, jamais par inférence (2026-09-13)
 
@@ -686,6 +746,22 @@ atomique ; 25 tests génériques en YAML remplacent 3 contrôles manuels, 11 tes
 singuliers gardent les règles métier ; `dbt run` puis `dbt test` ; interface inchangée ;
 dbt-duckdb en dépendance optionnelle. **Coût** : build de 9,7 s contre 3,9 s ; tests du
 catalogue ~50 s (dbt réel). Parité vérifiée ligne à ligne (§4.13).
+
+### ADR 0011 — Chaque étape de la chaîne DBT décide depuis un plan calculé hors ligne (2026-09-16)
+
+**Contexte** : le flow DCE-MRI saute une étape dès que son dossier de sortie n'est pas
+vide. Appliquée à la chaîne DBT, cette règle échouerait précisément dans le cas qui
+compte : la couche brute grossit (normaux le 2026-09-13, split test le 2026-09-14) et un
+corpus construit avant un téléchargement est un dossier qui existe et qui est périmé.
+**Décision** : chaque étape calcule, sans réseau et depuis les tables de la collection,
+ce qui devrait exister (séries des patients prévus, cas attendus de chaque corpus d'après
+le disque), le compare aux dossiers et aux manifestes, et ne s'exécute que s'il manque
+quelque chose ; `--dry-run` imprime ce plan ; le catalogue est toujours reconstruit et ses
+tests `error` font échouer le flow ; seules les étapes réseau sont reprises, et elles
+peuvent enfin l'être puisqu'un téléchargement raté lève une exception. **Coût** : le plan
+reproduit les règles de sélection des fonctions de prétraitement (inventaire, labels,
+boîtes) — deux endroits à garder alignés ; l'alignement est vérifié sur les données
+réelles (870 et 260 cas attendus, exactement le contenu des deux manifestes) et par les tests.
 
 ---
 
@@ -992,6 +1068,55 @@ non-régression vérifie les 7 vues ; (2) dbt-duckdb garde sa connexion ouverte 
 du processus, ce qui verrouillait le fichier sous Windows — l'environnement est fermé
 explicitement. Coût : 9,7 s contre 3,9 s.
 
+### 4.14 La chaîne DBT orchestrée — et trois défauts trouvés en l'écrivant (2026-09-16)
+
+`pipelines/dbt.py` fait de la chaîne DBT un flow Prefect dont chaque étape décide depuis
+un plan calculé hors ligne (ADR 0011). Écrire ce plan a obligé à relire ce que chaque
+fonction garantit réellement, et trois défauts sont apparus.
+
+**1. Les requêtes TCIA n'avaient aucun délai maximal, et la correction évidente ne marche
+pas.** Contre un serveur local qui accepte la connexion et ne répond jamais :
+
+| Réglage | Résultat |
+|---|---|
+| `socket.setdefaulttimeout(2)`, pas de `timeout=` | **toujours bloqué après 8 s** |
+| `timeout=(5, 2)` explicite | `ReadTimeout` en **2,0 s** |
+
+`requests` transmet un « pas de délai » explicite au socket, qui écrase la valeur par
+défaut du processus. D'où `http_timeouts.py`, qui substitue au module `requests` du client
+un mandataire ajoutant `timeout=(30, 600)`. Délai de lecture calibré sur les 122 séries du
+journal du 2026-09-14 : médiane 13 s, p90 49 s, pire cas réussi **565 s**, blocage
+**8 537 s**.
+
+**2. Un téléchargement raté était compté comme réussi.** `nbia.downloadSeries` attrape
+toutes les exceptions et rend la main normalement ; `download_dbt_series_for` comptait
+alors la série et la marquait présente. Aucune reprise ne pouvait se déclencher. Une série
+n'est désormais comptée que si son dossier existe, et `raise_on_failure` lève
+`DownloadIncomplete` après avoir téléchargé tout le reste.
+
+**3. Une passe reprise du corpus d'examens effaçait le manifeste.** Avec
+`skip_existing=True`, le manifeste réécrit ne contenait que les séries décodées par la
+passe en cours : ajouter une série à un corpus de 870 cas produisait un manifeste d'un
+cas, et le catalogue perdait les 869 autres. Montré par un test avant correction (le
+manifeste ne contenait plus que `series-late`), puis corrigé : les entrées des volumes
+sautés sont reportées, et un volume sans entrée (passe interrompue) est reconstruit.
+
+**Point ouvert résolu : les 152 normaux sur disque.** Les 150 patients du tirage avec
+graine sont tous entièrement sur disque ; les 2 en plus, DBT-P02655 et DBT-P03815, n'en
+font pas partie et n'ont chacun qu'une série (`rmlo`) sur 4 : des restes d'un
+téléchargement antérieur au tirage.
+
+**Écart de tests local / CI expliqué.** 222 tests en local contre 209 passés et 2 ignorés
+en CI : les 12 tests d'orchestration étaient ignorés en bloc faute de Prefect (1 « skip »),
+plus un test propre à Windows. Un job CI dédié installe désormais Prefect et fait tourner
+les tests des deux flows ; il vérifie d'abord que l'import fonctionne, pour qu'une
+dépendance manquante ne produise pas un job vert et vide.
+
+**Mesuré** : plan hors ligne en 10 s ; exécution réelle `--from preprocess` en 60 s,
+`Completed`, 36/36 tests dbt. 32 tests ajoutés — flow DBT 20, délai HTTP 5,
+téléchargements 5 (comptage des échecs, tirage des normaux, installation du délai),
+manifeste 2 — soit **254 tests** au total.
+
 ---
 
 ## Prochaines pistes pour l'étape 1
@@ -1033,7 +1158,7 @@ Applications 2023.
 | 2026-09-13 | Tables BCS-DBT téléchargeables, statut par vue, examens normaux téléchargés, appariement par jointure, corpus d'examens à deux classes, `examclf` mesuré (négatif) |
 | 2026-09-14 | Étape 2 retirée ; warm start, score relatif, mesures sans modèle (négatives) ; split test téléchargé |
 | 2026-09-15 | Point de fonctionnement publié ; code mort retiré ; paquet réparé ; écarts doc ↔ code corrigés |
-| 2026-09-16 | **P0 portfolio** : README réorienté data engineering, décisions d'architecture, licence MIT, citations TCIA, GIF de démo. **P1** : catalogue DuckDB puis migration dbt |
+| 2026-09-16 | **P0 portfolio** : README réorienté data engineering, décisions d'architecture, licence MIT, citations TCIA, GIF de démo, documentation unique en français. **P1** : catalogue DuckDB, migration dbt, flow Prefect DBT, délai sur les requêtes TCIA, trois défauts corrigés (§4.14) |
 
 ### Feuille de route « portfolio data engineering »
 
@@ -1042,8 +1167,9 @@ Applications 2023.
 | P0 | Présentation : README, schéma, décisions, licence, GIF | **Fait** |
 | P1 | Catalogue de métadonnées DuckDB/Parquet | **Fait** (§4.12) |
 | P1 | Modèles et tests dbt sur le catalogue | **Fait** (§4.13) |
-| P1 | Flow Prefect pour la chaîne DBT (tables → téléchargement → prétraitement → catalogue) | En cours |
-| P1 | Timeout sur les téléchargements TCIA | À faire |
+| P1 | Flow Prefect pour la chaîne DBT (tables → téléchargement → prétraitement → catalogue) | **Fait** (§4.14) |
+| P1 | Délai maximal sur les requêtes TCIA, échecs de téléchargement détectés | **Fait** (§4.14) |
+| P1 | Tests d'orchestration exécutés en CI | **Fait** (job `orchestration`) |
 | P1 | Stockage objet (MinIO) pour la couche brute | À faire |
 | P2 | Structure `src/`, découpage de `TransformData.py`, build Docker en CI, registre de modèles | À faire |
 | — | Détecteur supervisé par boîtes (piste 8) | Reporté : relève du ML, pas du portfolio data engineering |
@@ -1052,8 +1178,7 @@ Applications 2023.
 
 | Point | Détail |
 |---|---|
-| 3 patients cancer non téléchargés | DBT-P03621, DBT-P03628, DBT-P04596 (~0,5 Go) ; cause non établie |
-| 152 normaux sur disque au lieu de 150 | Non investigué |
+| 3 patients cancer non téléchargés | DBT-P03621, DBT-P03628, DBT-P04596 (~0,5 Go, 15 séries avec les 6 bénins) ; `python -m pipelines.dbt` les récupère ; cause d'origine non établie |
 | Bug NaN fp16 | Divergence repoussée à l'époque 15, non résolue ; checkpoint servi antérieur (P3) |
 | Manifeste DCE-MRI | `dce_mri_p2/` n'en a pas (antérieur à `lineage.py`) |
 | `output_dir` du manifeste DBT | Indique `dbt_join` alors que le dossier a été renommé en `dbt` |
@@ -1062,7 +1187,6 @@ Applications 2023.
 | Erreur `cudaErrorIllegalAddress` | Observée une fois sur `/demo/1`, non reproduite |
 | Registre de traitement RGPD | Une page à écrire : base légale, nature des données, finalité, conservation, sécurité |
 | Nom de produit et logo | À choisir |
-| Écart de tests local / CI | 222 tests en local, 211 collectés en CI (209 passés, 2 ignorés) : écart antérieur, non expliqué |
 
 ---
 
@@ -1082,6 +1206,7 @@ nombre de tests se recompte, il ne s'estime pas.
 | 2026-09-12 | Pastille « Confiance 100 % » (maximum par pixel constant) ; mesure « hors échantillon » annoncée sur un modèle ajusté sur 569/569 ; chiffres d'imagerie affichés sur `/biopsie` | Retirés de l'écran (P0), 9 tests de rendu |
 | 2026-09-15 | 202 tests annoncés, 176 réels ; backend `unet` documenté mais impossible ; checkpoint mal documenté ; « aucun manifeste » alors que deux existaient ; « ~80 Go » pour 138 Go | Corrigés |
 | 2026-09-16 | 176 tests annoncés, 198 réels ; « 0,76 s par volume » pour 0,825 s ; « ~110 ms » pour ~70 ms mesurés ; « ~200 Mo par patient » pour ~310 Mo ; taille d'image Docker jamais mesurée | Corrigés |
+| 2026-09-16 | « 222 tests » en local contre 211 en CI, noté « non expliqué » ; « 152 normaux, non investigué » | Expliqués (§4.14) : 12 tests d'orchestration sans Prefect + 1 test Windows ; 2 normaux hors tirage |
 | — | `models/dce_mri_p2_negfix/` nomme une expérience | Ouvert (le renommer casserait la démo) |
 
 ---
@@ -1128,13 +1253,15 @@ cliniques.
 ```bash
 pip install -e ".[dev]"
 ruff check .
-pytest                 # 222 tests en local, sans GPU ni jeu de données
+pytest                 # 254 tests en local, sans GPU ni jeu de données
 ```
 
-La [CI](.github/workflows/ci.yml) exécute ruff et pytest à chaque push et pull request,
-avec une installation volontairement étroite (PyTorch CPU, numpy, pandas, pydicom, flask,
-duckdb, dbt-duckdb) : ajouter un test qui importe un nouveau module impose de l'ajouter
-à la CI. La suite couvre les définitions de métriques, le contrat de stockage, la logique
+La [CI](.github/workflows/ci.yml) a deux jobs à chaque push et pull request : `check`
+(ruff + pytest, installation volontairement étroite : PyTorch CPU, numpy, pandas, pydicom,
+flask, duckdb, dbt-duckdb) et `orchestration` (Prefect + pandas, tests des deux flows).
+Ajouter un test qui importe un nouveau module impose de l'ajouter à la CI. Les tests qui
+demandent le client TCIA (`tests/test_extract_download.py`) ne tournent qu'en local :
+`tcia_utils` tire `idc-index`, `ipython` et `plotly`. La suite couvre les définitions de métriques, le contrat de stockage, la logique
 d'orchestration, le catalogue dbt, le rendu des pages, et vérifie que git **suit** bien
 les artefacts de la démo.
 
