@@ -75,6 +75,13 @@ DCE_MRI_PREPROCESSED_DIR = os.path.join(PREPROCESSED_DATA_DIR, "dce_mri_p2")
 DEMO_CASES_DIR = os.path.join(CURATED_DATA_DIR, "demo_cases")
 SLICE_BANK_DIR = os.path.join(CURATED_DATA_DIR, "slice_bank_p2")
 
+# The metadata catalogue (`python -m catalog build`): the annotation tables, what is on
+# disk, what each corpus holds and what the exam classifier scored, joined in one
+# DuckDB file. Rebuilt from the layers above in seconds, never edited by hand.
+CATALOG_DIR = os.path.join(CURATED_DATA_DIR, "catalog")
+CATALOG_DB = os.path.join(CATALOG_DIR, "catalog.duckdb")
+CATALOG_PARQUET_DIR = os.path.join(CATALOG_DIR, "parquet")
+
 # --- Models: checkpoints and the metrics that justify them ------------------
 # The DCE-MRI run and the slice classifier are versioned (see .gitignore): the demo
 # has to work from `git clone` + `pip install`, with no dataset download.
@@ -89,6 +96,10 @@ SLICE_CLF_CKPT = os.path.join(SLICE_CLF_DIR, "sliceclf_best.pt")
 # serving backend was removed (2026-09-15), and a path constant no reader uses is a
 # claim that a model is available.
 DBT_MODEL_DIR = os.path.join(MODELS_DIR, "dbt")
+
+# Out-of-fold patient scores of the exam classifier (`imaging.examclf`), versioned.
+EXAMCLF_DIR = os.path.join(MODELS_DIR, "examclf")
+EXAMCLF_PREDICTIONS = os.path.join(EXAMCLF_DIR, "cv_predictions.csv")
 
 
 def ensure_dirs(*dirs):

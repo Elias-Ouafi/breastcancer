@@ -28,6 +28,7 @@ dependencies = [
     "torch>=2.2",
     "python-gdcm>=3.0",
     "Flask>=3.0",
+    "duckdb>=1.1",
 ]
 
 [project.optional-dependencies]
@@ -65,7 +66,11 @@ py-modules = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["app*", "imaging*", "pipelines*"]
+include = ["app*", "imaging*", "pipelines*", "catalog*"]
+
+[tool.setuptools.package-data]
+# The catalogue's models and checks are SQL files read at run time, not Python modules.
+catalog = ["sql/*/*.sql", "queries/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "imaging"]
