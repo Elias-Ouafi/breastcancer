@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml/badge.svg)](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
-![Tests : 222](https://img.shields.io/badge/tests-222-brightgreen)
+![Tests : 254](https://img.shields.io/badge/tests-254-brightgreen)
 [![Licence : MIT](https://img.shields.io/badge/licence-MIT-lightgrey)](LICENSE)
 
 > **Research Use Only — Not for diagnostic use.** Outil de recherche, pas un dispositif
@@ -42,7 +42,8 @@ la projection d'intensité maximale.*
 
 | Brique | État |
 |---|---|
-| **Pipeline de données** (collecte, transformation, validation, lignage, orchestration) | Opérationnel : 5 060 patients catalogués, deux corpus construits (260 séries annotées, 870 examens à deux classes), 0 avertissement de validation |
+| **Pipeline de données** (collecte, transformation, validation, lignage) | Opérationnel : 5 060 patients catalogués, deux corpus construits (260 séries annotées, 870 examens à deux classes), 0 avertissement de validation |
+| **Orchestration** (Prefect) | Opérationnelle : deux flows ; la chaîne DBT calcule hors ligne ce qui manque et n'exécute que ça ; téléchargements protégés par un délai maximal et repris en cas d'échec |
 | **Catalogue de métadonnées** (DuckDB + dbt) | Opérationnel : 22 032 séries, 36 tests de qualité qui passent, reconstruit en ~10 s |
 | **Localisation de lésion** (IRM, modèle de la démo) | Fonctionne **quand on lui montre la bonne coupe** : lésion trouvée dans 88 % des cas [IC 82–93 %] sur 28 patients de test |
 | **Détection du cancer au niveau de l'examen** (DBT) | **Ne fonctionne pas, et c'est publié** : ROC-AUC 0,457 [0,369–0,544] sur 272 patients, soit le hasard |
@@ -56,8 +57,8 @@ Au seuil visé, la valeur prédictive positive (20,4 %) égale la prévalence (2
 la réponse du modèle n'apporte aucune information. La piste suivante est un détecteur
 supervisé par les boîtes de lésion, en résolution native.
 
-**Priorité actuelle : le data engineering** — orchestration Prefect de la chaîne DBT,
-stockage objet, robustesse des téléchargements.
+**Priorité actuelle : le data engineering** — stockage objet (MinIO) pour la couche
+brute, puis structure du code (`src/`) et build Docker en CI.
 
 ## Architecture
 
@@ -129,11 +130,12 @@ Ou avec Docker seul :
 docker compose up --build
 ```
 
-Catalogue de métadonnées (nécessite les tables et les données téléchargées) :
+Chaîne de données DBT et catalogue (nécessitent les tables et les données téléchargées) :
 
 ```bash
-pip install -e ".[catalog]"
-python -m catalog build
+pip install -e ".[orchestration,catalog]"
+python -m pipelines.dbt --dry-run     # ce qui manque, calculé hors ligne
+python -m pipelines.dbt               # télécharge, prétraite, catalogue ce qui manque
 python -m catalog query --file catalog/queries/01_data_funnel.sql
 ```
 
@@ -150,6 +152,9 @@ python -m catalog query --file catalog/queries/01_data_funnel.sql
   en défaut sur des données où l'erreur est injectée.
 - **Une migration vérifiée** : le passage du catalogue à dbt a été validé par comparaison
   ligne à ligne avec l'ancienne version.
+- **Une orchestration qui décide depuis un plan** : chaque étape compare ce qui devrait
+  exister (d'après les tables de la collection) à ce qui existe, au lieu de sauter une
+  étape dès que son dossier existe — ce qui laisserait passer un corpus périmé.
 
 ## Stack
 
@@ -164,7 +169,8 @@ TransformData.py    DICOM → volumes normalisés + masques, jointure boîte/sé
 validation.py       contrôles de schéma au point unique d'écriture
 lineage.py          manifest.json par dossier prétraité
 config.py           tous les chemins, définis une fois
-pipelines/          flow Prefect de la chaîne IRM
+pipelines/          flows Prefect : chaîne DBT (planifiée hors ligne) et chaîne IRM
+http_timeouts.py    délai maximal sur les requêtes du client TCIA
 catalog/            catalogue de métadonnées : chargement, projet dbt, requêtes d'exemple
 imaging/            jeux de données, banques, U-Net, classifieurs, métriques, évaluation
 inference.py        chargement des modèles et prédiction pour l'app

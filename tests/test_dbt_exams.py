@@ -321,6 +321,43 @@ def test_a_second_pass_skips_what_is_already_written(corpus):
     assert lineage.read_manifest(out)["parameters"]["skipped_existing"] == 2
 
 
+def test_a_resumed_pass_keeps_every_case_in_the_manifest(corpus):
+    """The manifest describes the corpus, not the last run.
+
+    A resumed pass used to write a manifest holding only the series it had just
+    decoded, so adding one series to an 870-case corpus left a manifest of one case --
+    and the catalogue, which reads the manifest, lost the other 869.
+    """
+    root, labels, paths, boxes, out = corpus
+    run(corpus)
+    write_series(root, "series-late", "DBT-P00300", view="rmlo")
+    pd.concat([pd.read_csv(labels), pd.read_csv(write_labels(
+        os.path.join(os.path.dirname(labels), "late.csv"), [("DBT-P00300", "rmlo", "normal")]))]
+              ).to_csv(labels, index=False)
+    pd.concat([pd.read_csv(paths), pd.read_csv(write_file_paths(
+        os.path.join(os.path.dirname(paths), "late_paths.csv"),
+        [("DBT-P00300", "rmlo", "series-late")]))]).to_csv(paths, index=False)
+
+    (saved, skipped), _ = run(corpus)
+
+    assert (saved, skipped) == (1, 2)
+    cases = lineage.read_manifest(out)["cases"]
+    assert set(cases) == {"series-normal", "series-cancer", "series-late"}
+    assert cases["series-cancer"]["exam_status"] == "cancer"  # carried over, not re-guessed
+
+
+def test_a_volume_without_a_manifest_entry_is_processed_again(corpus):
+    """A .npz with no manifest entry comes from an interrupted pass: its provenance is
+    unknown, so it is rebuilt rather than trusted."""
+    (_first, _), out = run(corpus)
+    os.remove(os.path.join(out, lineage.MANIFEST_NAME))
+
+    (saved, skipped), _ = run(corpus)
+
+    assert (saved, skipped) == (2, 0)
+    assert len(lineage.read_manifest(out)["cases"]) == 2
+
+
 def test_a_series_absent_from_the_inventory_is_skipped(tmp_path, caplog):
     root = tmp_path / "tcia"
     write_series(str(root), "s", "DBT-P1", view="lcc")

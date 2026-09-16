@@ -42,3 +42,30 @@ jobs:
         # demo-asset tests shell out to git, so they run from the checkout as-is
         # rather than against an installed copy.
         run: python -m pytest
+
+  # The flows' decisions (which stage runs, what is stale) are tested with Prefect
+  # installed. The job above does not install it -- Prefect is an optional extra -- so
+  # its test files are skipped there, and until 2026-09-16 that meant they ran nowhere
+  # but on a developer's machine: the 13 tests between the local and CI counts were 12
+  # of these plus one Windows-only test. A separate job keeps the main one lean.
+  orchestration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install orchestration test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install prefect pandas pytest
+
+      # importorskip would turn a missing dependency into a green, empty job.
+      - name: Check the tests will not be skipped
+        run: python -c "import prefect, pandas"
+
+      - name: Test the flows
+        run: python -m pytest tests/test_pipeline_dce_mri.py tests/test_pipeline_dbt.py -rs

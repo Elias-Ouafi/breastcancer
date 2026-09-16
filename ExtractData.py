@@ -6,9 +6,25 @@ import pydicom
 from tcia_utils import nbia
 
 import config
+import http_timeouts
 from logging_setup import setup_logging
 
 log = logging.getLogger(__name__)
+
+# tcia_utils sends every request without a timeout, so one stalled response hangs a
+# download forever (2 h 30 on 2026-09-14). Installed at import so every download path
+# of this module inherits it; see http_timeouts for why a socket default does not work.
+http_timeouts.install(nbia)
+
+
+class DownloadIncomplete(RuntimeError):
+    """Some series failed to download. Raised only when asked (``raise_on_failure``),
+    so an orchestrator can retry: every series already on disk is skipped next time."""
+
+    def __init__(self, failed):
+        self.failed = list(failed)
+        super().__init__(f"{len(self.failed)} series failed to download: "
+                         + ", ".join(self.failed[:5]) + ("..." if len(self.failed) > 5 else ""))
 
 # Optional dependencies used only by specific extractors (plotting, table fetches).
 # Imported lazily so the DBT download path works without the full stack installed.
@@ -344,7 +360,8 @@ def download_dbt_tables(dest_dir=None, overwrite=False, base_url=DBT_TABLE_BASE_
 
 
 def download_annotated_dbt_series(boxes_csv, max_patients=3, download_dir=DOWNLOAD_DIR,
-                                  collection="Breast-Cancer-Screening-DBT", max_gb=None):
+                                  collection="Breast-Cancer-Screening-DBT", max_gb=None,
+                                  max_gb_added=None, raise_on_failure=False):
     """Download the DBT series for the first `max_patients` annotated patients.
 
     Most BCS-DBT volumes are normal (no lesion); only patients listed in the boxes
@@ -362,12 +379,14 @@ def download_annotated_dbt_series(boxes_csv, max_patients=3, download_dir=DOWNLO
     patients = list(dict.fromkeys(boxes["PatientID"].tolist()))[:max_patients]
     log.info(f"Annotated patients to fetch: {len(patients)} (cap: {max_gb} GB)")
     return download_dbt_series_for(patients, download_dir=download_dir,
-                                   collection=collection, max_gb=max_gb)
+                                   collection=collection, max_gb=max_gb,
+                                   max_gb_added=max_gb_added,
+                                   raise_on_failure=raise_on_failure)
 
 
 def download_dbt_series_for(patients, download_dir=DOWNLOAD_DIR,
                             collection="Breast-Cancer-Screening-DBT",
-                            max_gb=None, max_gb_added=None):
+                            max_gb=None, max_gb_added=None, raise_on_failure=False):
     """Download every series of each patient in `patients`, series by series.
 
     Two different caps, because they answer different questions. `max_gb` is the size
@@ -378,6 +397,13 @@ def download_dbt_series_for(patients, download_dir=DOWNLOAD_DIR,
 
     The size is measured once and then tracked by the bytes each series writes: walking
     the tree per series meant re-reading tens of thousands of files on every step.
+
+    **A series counts as downloaded only if its folder exists afterwards.**
+    ``nbia.downloadSeries`` catches every exception itself (a timeout included) and
+    returns normally, so this function used to count a failed series as a success and
+    mark it as present. With ``raise_on_failure``, the run finishes what it can and then
+    raises :class:`DownloadIncomplete`, which is what lets an orchestrator retry.
+
     Returns the number of new series downloaded.
     """
     os.makedirs(download_dir, exist_ok=True)
@@ -400,6 +426,7 @@ def download_dbt_series_for(patients, download_dir=DOWNLOAD_DIR,
         return False
 
     downloaded = 0
+    failed = []
     for pid in patients:
         if over_budget():
             break
@@ -407,6 +434,11 @@ def download_dbt_series_for(patients, download_dir=DOWNLOAD_DIR,
             series = nbia.getSeries(collection=collection, patientId=pid)
         except Exception as e:
             log.error(f"getSeries failed for {pid}: {e}")
+            failed.append(pid)
+            continue
+        if not series:  # tcia_utils returns None on an HTTP error rather than raising
+            log.error(f"getSeries returned nothing for {pid}")
+            failed.append(pid)
             continue
         for s in series:
             if over_budget():
@@ -417,22 +449,48 @@ def download_dbt_series_for(patients, download_dir=DOWNLOAD_DIR,
             try:
                 log.info(f"{pid} series {uid} -> {download_dir}")
                 nbia.downloadSeries([s], path=download_dir)
-                downloaded += 1
-                existing.add(uid)
-                total_bytes += dir_size_bytes(os.path.join(download_dir, uid))
             except Exception as e:
                 log.error(f"download {uid} failed: {e}")
+                failed.append(uid)
+                continue
+            if not os.path.isdir(os.path.join(download_dir, uid)):
+                log.error(f"download {uid} failed: no folder written (see tcia_utils log)")
+                failed.append(uid)
+                continue
+            downloaded += 1
+            existing.add(uid)
+            total_bytes += dir_size_bytes(os.path.join(download_dir, uid))
 
     log.info(f"Downloaded {downloaded} new series into {download_dir} "
              f"({(total_bytes - start_bytes) / 1024 ** 3:.1f} GB added, "
-             f"{total_bytes / 1024 ** 3:.1f} GB total).")
+             f"{total_bytes / 1024 ** 3:.1f} GB total), {len(failed)} failed.")
+    if failed and raise_on_failure:
+        raise DownloadIncomplete(failed)
     return downloaded
+
+
+def choose_normal_patients(labels_csv=None, max_patients=150, seed=0):
+    """The normal patients `download_normal_dbt_series` fetches, without fetching them.
+
+    Split out so a plan can be computed offline -- which series should be on disk --
+    and compared with what is, before deciding whether a download is needed at all.
+    """
+    import random
+
+    import TransformData
+
+    labels_csv = labels_csv or [config.DBT_LABELS_TRAIN, config.DBT_LABELS_VALIDATION,
+                                config.DBT_LABELS_TEST]
+    status = TransformData.dbt_patient_status(labels_csv)
+    normals = sorted(pid for pid, value in status.items() if value == "normal")
+    random.Random(seed).shuffle(normals)
+    return normals[:max_patients], len(normals)
 
 
 def download_normal_dbt_series(labels_csv=None, max_patients=150,
                                download_dir=DOWNLOAD_DIR,
                                collection="Breast-Cancer-Screening-DBT",
-                               max_gb_added=50, seed=0):
+                               max_gb_added=50, seed=0, raise_on_failure=False):
     """Download the series of patients whose every view is labelled **normal**.
 
     This is the half of the corpus the project never had. Everything downloaded so far
@@ -450,20 +508,12 @@ def download_normal_dbt_series(labels_csv=None, max_patients=150,
 
     Returns the number of new series downloaded.
     """
-    import random
-
-    import TransformData
-
-    labels_csv = labels_csv or [config.DBT_LABELS_TRAIN, config.DBT_LABELS_VALIDATION,
-                                config.DBT_LABELS_TEST]
-    status = TransformData.dbt_patient_status(labels_csv)
-    normals = sorted(pid for pid, value in status.items() if value == "normal")
-    random.Random(seed).shuffle(normals)
-    chosen = normals[:max_patients]
-    log.info(f"Normal patients available: {len(normals)}; fetching {len(chosen)} "
+    chosen, available = choose_normal_patients(labels_csv, max_patients, seed)
+    log.info(f"Normal patients available: {available}; fetching {len(chosen)} "
              f"(cap: {max_gb_added} GB added, seed {seed}).")
     return download_dbt_series_for(chosen, download_dir=download_dir,
-                                   collection=collection, max_gb_added=max_gb_added)
+                                   collection=collection, max_gb_added=max_gb_added,
+                                   raise_on_failure=raise_on_failure)
 
 
 def download_dce_mri_series(patient_ids=None, max_patients=10,
