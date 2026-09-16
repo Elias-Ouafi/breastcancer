@@ -6,7 +6,7 @@ What this is, and why it could not exist before
 -------------------------------------------------
 Every model this project trained on DBT so far was scored on a corpus where 100 % of
 patients carried a cancer -- annotation-driven preprocessing never wrote a negative,
-so a specificity, a PPV or a patient-level ROC-AUC were not measurable at all (plan.md,
+so a specificity, a PPV or a patient-level ROC-AUC were not measurable at all (docs/journal.md,
 "Cible chiffrée"). ``TransformData.preprocess_dbt_exams`` is what changed that: it
 labels a series from the per-view status table, so a series with no box is a negative
 rather than a skip, and both classes share one geometry. This module is the first
@@ -31,7 +31,7 @@ a negative bag, every sampled slice is pushed down, because a negative bag truly
 no positive instance to spare.
 
 The encoder is ``sliceclf.SliceClassifier``, reused rather than re-derived: its
-GroupNorm stack, not BatchNorm (see plan.md §4.1 on why BatchNorm collapses here), and
+GroupNorm stack, not BatchNorm (see docs/journal.md §4.1 on why BatchNorm collapses here), and
 its avg+max pooled head already separate "how much of the slice looks abnormal" from
 "is there one abnormal spot" -- exactly the two things a single suspicious region needs.
 224 is chosen for the bank's ``image_size`` because it is ``32 * 7``: the five stride-2
@@ -39,7 +39,7 @@ pooling stages divide it with no rounding.
 
 Why cross-validation, again
 ----------------------------
-89 cancer patients exist in the whole BCS-DBT collection (plan.md); this corpus holds
+89 cancer patients exist in the whole BCS-DBT collection (docs/journal.md); this corpus holds
 56 of them, and none are held back for tuning here. A single 15 % test split would
 leave roughly 8-9 cancer patients, an interval wide enough to be compatible with
 chance. Pooling out-of-fold predictions scores every patient exactly once, with a
@@ -47,17 +47,17 @@ model that never saw them -- coverage, not independence, since the folds share a
 corpus and a hyper-parameter choice. No checkpoint or epoch is selected on held-out
 patients: the epoch budget is fixed in advance and the last epoch is scored -- the
 project has already published one metric that skipped this discipline and paid for it
-in an optimistic number (plan.md, "Écarts doc <-> code").
+in an optimistic number (docs/journal.md, "Écarts doc <-> code").
 
 Patient level, not exam level
 -------------------------------
 A patient can contribute up to four views (exams). The score reported is per
-**patient** -- the level plan.md's target is stated at -- taking the max over that
+**patient** -- the level docs/journal.md's target is stated at -- taking the max over that
 patient's exam scores (one suspicious view is enough to flag the patient), and the
 label is 1 if any of the patient's exams is a cancer.
 
 Two levers on top of that, both off by default so the published measurements stay
-reproducible (plan.md, "Prochaines pistes pour l'étape 1")
+reproducible (docs/journal.md, "Prochaines pistes pour l'étape 1")
 ------------------------------------------------------------------------------------
 ``--warm-start-epochs N`` trains the encoder on the denser slice-level question
 first -- "is a lesion visible on this slice?", from the boxes the bank already
@@ -159,7 +159,7 @@ def bag_logit(logits, k=1, relative=False):
     with slices it does not have.
 
     ``relative`` subtracts the bag's own median before that, which is not a tweak but
-    the fix for a measured design error (plan.md §4.9). The quantity that separates a
+    the fix for a measured design error (docs/journal.md §4.9). The quantity that separates a
     lesion-bearing slice from its neighbours is *relative to the exam it belongs to*:
     the 99th percentile of a slice ranks painted slices at 0.736 AUC **within** an
     exam and 0.532 **pooled across** exams -- chance. Absolute per-slice scores are
@@ -253,7 +253,7 @@ class WarmStartSliceDataset(Dataset):
 def warm_start_encoder(model, bank, train_exams, args, device, fold):
     """Train ``model`` on "is a lesion visible on this slice?" before the MIL phase.
 
-    Why: plan.md §4.7 measured that the MIL loss does not fall in *any* of the five
+    Why: docs/journal.md §4.7 measured that the MIL loss does not fall in *any* of the five
     folds -- it oscillates at its starting level for all 25 epochs. A from-scratch
     encoder has to discover what a lesion looks like from 107 positive bags whose
     signal is ~5 slices deep out of 68, which is a very thin gradient to learn an
@@ -581,7 +581,7 @@ def build_arg_parser():
     p.add_argument("--bag-relative", action="store_true",
                    help="Score a bag by how far its top slice stands out from its own "
                         "median, not by an absolute logit: per-slice scores are not "
-                        "comparable across exams (plan.md 4.9).")
+                        "comparable across exams (docs/journal.md 4.9).")
     p.add_argument("--top-k", type=int, default=1,
                    help="Slices averaged to score a bag: 1 is the max this head "
                         "started with, >1 averages the k most suspicious slices.")

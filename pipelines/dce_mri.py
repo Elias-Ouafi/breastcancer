@@ -113,7 +113,7 @@ def preprocess(raw_dir, boxes_path, force=False):
 
     logger.info("Preprocessing %s -> %s (post-contrast phase 2, full frame)", raw_dir, out_dir)
     # crop=False is deliberate: cropping to the lesion ROI made the task artificially
-    # easy and produced the confidence-always-1.0 bug (plan.md section 4.2).
+    # easy and produced the confidence-always-1.0 bug (docs/journal.md section 4.2).
     preprocess_dce_mri_with_boxes(root_dir=raw_dir, boxes_path=boxes_path,
                                   output_dir=out_dir, post_phase_rank=2, crop=False)
     logger.info("Wrote %d volumes.", _count_npz(out_dir))

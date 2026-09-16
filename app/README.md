@@ -37,11 +37,11 @@ Two backends exist:
 | Backend | Selected by | What it does |
 |---------|-------------|--------------|
 | `mock` (default) | — | Fabricates a plausible result; ignores pixels. |
-| `dce_mri` | `MRI_APP_BACKEND=dce_mri` | DCE-MRI lesion localisation via `inference.predict_dce_mri` (checkpoint `models/dce_mri_p2_negfix/unet_best.pt` -- 2nd post-contrast pass, scratch GroupNorm U-Net, 186-patient sample; see `plan.md` §4.1), scored on the post-minus-pre subtraction volume. |
+| `dce_mri` | `MRI_APP_BACKEND=dce_mri` | DCE-MRI lesion localisation via `inference.predict_dce_mri` (checkpoint `models/dce_mri_p2_negfix/unet_best.pt` -- 2nd post-contrast pass, scratch GroupNorm U-Net, 186-patient sample; see `docs/journal.md` §4.1), scored on the post-minus-pre subtraction volume. |
 
 A third backend, `unet`, served a DBT checkpoint at `models/dbt/unet_best.pt`. It was
 removed on 2026-09-15: that checkpoint had been overwritten by a smoke test
-(`plan.md` §4.1) and never rebuilt, so the row above promised a backend that could not
+(`docs/journal.md` §4.1) and never rebuilt, so the row above promised a backend that could not
 start. See `inference.py`'s module docstring for why it was not simply re-pointed.
 
 To go live, set one env var (the checkpoint must exist and the upload must be a
@@ -53,7 +53,7 @@ preprocessed `.npz` volume, produced by
 $env:MRI_APP_BACKEND = "dce_mri"; python -m app.server
 ```
 
-**Known limitation (`dce_mri` backend, see `plan.md` §4.2):** automatic slice
+**Known limitation (`dce_mri` backend, see `docs/journal.md` §4.2):** automatic slice
 selection on a raw full-volume upload does not reliably find the lesion yet
 (verified 0/186 on held-out patients — the model segments well once shown the right
 slice, it just can't find that slice unassisted). For a demo that works every time,

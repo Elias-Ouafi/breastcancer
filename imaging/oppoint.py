@@ -3,7 +3,7 @@
 `imaging.examclf` cross-validates and reports an AUC. An AUC is not a decision: a tool
 that answers "is there a cancer in this exam?" answers at **one threshold**, and the
 pair it must be judged on is the one the national screening programme publishes --
-sensitivity 82.8 %, specificity 91.4 % (plan.md, "Cible chiffrée"). This module turns
+sensitivity 82.8 %, specificity 91.4 % (docs/journal.md, "Cible chiffrée"). This module turns
 the stored out-of-fold predictions into that pair, with its confidence intervals and
 the prevalence PPV was measured at.
 
@@ -57,7 +57,7 @@ from logging_setup import setup_logging  # noqa: E402
 log = logging.getLogger(__name__)
 
 # Santé publique France, organised screening 50-74. Not a round number chosen here:
-# see plan.md, "Cible chiffrée et voie retenue".
+# see docs/journal.md, "Cible chiffrée et voie retenue".
 TARGET_SENSITIVITY = 0.828
 TARGET_SPECIFICITY = 0.914
 
@@ -228,7 +228,7 @@ TP {c['tp']} · FP {c['fp']} · TN {c['tn']} · FN {c['fn']}
 
 À la sensibilité réellement atteinte ({_pct(honest['sensitivity'])}), **le hasard donnerait {_pct(chance['specificity_at_achieved_sensitivity'])} de spécificité** — un classifieur aléatoire échange l'une contre l'autre exactement. Le modèle en donne {_pct(honest['specificity'])} : {'au-dessus' if chance['beats_chance'] else '**en dessous**'}.
 
-La cible de sensibilité n'est pas atteinte ({_pct(honest['sensitivity'])} contre {_pct(report['target']['sensitivity'])}) : le seuil calé sur quatre plis ne transporte pas jusqu'au cinquième, ce qui est en soi une mesure — celle d'un score dont l'échelle ne veut rien dire d'un groupe de patients à l'autre (plan.md §4.9).
+La cible de sensibilité n'est pas atteinte ({_pct(honest['sensitivity'])} contre {_pct(report['target']['sensitivity'])}) : le seuil calé sur quatre plis ne transporte pas jusqu'au cinquième, ce qui est en soi une mesure — celle d'un score dont l'échelle ne veut rien dire d'un groupe de patients à l'autre (docs/journal.md §4.9).
 
 ## Seuil naïf, pour comparaison
 
@@ -261,7 +261,7 @@ def build_arg_parser():
     p.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     p.add_argument("--target-sensitivity", type=float, default=TARGET_SENSITIVITY,
                    help="The sensitivity the threshold is fixed at, not an accuracy to "
-                        "maximise (plan.md, 'Cible chiffrée').")
+                        "maximise (docs/journal.md, 'Cible chiffrée').")
     p.add_argument("--bootstrap", type=int, default=10000)
     p.add_argument("--seed", type=int, default=42)
     return p

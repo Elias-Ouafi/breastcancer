@@ -1,4 +1,8 @@
-# plan.md — décisions de conception et journal des mesures
+# Journal — décisions de conception et mesures
+
+> Ce fichier s'appelait `plan.md`, à la racine, jusqu'au 2026-09-16. Les entrées datées
+> d'avant cette date qui écrivent « plan.md » désignent ce document. Les décisions
+> principales en sont extraites en anglais, une par fichier, dans [adr/](adr/).
 
 > **Outil visé** : une seule étape — un examen de dépistage (DBT ou IRM) en entrée,
 > dire s'il y a un cancer. **L'étape 2 (malin/bénin depuis une biopsie) a été retirée
@@ -13,7 +17,8 @@
 Ce document garde ce qui ne se déduit pas du code : la charte graphique appliquée à
 l'app (Partie 3) et le journal daté de ce qui a été mesuré, y compris les échecs
 (§4.1 à §4.3). Le reste — comment lancer la démo, où vivent les données, comment
-tourne le pipeline — est dans [README.md](README.md), au plus près du code.
+tourne le pipeline — est dans [README.md](../README.md) et [pipeline.md](pipeline.md),
+au plus près du code.
 
 ## Retrait de l'étape 2, focus exclusif sur l'étape 1 (2026-09-14)
 
