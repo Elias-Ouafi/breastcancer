@@ -1,6 +1,6 @@
 # 0009 — A DuckDB metadata catalogue with SQL layers and SQL checks
 
-**Status:** accepted · **In effect:** 2026-09-16 · **Details:** [catalog.md](../catalog.md)
+**Status:** accepted, transformation layer refined by [0010](0010-dbt-for-the-catalogue-transformations.md) (dbt) · **In effect:** 2026-09-16 · **Details:** [catalog.md](../catalog.md)
 
 ## Context
 

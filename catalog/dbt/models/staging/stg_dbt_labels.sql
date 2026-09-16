@@ -3,7 +3,6 @@
 -- `status` is the view's worst flag, in the order TransformData.DBT_STATUS_ORDER uses
 -- (cancer > benign > actionable > normal). A row with no flag set gets NULL rather
 -- than a guess: an all-zero row is not evidence that the view is normal.
-CREATE OR REPLACE VIEW stg.dbt_labels AS
 SELECT
     trim(PatientID)                                            AS patient_id,
     trim(StudyUID)                                             AS study_uid,
@@ -16,4 +15,4 @@ SELECT
         WHEN Normal = 1     THEN 'normal'
     END                                                        AS status,
     (Normal + Actionable + Benign + Cancer)::INTEGER           AS n_flags
-FROM raw.dbt_labels;
+FROM {{ source('raw', 'dbt_labels') }}

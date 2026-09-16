@@ -3,7 +3,6 @@
 --
 -- Grain: patient_id. `split` is unique per patient in BCS-DBT (checked by
 -- qa.patient_single_split); any_value would hide a violation, so the check exists.
-CREATE OR REPLACE TABLE mart.dim_patient AS
 WITH per_patient AS (
     SELECT
         patient_id,
@@ -22,7 +21,7 @@ WITH per_patient AS (
         round(coalesce(sum(disk_bytes), 0) / 1e9, 3)          AS disk_gb,
         count(*) FILTER (WHERE in_lesion_corpus)              AS n_series_in_lesion_corpus,
         count(*) FILTER (WHERE in_exam_corpus)                AS n_series_in_exam_corpus
-    FROM mart.fct_series
+    FROM {{ ref('fct_series') }}
     GROUP BY patient_id
 )
 SELECT
@@ -31,5 +30,5 @@ SELECT
     pr.score                               AS examclf_score,
     pr.fold                                AS examclf_fold
 FROM per_patient AS p
-LEFT JOIN stg.examclf_predictions AS pr
-    USING (patient_id);
+LEFT JOIN {{ ref('stg_examclf_predictions') }} AS pr
+    USING (patient_id)

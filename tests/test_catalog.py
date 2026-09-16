@@ -1,9 +1,10 @@
-"""The metadata catalogue, built from miniature BCS-DBT tables.
+"""The metadata catalogue, built from miniature BCS-DBT tables through the real dbt project.
 
-The real build passes all fourteen checks, which proves nothing about the checks: a
-query that can never return a row passes too. So each error-severity check that
-guards a label is shown failing here on a fixture with exactly that defect injected,
-and the marts are checked against counts worked out by hand.
+The real build passes all 36 dbt tests, which proves nothing about the tests: a query
+that can never return a row passes too. So each singular test that guards a label is
+shown failing here on a fixture with exactly that defect injected, one generic grain
+test is shown failing on a duplicated key, and the marts are checked against counts
+worked out by hand.
 """
 from __future__ import annotations
 
@@ -247,6 +248,30 @@ def test_a_failed_build_leaves_the_previous_catalogue_intact(tmp_path):
     with duckdb.connect(db, read_only=True) as con:
         assert con.execute("SELECT count(*) FROM mart.fct_series").fetchone() == (6,)
     assert [f for f in os.listdir(tmp_path) if f.endswith(".duckdb")] == ["catalog.duckdb"]
+    assert not [f for f in os.listdir(tmp_path) if f.startswith(".building-")]
+
+
+def test_staging_views_still_bind_after_the_catalogue_is_moved_into_place(tmp_path):
+    """dbt-duckdb qualifies every view with the database name, which DuckDB takes from
+    the file stem. A catalogue built under a temporary file name kept views pointing at
+    that name once renamed, and every one of them failed to bind."""
+    _, con = _build(tmp_path)
+    views = con.execute("SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'stg' AND table_type = 'VIEW'").fetchall()
+    assert len(views) == 7
+    for (view,) in views:
+        con.execute(f"SELECT count(*) FROM stg.{view}").fetchone()
+    con.close()
+
+
+def test_a_generic_dbt_test_fails_on_a_duplicated_key(tmp_path):
+    """The grain tests declared in YAML must be able to fail, like the singular ones."""
+    sources = _make_sources(tmp_path)
+    with open(sources.labels[0], "a", encoding="utf-8", newline="\n") as fh:
+        fh.write("P1,S1,lcc,0,0,0,1\n")  # the same (patient, study, view) twice
+    result = build(db_path=str(tmp_path / "c.duckdb"), sources=sources, parquet_dir=None)
+    failing = {c.name for c in result.failed_errors}
+    assert "unique_stg_dbt_labels_patient_id_study_uid_view" in failing
 
 
 def test_marts_are_exported_to_parquet(tmp_path):

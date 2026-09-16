@@ -2,20 +2,22 @@
 
 A single DuckDB file that puts together everything *about* the DBT data: the
 collection's 9 annotation tables, which series are on disk, what each preprocessed
-corpus holds, and how the exam classifier scored each patient. It is queried in SQL
-and checked by 14 data-quality rules each time it is built.
+corpus holds, and how the exam classifier scored each patient. It is queried in SQL.
+Its transformations are a **dbt project**, and each build runs 36 dbt tests on it.
 
 ```bash
-pip install -e .                   # duckdb is a base dependency
-python -m catalog build            # ~4 s on the full collection
+pip install -e ".[catalog]"        # duckdb + dbt-duckdb
+python -m catalog build            # ~10 s on the full collection
 python -m catalog checks --all
 python -m catalog query "SELECT status, count(*) FROM mart.dim_patient GROUP BY ALL"
 python -m catalog query --file catalog/queries/01_data_funnel.sql
+python -m catalog docs             # dbt documentation site, lineage graph included
 ```
 
-The catalogue is written to `data/curated_data/catalog/catalog.duckdb` (8 MB), with each
-mart table also exported to Parquet under `parquet/`. The folder is derived and
-gitignored: deleting it loses nothing.
+The catalogue is written to `data/curated_data/catalog/catalog.duckdb` (7.6 MB). Each
+mart table is also exported to Parquet under `parquet/`, and dbt's artefacts (manifest,
+run results, docs site) go to `dbt_target/`. The whole folder is derived and gitignored:
+deleting it loses nothing.
 
 ## Why it exists
 
@@ -23,66 +25,51 @@ Before the catalogue, "how many cancer patients of the validation split are down
 and are they all in the exam corpus?" meant loading three CSVs, two manifests and a
 directory listing into pandas and writing the join again. Each answer was a one-off
 script, and the joins were never checked. Now it is a single query against tables whose
-consistency is verified at every build. Why DuckDB and not another tool:
-[ADR 0009](adr/0009-duckdb-metadata-catalogue.md).
+consistency is tested at every build. Why DuckDB: [ADR 0009](adr/0009-duckdb-metadata-catalogue.md).
+Why dbt for the transformations: [ADR 0010](adr/0010-dbt-for-the-catalogue-transformations.md).
+
+## How a build runs
+
+| Step | Tool | What happens |
+|---|---|---|
+| 1. Load `raw` | Python ([catalog/build.py](../catalog/build.py)) | The part dbt cannot do: pool CSVs whose schemas differ, scan the download directory with `stat`, flatten the JSON manifests |
+| 2. `dbt run` | dbt ([catalog/dbt/](../catalog/dbt/)) | Builds the `stg` views and the `mart` tables |
+| 3. `dbt test` | dbt | Runs 25 generic tests (grain, not null, accepted values, relationships) and 11 singular tests (domain rules), and keeps every test's offending rows in `qa` |
+| 4. Record and export | Python | Writes `qa.check_results` and `main.build_info`, exports the marts to Parquet, and moves the file into place |
+
+`dbt run` and `dbt test` run separately on purpose. `dbt build` skips a model whose
+upstream test failed, which would hide exactly the tables needed to investigate the
+failure.
+
+The build writes into a temporary directory, under the final file name, and moves the
+file into place only once every step has succeeded. A failed build therefore leaves the
+previous catalogue intact.
+
+**The file name matters.** dbt-duckdb qualifies every view with the database name, which
+DuckDB takes from the file stem (`"catalog".raw.dbt_labels`). An earlier version built
+into `tmpXXXX.duckdb` and renamed it afterwards: every `stg` view then failed to bind. A
+test now covers this.
 
 ## Layers
 
-```mermaid
-flowchart LR
-    subgraph RAW["raw — as published"]
-        L[("dbt_labels<br/>22,032 rows")]
-        B[("dbt_boxes<br/>435")]
-        F[("dbt_file_paths<br/>22,032")]
-        D[("disk_series<br/>1,047")]
-        M[("manifest_cases<br/>1,130")]
-        P[("examclf_predictions<br/>272")]
-    end
-    subgraph STG["stg — typed, renamed, one view per source"]
-        SL["dbt_labels<br/>+ split, worst status"]
-        SB["dbt_boxes"]
-        SF["dbt_file_paths<br/>+ series_uid, laterality"]
-        SC["corpus_cases / corpus_runs"]
-        SD["disk_series · examclf_predictions"]
-    end
-    subgraph MART["mart — what people query"]
-        FS["fct_series<br/>grain: series"]
-        DP["dim_patient<br/>grain: patient"]
-        CC["collection_coverage"]
-        CS["corpus_summary"]
-    end
-    QA{{"qa — 14 checks<br/>check_results + offending rows"}}
+![dbt lineage graph: raw sources feed stg views, which feed fct_series, dim_patient and the singular tests](img/dbt-lineage.png)
 
-    L --> SL
-    B --> SB
-    F --> SF
-    M --> SC
-    D --> SD
-    P --> SD
-    SF --> FS
-    SL --> FS
-    SB --> FS
-    SC --> FS
-    SD --> FS
-    FS --> DP
-    SD --> DP
-    DP --> CC
-    SC --> CS
-    STG --> QA
-    MART --> QA
-```
+*The dbt lineage graph, from `python -m catalog docs`, captured by
+[scripts/make_dbt_lineage_png.py](../scripts/make_dbt_lineage_png.py). Green: `raw`
+sources. Blue: models and singular tests. The 25 generic tests are declared in YAML and
+not drawn.*
 
-Row counts are from the build of 2026-09-16.
-
-| Layer | Content | Built from |
+| Layer | Content | Defined in |
 |---|---|---|
-| `raw` | Sources loaded untouched, plus the file each row came from | [catalog/build.py](../catalog/build.py) |
-| `stg` | One view per source: trimmed keys, lower-case views, split taken from the file name, worst-flag status | [catalog/sql/staging/](../catalog/sql/staging/) |
-| `mart` | Tables with a declared grain | [catalog/sql/marts/](../catalog/sql/marts/) |
-| `qa` | One table of offending rows per check, plus `check_results` | [catalog/sql/checks/](../catalog/sql/checks/) |
+| `raw` | Sources loaded untouched, plus the file each row came from | [catalog/build.py](../catalog/build.py), declared as dbt sources in [_sources.yml](../catalog/dbt/models/staging/_sources.yml) |
+| `stg` | 7 views, one per source: trimmed keys, lower-case views, split taken from the file name, worst-flag status | [catalog/dbt/models/staging/](../catalog/dbt/models/staging/) |
+| `mart` | 4 tables with a declared and tested grain | [catalog/dbt/models/marts/](../catalog/dbt/models/marts/) |
+| `qa` | One table of offending rows per test, plus `check_results` | [catalog/dbt/tests/](../catalog/dbt/tests/), and the YAML files beside the models |
 
-There is one SQL model per file, run in file-name order, so the layers can move to dbt
-without being rewritten.
+A macro keeps the schema names as they are (`stg`, `mart`, `qa`) instead of dbt's
+default `main_stg`. Staging models are aliased (`stg_dbt_labels` is exposed as
+`stg.dbt_labels`). Together, these keep the catalogue's interface unchanged from its
+pre-dbt version.
 
 ## Mart tables
 
@@ -93,20 +80,30 @@ without being rewritten.
 | `mart.collection_coverage` | split × status | patients published, on disk, in the exam corpus, scored |
 | `mart.corpus_summary` | preprocessed corpus | series, patients, positive patients, mean depth, mirrored, git revision of the run |
 
-## Data-quality checks
+## Data-quality tests
 
-Each check is a query that returns the rows violating it, so zero rows means a pass. A
-check marked `error` guards a figure that would otherwise be wrong: a label, a key, a
-split. A check marked `warn` flags something the pipeline already tolerates. If an
-`error` check fails, `build` and `checks` exit with status 1, but the catalogue is still
-written so the problem can be investigated (`SELECT * FROM qa.<check>`).
+Each test is a query that returns the rows violating it, so zero rows means a pass. An
+`error` test guards a figure that would otherwise be wrong: a label, a key, a split. A
+`warn` test flags something the pipeline already tolerates. If an `error` test fails,
+`build` and `checks` exit with status 1, but the catalogue is still written so the
+failure can be investigated (`SELECT * FROM qa.<test name>`).
 
-| Check | Severity | Guards against |
+**Generic tests (25, all `error`)**, declared in
+[_staging.yml](../catalog/dbt/models/staging/_staging.yml) and
+[_marts.yml](../catalog/dbt/models/marts/_marts.yml):
+
+| Kind | Where | Guards against |
 |---|---|---|
-| `labels_key_unique` | error | a duplicated (patient, study, view) fanning out every join |
-| `file_paths_series_unique` | error | the grain of `fct_series` breaking |
+| `unique` + `not_null` | `fct_series.series_uid`, `dim_patient.patient_id`, `stg_dbt_file_paths.series_uid`, (patient, study, view) of `stg_dbt_labels`, (corpus, series) of `stg_corpus_cases`, … | a fanned-out join or a broken grain |
+| `accepted_values` | split, status, laterality, view position, lesion class, corpus, exam label | a value no downstream rule knows how to handle |
+| `relationships` | `fct_series.patient_id` → `dim_patient` | a series whose patient is missing |
+
+**Singular tests (11)**, in [catalog/dbt/tests/](../catalog/dbt/tests/), with their
+severity and description in [_checks.yml](../catalog/dbt/tests/_checks.yml):
+
+| Test | Severity | Guards against |
+|---|---|---|
 | `boxes_match_inventory` | error | a box that belongs to no series ([ADR 0004](adr/0004-match-annotations-by-join.md)) |
-| `boxes_known_class` | error | a class other than benign / cancer |
 | `patient_single_split` | error | one patient in two splits, i.e. train/test leakage |
 | `corpus_cases_match_inventory` | error | a preprocessed volume attached to the wrong patient, study or view |
 | `exam_corpus_label_matches_labels` | error | an exam label that disagrees with the labels table |
@@ -118,12 +115,26 @@ written so the problem can be investigated (`SELECT * FROM qa.<check>`).
 | `corpus_series_on_disk` | warn | a preprocessed case whose raw series has been deleted |
 | `disk_series_in_inventory` | warn | a downloaded folder the inventory does not list |
 
-**On the real data, all 14 pass.** Checks that always pass could simply be unable to
-fail, so [tests/test_catalog.py](../tests/test_catalog.py) builds a miniature collection
-and injects five defects: a wrong exam label, a wrong lesion label, a case attached to
-the wrong patient, a score for a patient outside the corpus, and a wrong scored label.
-For each one it asserts that the matching check fails. A deleted raw series must raise
+**On the real data, all 36 pass.** Tests that always pass could simply be unable to
+fail, so [tests/test_catalog.py](../tests/test_catalog.py) runs the real dbt project on
+a miniature collection and injects defects:
+- a wrong exam label;
+- a wrong lesion label;
+- a case attached to the wrong patient;
+- a score for a patient outside the corpus;
+- a wrong scored label;
+- a duplicated labels key, which must trip the generic `unique` test.
+
+For each one it asserts that the matching test fails. A deleted raw series must raise
 only a warning.
+
+## Migration from plain SQL
+
+Before dbt, the same models ran as plain SQL files executed in order. To check that the
+move changed nothing, the pre-dbt version was rebuilt from `main` in a temporary
+worktree, on the same data. Its four mart tables were then compared with the dbt build,
+row by row, using `EXCEPT ALL` in both directions. **All four are identical**: 22,032,
+5,060, 12 and 2 rows, with the same columns in the same order. See journal §4.13.
 
 ## Example queries
 
@@ -186,4 +197,6 @@ using `mirrored` as a feature.
 - DBT only. The DCE-MRI corpus predates `lineage.py` and has no manifest to load.
 - Disk sizes come from `stat` and say a series is present, not that its DICOM is
   readable.
-- Rebuilding is cheap (~4 s), so there is no incremental loading.
+- Rebuilding is cheap, so there is no incremental model. It takes 9.7 s, against 3.9 s
+  for the plain-SQL version: the price of dbt starting and parsing its project twice
+  (three builds each, same data).

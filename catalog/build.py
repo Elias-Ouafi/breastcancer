@@ -1,4 +1,4 @@
-"""Build the catalogue: load the raw sources, run the SQL layers, check, export.
+"""Build the catalogue: load the raw sources, run dbt, record the tests, export.
 
 The build is deliberately a function of the files on disk and nothing else. It never
 reads a DICOM pixel, never downloads, and never writes outside ``config.CATALOG_DIR``.
@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -21,9 +22,10 @@ from lineage import git_revision
 
 log = logging.getLogger(__name__)
 
-SQL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sql")
-LAYERS = ("staging", "marts")
-SCHEMAS = ("raw", "stg", "mart", "qa")
+# The dbt project that builds the stg and mart layers and runs the tests.
+DBT_PROJECT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dbt")
+# Created by the Python loader; dbt creates stg and mart itself.
+RAW_SCHEMAS = ("raw", "qa")
 
 # A TCIA series folder is named by its DICOM SeriesInstanceUID: digits and dots only.
 # Anything else under the download directory (``duke_mri/``, the annotation CSVs) is
@@ -204,49 +206,93 @@ def _load_predictions(con, sources: Sources) -> None:
         log.warning(f"[catalog] no exam classifier predictions at {sources.predictions}")
 
 
-# --- SQL layers and checks ------------------------------------------------------
+# --- dbt: staging, marts and tests ---------------------------------------------
 
-def _sql_files(subdir: str) -> list[str]:
-    folder = os.path.join(SQL_DIR, subdir)
-    return sorted(os.path.join(folder, f) for f in os.listdir(folder) if f.endswith(".sql"))
-
-
-def _run_layer(con, layer: str) -> None:
-    for path in _sql_files(layer):
-        with open(path, encoding="utf-8") as fh:
-            con.execute(fh.read())
+class DbtError(RuntimeError):
+    """A model failed to build, or a test could not run. Distinct from a test that ran
+    and found rows: that is a data-quality result, returned rather than raised."""
 
 
-_HEADER = re.compile(r"^--\s*(severity|description):\s*(.+?)\s*$", re.MULTILINE)
+def _release_dbt_connection() -> None:
+    """Close the DuckDB connection dbt-duckdb caches for the life of the process.
 
-
-def _run_checks(con) -> list[CheckResult]:
-    """Each check is a query returning the rows that violate it; zero rows is a pass.
-
-    The header of each file declares its severity. ``error`` means a downstream number
-    would be wrong (a label that disagrees with its source); ``warn`` means something
-    worth knowing that the pipeline already handles (a series not downloaded yet).
+    Run in-process, dbt keeps the database file open after `invoke` returns. The build
+    then cannot reopen it to record results, and on Windows nothing else can open the
+    catalogue until the interpreter exits. The adapter's own `close_all_connections`
+    only drops the reference, so the environment is closed explicitly first.
     """
+    from dbt.adapters.duckdb.connections import DuckDBConnectionManager
+    from dbt.adapters.factory import reset_adapters
+
+    env = DuckDBConnectionManager._ENV
+    if env is not None:
+        env.close()
+    DuckDBConnectionManager.close_all_connections()
+    reset_adapters()
+
+
+def _dbt(command: str, db_path: str, target_dir: str, log_dir: str) -> list:
+    """Run one dbt command (``"run"``, ``"test"``, ``"docs generate"``) against
+    ``db_path`` in-process and return its node results."""
+    try:
+        from dbt.cli.main import dbtRunner
+    except ImportError as exc:
+        raise DbtError("the catalogue build needs dbt-duckdb: "
+                       'pip install -e ".[catalog]"') from exc
+
+    previous = os.environ.get("CATALOG_DB_PATH")
+    os.environ["CATALOG_DB_PATH"] = db_path.replace(os.sep, "/")
+    try:
+        outcome = dbtRunner().invoke([
+            *command.split(),
+            "--project-dir", DBT_PROJECT_DIR,
+            "--profiles-dir", DBT_PROJECT_DIR,
+            "--target-path", target_dir,
+            "--log-path", log_dir,
+            "--quiet",
+        ])
+    finally:
+        _release_dbt_connection()
+        if previous is None:
+            os.environ.pop("CATALOG_DB_PATH", None)
+        else:
+            os.environ["CATALOG_DB_PATH"] = previous
+
+    if outcome.exception is not None:
+        raise DbtError(f"dbt {command} crashed: {outcome.exception}") from outcome.exception
+    if not hasattr(outcome.result, "results"):
+        return []  # docs generate returns a catalogue artifact, not node results
+    results = list(outcome.result.results)
+    broken = [r for r in results if str(r.status) in ("error", "runtime error", "skipped")]
+    if broken:
+        details = "; ".join(f"{r.node.name}: {r.message}" for r in broken)
+        raise DbtError(f"dbt {command}: {len(broken)} node(s) did not run -- {details}")
+    return results
+
+
+def _test_result(result) -> CheckResult:
+    node = result.node
+    severity = str(node.config.severity).lower()
+    description = node.description
+    if not description and getattr(node, "test_metadata", None):
+        # Generic tests carry no description of their own; say what they assert.
+        column = getattr(node, "column_name", None)
+        model = node.attached_node.split(".")[-1] if node.attached_node else ""
+        description = f"{node.test_metadata.name} on {model}" + (f".{column}" if column else "")
+    failing = int(result.failures or 0)
+    return CheckResult(node.name, "warn" if severity == "warn" else "error",
+                       description, failing)
+
+
+def _record_checks(con, checks: list[CheckResult]) -> None:
     con.execute("""
         CREATE TABLE qa.check_results (
             check_name VARCHAR, severity VARCHAR, description VARCHAR,
             failing_rows BIGINT, passed BOOLEAN)""")
-    results = []
-    for path in _sql_files("checks"):
-        with open(path, encoding="utf-8") as fh:
-            sql = fh.read()
-        header = dict(_HEADER.findall(sql))
-        name = os.path.splitext(os.path.basename(path))[0]
-        severity = header.get("severity", "error")
-        if severity not in ("error", "warn"):
-            raise ValueError(f"{path}: severity must be 'error' or 'warn', got {severity!r}")
-        con.execute(f"CREATE TABLE qa.{name} AS {sql.strip().rstrip(';')}")
-        failing = con.execute(f"SELECT count(*) FROM qa.{name}").fetchone()[0]
-        result = CheckResult(name, severity, header.get("description", ""), failing)
-        con.execute("INSERT INTO qa.check_results VALUES (?, ?, ?, ?, ?)",
-                    [name, severity, result.description, failing, result.passed])
-        results.append(result)
-    return results
+    if checks:
+        con.executemany("INSERT INTO qa.check_results VALUES (?, ?, ?, ?, ?)",
+                        [[c.name, c.severity, c.description, c.failing_rows, c.passed]
+                         for c in checks])
 
 
 def _write_build_info(con, sources: Sources) -> None:
@@ -271,41 +317,63 @@ def _export_parquet(con, parquet_dir: str) -> None:
 
 
 def build(db_path: str = config.CATALOG_DB, sources: Sources | None = None,
-          parquet_dir: str | None = config.CATALOG_PARQUET_DIR) -> BuildResult:
+          parquet_dir: str | None = config.CATALOG_PARQUET_DIR,
+          target_dir: str | None = None) -> BuildResult:
     """Rebuild the catalogue from scratch and return what it holds.
 
-    Written to a temporary file first and moved into place only once every layer has
-    run: a build that fails halfway leaves the previous catalogue intact rather than a
-    half-populated one that answers queries wrongly. Failing *checks* do not abort the
-    build -- the catalogue is exactly what you need to investigate them -- they are
-    returned, and the CLI turns error-severity failures into a non-zero exit.
+    1. Python loads the ``raw`` schema: the part dbt cannot do (scan a disk, flatten
+       JSON manifests, pool CSVs whose schemas differ).
+    2. ``dbt run`` builds ``stg`` and ``mart``; ``dbt test`` runs every generic and
+       singular test, keeping offending rows in ``qa``.
+    3. Python records the test outcomes in ``qa.check_results`` and exports the marts.
+
+    ``run`` and ``test`` are separate on purpose: ``dbt build`` skips a model whose
+    upstream test failed, which would hide exactly the tables needed to investigate.
+
+    Everything is written to a temporary file and moved into place only once every
+    step has run, so a build that fails halfway leaves the previous catalogue intact.
+    Failing tests do not abort the build; they are returned, and the CLI turns
+    error-severity failures into a non-zero exit.
     """
     sources = sources or Sources.from_config()
-    os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(suffix=".duckdb",
-                                    dir=os.path.dirname(os.path.abspath(db_path)))
-    os.close(fd)
-    os.remove(tmp_path)  # DuckDB refuses to open an existing empty file
+    catalog_dir = os.path.dirname(os.path.abspath(db_path))
+    os.makedirs(catalog_dir, exist_ok=True)
+    target_dir = target_dir or os.path.join(catalog_dir, "dbt_target")
+    log_dir = os.path.join(target_dir, "logs")
+    # Built under its final file name, in a temporary directory beside it. The name
+    # matters: DuckDB names the database after the file stem, and dbt-duckdb writes
+    # that name into every view it creates (`"catalog".raw.dbt_labels`). A view built
+    # in `tmpab12.duckdb` would point at a database that no longer exists once the file
+    # is renamed -- measured, not guessed: every stg view failed to bind.
+    tmp_dir = tempfile.mkdtemp(prefix=".building-", dir=catalog_dir)
+    tmp_path = os.path.join(tmp_dir, os.path.basename(db_path))
 
     try:
         con = duckdb.connect(tmp_path)
         try:
-            for schema in SCHEMAS:
+            for schema in RAW_SCHEMAS:
                 con.execute(f"CREATE SCHEMA {schema}")
             _load_csv_tables(con, sources)
             _load_disk(con, sources)
             _load_manifests(con, sources)
             _load_predictions(con, sources)
-            for layer in LAYERS:
-                _run_layer(con, layer)
-            checks = _run_checks(con)
+        finally:
+            con.close()  # dbt opens the file itself, and DuckDB allows one writer
+
+        _dbt("run", tmp_path, target_dir, log_dir)
+        checks = [_test_result(r) for r in _dbt("test", tmp_path, target_dir, log_dir)]
+        checks.sort(key=lambda c: c.name)
+
+        con = duckdb.connect(tmp_path)
+        try:
+            _record_checks(con, checks)
             _write_build_info(con, sources)
             row_counts = {
                 f"{schema}.{table}": con.execute(
                     f"SELECT count(*) FROM {schema}.{table}").fetchone()[0]
                 for schema, table in con.execute(
                     "SELECT table_schema, table_name FROM information_schema.tables "
-                    "WHERE table_schema IN ('raw', 'mart') "
+                    "WHERE table_schema IN ('raw', 'mart') AND table_type = 'BASE TABLE' "
                     "ORDER BY table_schema, table_name").fetchall()
             }
             if parquet_dir:
@@ -313,11 +381,23 @@ def build(db_path: str = config.CATALOG_DB, sources: Sources | None = None,
         finally:
             con.close()
         os.replace(tmp_path, db_path)  # atomic, and overwrites on Windows too
-    except BaseException:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     for name, n in row_counts.items():
         log.info(f"[catalog] {name}: {n} rows")
     return BuildResult(db_path, row_counts, checks)
+
+
+def generate_docs(db_path: str = config.CATALOG_DB, target_dir: str | None = None) -> str:
+    """Generate the dbt documentation site (models, columns, tests, lineage graph).
+
+    Reads the built catalogue for column types, so it runs after ``build``. Returns the
+    target directory, which ``dbt docs serve`` serves.
+    """
+    if not os.path.exists(db_path):
+        raise FileNotFoundError(f"no catalogue at {db_path}; run `python -m catalog build`")
+    target_dir = target_dir or os.path.join(os.path.dirname(os.path.abspath(db_path)),
+                                            "dbt_target")
+    _dbt("docs generate", db_path, target_dir, os.path.join(target_dir, "logs"))
+    return target_dir

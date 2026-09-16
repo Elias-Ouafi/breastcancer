@@ -1,0 +1,23 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    description: >
+      Loaded by catalog/build.py before dbt runs, untouched. The CSV tables keep the
+      file each row came from in `filename`.
+    tables:
+      - name: dbt_labels
+        description: BCS-DBT-labels-*.csv, the three splits pooled. The only table that says a view is normal.
+      - name: dbt_boxes
+        description: BCS-DBT-boxes-*.csv, the three splits pooled. One row per annotated lesion box.
+      - name: dbt_file_paths
+        description: BCS-DBT-file-paths-*.csv, the series inventory. Its classic_path names the series folder.
+      - name: disk_series
+        description: Series folders present under data/raw_data/tcia, sized with stat (no DICOM opened).
+      - name: manifest_cases
+        description: One row per case of each preprocessing run's manifest.json (lineage.py).
+      - name: manifest_runs
+        description: One row per preprocessing run, from the manifest header.
+      - name: examclf_predictions
+        description: models/examclf/cv_predictions.csv, out-of-fold patient scores.

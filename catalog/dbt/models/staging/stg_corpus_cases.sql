@@ -1,8 +1,7 @@
--- What each preprocessing run wrote, from its manifest.json (lineage.py).
+-- What each preprocessing run wrote, one row per case of its manifest.json (lineage.py).
 --
 -- `corpus` is 'dbt' (lesion-cropped, annotated series only) or 'dbt_exams' (every
 -- labelled series at 384x384, the exam-level corpus). `case_id` is the PatientID.
-CREATE OR REPLACE VIEW stg.corpus_cases AS
 SELECT
     corpus,
     series_uid,
@@ -19,14 +18,4 @@ SELECT
     lesion_slice_fraction,
     coalesce(mirrored, false)       AS mirrored,
     n_warnings
-FROM raw.manifest_cases;
-
-CREATE OR REPLACE VIEW stg.corpus_runs AS
-SELECT
-    corpus,
-    TRY_CAST(generated_at AS TIMESTAMPTZ) AS generated_at,
-    git_revision,
-    output_dir,
-    n_cases,
-    n_validation_warnings
-FROM raw.manifest_runs;
+FROM {{ source('raw', 'manifest_cases') }}
