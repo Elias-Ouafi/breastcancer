@@ -19,15 +19,16 @@ les décisions de la section **Décisions d'architecture**.
 3. [Données](#données)
 4. [Pipeline : fonctionnement et commandes](#pipeline--fonctionnement-et-commandes)
 5. [Catalogue de métadonnées (DuckDB + dbt)](#catalogue-de-métadonnées-duckdb--dbt)
-6. [Démo et application web](#démo-et-application-web)
-7. [Décisions d'architecture (ADR)](#décisions-darchitecture-adr)
-8. [Partie 4 — Journal des mesures](#partie-4--journal-des-mesures)
-9. [Prochaines pistes pour l'étape 1](#prochaines-pistes-pour-létape-1)
-10. [État d'avancement et feuille de route](#état-davancement-et-feuille-de-route)
-11. [Écarts doc ↔ code](#écarts-doc--code)
-12. [Partie 3 — Charte graphique](#partie-3--charte-graphique)
-13. [Développement](#développement)
-14. [Licence et données](#licence-et-données)
+6. [Stockage objet (S3 / MinIO)](#stockage-objet-s3--minio)
+7. [Démo et application web](#démo-et-application-web)
+8. [Décisions d'architecture (ADR)](#décisions-darchitecture-adr)
+9. [Partie 4 — Journal des mesures](#partie-4--journal-des-mesures)
+10. [Prochaines pistes pour l'étape 1](#prochaines-pistes-pour-létape-1)
+11. [État d'avancement et feuille de route](#état-davancement-et-feuille-de-route)
+12. [Écarts doc ↔ code](#écarts-doc--code)
+13. [Partie 3 — Charte graphique](#partie-3--charte-graphique)
+14. [Développement](#développement)
+15. [Licence et données](#licence-et-données)
 
 ---
 
@@ -239,6 +240,7 @@ et les rapports de validation croisée.
 | **Lignage** | `lineage.py` | Un `manifest.json` par dossier : révision git (suffixe `-dirty`), source, paramètres, statistiques par cas. Écrit en dernier : son absence signale une passe interrompue. |
 | **Curation** | `imaging/exambank.py`, `imaging/slicebank.py` | Banques memmap qui paient la décompression une seule fois (×7,1 sur le temps d'époque). |
 | **Catalogue** | `catalog/` | Tables, disque, manifestes et scores joints dans DuckDB ; couches et tests dbt. |
+| **Publication** | `objectstore/` | Tables, manifestes et tables mart en Parquet synchronisés vers un bucket S3 (MinIO en local) ; idempotent, sans suppression. |
 | **Entraînement / évaluation** | `imaging/` | Découpages par patient, validation croisée, IC bootstrap par patient, seuil hors pli. |
 | **Service** | `app/`, `Dockerfile` | Flask HTML + API JSON ; image sans JVM ni ITK, lecture seule, non-root, boucle locale uniquement. |
 
@@ -252,6 +254,7 @@ pip install -r requirements.txt       # installe le projet (pyproject.toml)
 pip install -e ".[dev]"               # + pytest, ruff
 pip install -e ".[orchestration]"     # + Prefect, pour pipelines/
 pip install -e ".[catalog]"           # + dbt-duckdb, pour construire le catalogue
+pip install -e ".[storage]"           # + boto3, pour publier vers un stockage objet S3
 ```
 
 ### Pipeline DCE-MRI orchestré (Prefect)
@@ -273,7 +276,7 @@ diverger.
 
 ### Chaîne DBT orchestrée (Prefect)
 
-`pipelines/dbt.py` enchaîne `tables → download → preprocess → catalog` :
+`pipelines/dbt.py` enchaîne `tables → download → preprocess → catalog → publish` :
 
 ```bash
 python -m pipelines.dbt --dry-run            # le plan, calculé hors ligne, rien n'est exécuté
@@ -293,6 +296,7 @@ s'exécute que s'il manque quelque chose :
 | `download` | séries des patients annotés (splits choisis) + échantillon de normaux (graine), lues dans l'inventaire, contre les dossiers sur disque | seuls les patients incomplets, 2 reprises ; une série ratée lève `DownloadIncomplete` |
 | `preprocess` | séries que chaque corpus devrait contenir d'après le disque, contre les cas de son manifeste | corpus d'examens repris (seules les séries manquantes sont décodées) ; corpus de lésions reconstruit |
 | `catalog` | toujours | build DuckDB + dbt ; un test dbt `error` en échec fait échouer le flow |
+| `publish` | `BREASTCANCER_S3_ENDPOINT` défini ? | synchronisation idempotente vers le bucket, 2 reprises ; sautée sinon |
 
 Options : `--annotated-splits` (défaut : les trois), `--corpus-splits` (défaut :
 `train,validation`, les corpus de toutes les mesures publiées), `--max-normal-patients`
@@ -532,6 +536,85 @@ avant dbt (démarrage et parsing de dbt), sans modèle incrémental.
 
 ---
 
+## Stockage objet (S3 / MinIO)
+
+La couche de données se publie vers n'importe quel stockage compatible S3 : **MinIO** en
+local, **AWS S3** (ou équivalent) dans le cloud. Le code ne parle que l'API S3 standard
+(boto3).
+
+```bash
+pip install -e ".[storage]"
+docker compose --profile storage up -d minio        # MinIO local (Docker requis)
+export BREASTCANCER_S3_ENDPOINT=http://127.0.0.1:9000
+export AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin
+
+python -m objectstore plan                   # ce qu'une synchronisation enverrait, rien n'est envoyé
+python -m objectstore sync                   # tables, manifestes, catalogue en Parquet
+python -m objectstore sync --dicom-sample 5  # + les DICOM bruts de 5 séries, pour la démonstration
+python -m objectstore ls --prefix curated/
+python -m pipelines.dbt --from publish       # la même chose, comme étape du flow
+```
+
+Le bucket (`BREASTCANCER_S3_BUCKET`, défaut `breastcancer`) et le point d'accès viennent de
+l'environnement ; les identifiants viennent des variables AWS standard, jamais du code.
+Les identifiants par défaut de `docker-compose.yml` ne valent que pour une instance locale,
+publiée sur la boucle locale uniquement.
+
+### Ce qui est publié, et où
+
+Les clés reprennent les couches locales : un chemin dans le bucket dit à quelle couche il
+appartient.
+
+| Clé | Contenu | Taille |
+|---|---|---:|
+| `raw/tcia/tables/BCS-DBT-*.csv` | les 9 tables d'annotations | 8,1 Mo |
+| `preprocessed/<corpus>/manifest.json` | le manifeste de lignage de chaque corpus | 0,5 Mo |
+| `curated/catalog/<table>.parquet` | les 4 tables `mart` du catalogue | 0,9 Mo |
+| `raw/tcia/series/<SeriesInstanceUID>/…` | DICOM bruts, **uniquement sur demande** (`--dicom-sample`) | ~70 Mo par série |
+| `_meta/last_sync.json` | trace de la dernière synchronisation : date, révision git, décompte, clés | — |
+
+**Par défaut, les 83 Go de DICOM restent sur disque** : on publie ce qui est léger et utile
+à partager. La synchronisation sait envoyer les DICOM (envoi en plusieurs parties au-delà
+de 64 Mo) et le fait pour un échantillon quand on le demande.
+
+### Garanties
+
+- **Idempotente** : un objet dont la taille et l'empreinte MD5 correspondent au fichier
+  local est ignoré ; un objet différent est renvoyé. Pour les fichiers envoyés en plusieurs
+  parties, l'ETag S3 n'est plus un MD5 : l'empreinte est donc aussi stockée en métadonnée,
+  et c'est elle qui est comparée.
+- **Sans suppression** : un objet présent seulement dans le bucket est signalé, jamais
+  supprimé — la couche brute n'est jamais réécrite, et une étape de publication n'a pas à
+  détruire ce que quelqu'un d'autre y a déposé.
+- **Planifiable** : `plan` compare sans rien envoyer et sans créer le bucket.
+
+### Interroger le bucket directement
+
+Les tables `mart` publiées en Parquet se lisent **sans rien télécharger au préalable**,
+par exemple avec DuckDB et son extension `httpfs` :
+
+```sql
+INSTALL httpfs; LOAD httpfs;
+CREATE SECRET (TYPE S3, KEY_ID '…', SECRET '…', ENDPOINT '127.0.0.1:9000',
+               URL_STYLE 'path', USE_SSL false);
+SELECT status, count(*) FROM 's3://breastcancer/curated/catalog/dim_patient.parquet' GROUP BY ALL;
+SELECT count(*) FROM read_csv('s3://breastcancer/raw/tcia/tables/BCS-DBT-labels-*.csv');
+```
+
+### Vérification
+
+Docker n'étant pas disponible sur la machine de développement, **MinIO lui-même n'a pas été
+exécuté**. Le code a été vérifié de deux façons (§4.15) :
+- **tests automatiques** contre un S3 simulé en mémoire (moto) : idempotence, fichier
+  modifié renvoyé, contenu différent à taille égale détecté, comparaison MD5 des envois en
+  plusieurs parties, objets distants conservés, plan sans écriture, trace de
+  synchronisation ;
+- **vérification réelle** contre un point d'accès S3 HTTP local (serveur moto), avec les
+  vraies données, puis lecture du Parquet et des CSV directement depuis le bucket par
+  DuckDB.
+
+---
+
 ## Démo et application web
 
 ### Lancer la démo
@@ -762,6 +845,21 @@ peuvent enfin l'être puisqu'un téléchargement raté lève une exception. **Co
 reproduit les règles de sélection des fonctions de prétraitement (inventaire, labels,
 boîtes) — deux endroits à garder alignés ; l'alignement est vérifié sur les données
 réelles (870 et 260 cas attendus, exactement le contenu des deux manifestes) et par les tests.
+
+### ADR 0012 — Publier la couche de données vers un stockage objet S3, sans les DICOM par défaut (2026-09-17)
+
+**Contexte** : tout vivait sur un disque local, sous des chemins que seul `config.py`
+connaît ; rien n'était partageable ni interrogeable à distance. Docker n'est pas installé
+sur la machine de développement. **Décision** : API S3 standard (boto3), donc MinIO en
+local ou S3 dans le cloud sans changer de code ; clés qui reprennent les couches ;
+synchronisation idempotente par taille + MD5 (empreinte stockée en métadonnée pour les
+envois en plusieurs parties), **jamais de suppression** ; publication par défaut des
+tables, manifestes et Parquet (~10 Mo), DICOM seulement sur demande ; étape `publish` du
+flow active seulement si un point d'accès est configuré ; tests contre moto, service MinIO
+fourni dans `docker-compose.yml` sous un profil. **Coût** : boto3 en dépendance optionnelle,
+moto en dépendance de test ; MinIO lui-même non exécuté ici — le code n'utilise que des
+appels S3 standard, vérifiés contre un point d'accès S3 réel (serveur moto) ; copier les
+83 Go de DICOM doublerait l'espace disque en local pour peu de valeur.
 
 ---
 
@@ -1117,6 +1215,34 @@ dépendance manquante ne produise pas un job vert et vide.
 téléchargements 5 (comptage des échecs, tirage des normaux, installation du délai),
 manifeste 2 — soit **254 tests** au total.
 
+### 4.15 Stockage objet S3, et premier vrai run du flow DBT avec téléchargement (2026-09-17)
+
+**Le téléchargement des patients manquants, par le flow.** Premier run complet de
+`python -m pipelines.dbt` avec une étape réseau. Le plan annonçait 15 séries manquantes
+sur 9 patients annotés du split validation ; le flow a téléchargé **15 séries, 0 échec,
+1,1 Go en 2 min 44**, puis a jugé le corpus de lésions périmé (**275 séries attendues, 15
+absentes du manifeste**) et lancé sa reconstruction. L'estimation annoncée avant le
+téléchargement (~0,5 Go) était fausse : elle ne comptait que les 6 séries des 3 patients
+cancer, pas les 15. Les chiffres des corpus reconstruits seront publiés à la fin du run.
+
+**Le stockage objet** (`objectstore/`, ADR 0012). Docker n'étant pas installé, MinIO
+lui-même n'a pas été exécuté ; le code, qui n'utilise que l'API S3 standard, a été vérifié
+contre un point d'accès S3 HTTP réel lancé en local (serveur moto), **avec les vraies
+données** :
+
+| Commande | Résultat | Durée |
+|---|---|---:|
+| `plan` | 15 fichiers, 9,6 Mo à envoyer, bucket non créé | 0,7 s |
+| `sync --dicom-sample 2` | 19 fichiers envoyés, 149,4 Mo (les 2 séries DICOM passent par l'envoi en plusieurs parties) | 3,6 s |
+| `sync --dicom-sample 2`, relancé | **0 envoyé, 19 inchangés** — la comparaison MD5 tient aussi pour les envois en plusieurs parties | 0,9 s |
+| DuckDB `httpfs` sur `s3://…/dim_patient.parquet` | 4 581 / 278 / 112 / 89 patients, lus dans le bucket | 0,06 s |
+| DuckDB `read_csv('s3://…/BCS-DBT-labels-*.csv')` | 22 032 lignes | — |
+
+13 tests ajoutés (synchronisation 10 contre un S3 simulé en mémoire, étape `publish` 3),
+**267 tests** au total. Deux échecs rencontrés en écrivant les tests venaient des tests
+eux-mêmes, pas du code : `write_text` convertit `\n` en `\r\n` sous Windows, et un test
+supposait qu'un `plan` avait déjà envoyé les fichiers.
+
 ---
 
 ## Prochaines pistes pour l'étape 1
@@ -1170,7 +1296,7 @@ Applications 2023.
 | P1 | Flow Prefect pour la chaîne DBT (tables → téléchargement → prétraitement → catalogue) | **Fait** (§4.14) |
 | P1 | Délai maximal sur les requêtes TCIA, échecs de téléchargement détectés | **Fait** (§4.14) |
 | P1 | Tests d'orchestration exécutés en CI | **Fait** (job `orchestration`) |
-| P1 | Stockage objet (MinIO) pour la couche brute | À faire |
+| P1 | Stockage objet S3 / MinIO : publication des tables, manifestes et Parquet | **Fait** (§4.15) |
 | P2 | Structure `src/`, découpage de `TransformData.py`, build Docker en CI, registre de modèles | À faire |
 | — | Détecteur supervisé par boîtes (piste 8) | Reporté : relève du ML, pas du portfolio data engineering |
 
@@ -1178,7 +1304,7 @@ Applications 2023.
 
 | Point | Détail |
 |---|---|
-| 3 patients cancer non téléchargés | DBT-P03621, DBT-P03628, DBT-P04596 (~0,5 Go, 15 séries avec les 6 bénins) ; `python -m pipelines.dbt` les récupère ; cause d'origine non établie |
+| Corpus après le téléchargement du 2026-09-17 | Les 15 séries des 9 patients manquants (dont 3 cancers) sont téléchargées ; reconstruction des corpus en cours au moment de ce commit, chiffres à publier (§4.15) |
 | Bug NaN fp16 | Divergence repoussée à l'époque 15, non résolue ; checkpoint servi antérieur (P3) |
 | Manifeste DCE-MRI | `dce_mri_p2/` n'en a pas (antérieur à `lineage.py`) |
 | `output_dir` du manifeste DBT | Indique `dbt_join` alors que le dossier a été renommé en `dbt` |
@@ -1258,7 +1384,7 @@ pytest                 # 254 tests en local, sans GPU ni jeu de données
 
 La [CI](.github/workflows/ci.yml) a deux jobs à chaque push et pull request : `check`
 (ruff + pytest, installation volontairement étroite : PyTorch CPU, numpy, pandas, pydicom,
-flask, duckdb, dbt-duckdb) et `orchestration` (Prefect + pandas, tests des deux flows).
+flask, duckdb, dbt-duckdb, boto3, moto) et `orchestration` (Prefect + pandas, tests des deux flows).
 Ajouter un test qui importe un nouveau module impose de l'ajouter à la CI. Les tests qui
 demandent le client TCIA (`tests/test_extract_download.py`) ne tournent qu'en local :
 `tcia_utils` tire `idc-index`, `ipython` et `plotly`. La suite couvre les définitions de métriques, le contrat de stockage, la logique
@@ -1267,6 +1393,9 @@ les artefacts de la démo.
 
 Les pipelines journalisent via `logging` (`logging_setup.py`), avec horodatage et copie
 sous `logs/` ; `BREASTCANCER_LOG_LEVEL=DEBUG` augmente le volume.
+
+**Stockage objet** : `tests/test_objectstore.py` simule S3 en mémoire avec moto ; aucun
+service externe n'est nécessaire, ni en local ni en CI.
 
 **Scripts** : `scripts/make_demo_cases.py` (cas de démo), `scripts/make_demo_gif.py` (GIF du
 README), `scripts/make_dbt_lineage_png.py` (graphe de lignage) — les deux derniers

@@ -5,8 +5,8 @@
     python scripts/make_demo_gif.py --url http://127.0.0.1:5000   # an already-running demo
 
 A screen recording made by hand drifts from the app the first time a template changes,
-and nobody remembers how it was made. This script replays the walkthrough from
-the demo walkthrough of DOCUMENTATION.md in a headless browser -- home page, one-click case 1, the result, a
+and nobody remembers how it was made. This script replays the demo walkthrough of
+DOCUMENTATION.md in a headless browser -- home page, one-click case 1, the result, a
 sweep through the slab with the slider, the MIP view -- and assembles the frames with
 Pillow, so the GIF is rebuilt with one command.
 
@@ -84,7 +84,8 @@ def record(base_url: str, out_path: str) -> None:
         frames.append((_frame(page), 1400))
 
         # Sweep the whole slab and come back to the evaluated slice: the lesion appears,
-        # peaks and fades, which is the moment DOCUMENTATION.md's demo walkthrough says convinces.
+        # peaks and fades -- the moment the demo walkthrough (DOCUMENTATION.md) says
+        # convinces.
         positions = [round(i * last / (SWEEP_FRAMES - 1)) for i in range(SWEEP_FRAMES)]
         for pos in positions + [best]:
             slider.evaluate(

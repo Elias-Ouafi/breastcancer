@@ -4,10 +4,11 @@
     python -m pipelines.dbt                      # run what is missing
     python -m pipelines.dbt --from preprocess    # skip the network stages
 
-Four stages, in dependency order:
+Five stages, in dependency order:
 
-    tables -> download -> preprocess -> catalog
-    (9 CSVs)  (raw DICOM)  (2 corpora)   (DuckDB + dbt tests)
+    tables -> download -> preprocess -> catalog -> publish
+    (9 CSVs)  (raw DICOM)  (2 corpora)   (DuckDB +    (object storage,
+                                          dbt tests)   when configured)
 
 Why each stage decides from a plan rather than from "does the folder exist"
 ---------------------------------------------------------------------------
@@ -25,7 +26,10 @@ should exist, compares it with what does, and runs only if something is missing:
 * preprocess: the series each corpus should contain given what is on disk, against the
   cases its manifest records;
 * catalog: always rebuilt (~10 s), and its error-severity dbt tests fail the flow --
-  a label that disagrees with its source is not something to hand to a model.
+  a label that disagrees with its source is not something to hand to a model;
+* publish: tables, manifests and catalogue Parquet synced to the S3-compatible bucket
+  named by BREASTCANCER_S3_ENDPOINT, only when that variable is set; the sync is itself
+  idempotent, so an unchanged file is not sent again.
 
 Retries are kept for the network stages only, as in the DCE-MRI flow. They are useful
 now because a download that fails raises (``DownloadIncomplete``) instead of being
@@ -48,7 +52,7 @@ from logging_setup import setup_logging
 
 log = logging.getLogger(__name__)
 
-STAGES = ["tables", "download", "preprocess", "catalog"]
+STAGES = ["tables", "download", "preprocess", "catalog", "publish"]
 SPLITS = ("train", "validation", "test")
 SERIES_FOLDER = re.compile(r"^[0-9]+(\.[0-9]+)+$")
 
@@ -260,11 +264,41 @@ def build_catalog():
     return result.db_path
 
 
+def object_store_endpoint():
+    return os.environ.get("BREASTCANCER_S3_ENDPOINT") or None
+
+
+@task(name="dbt-publish", retries=2, retry_delay_seconds=60)
+def publish():
+    """Sync tables, manifests and catalogue Parquet to object storage, if configured.
+
+    Skipped rather than failed when no endpoint is set: publishing is an output of the
+    chain, not a prerequisite of anything in it. Retried, like the other network stages.
+    """
+    logger = _logger()
+    endpoint = object_store_endpoint()
+    if endpoint is None:
+        logger.info("BREASTCANCER_S3_ENDPOINT not set -- skipping publish.")
+        return None
+
+    from objectstore.sync import (
+        DEFAULT_BUCKET,
+        client_from_env,
+        publishable_files,
+        run_sync,
+    )
+
+    bucket = os.environ.get("BREASTCANCER_S3_BUCKET", DEFAULT_BUCKET)
+    plan = run_sync(client_from_env(endpoint), bucket, publishable_files())
+    logger.info("Published to s3://%s/ at %s: %s", bucket, endpoint, plan.summary())
+    return plan.summary()
+
+
 @flow(name="dbt-data-chain", log_prints=True)
 def dbt_pipeline(start_at="tables", annotated_splits=SPLITS,
                  corpus_splits=("train", "validation"), max_normal_patients=150,
                  max_gb_added=50, seed=0, force=False):
-    """Run the DBT chain from ``start_at`` to the catalogue, doing only what is missing."""
+    """Run the DBT chain from ``start_at`` to the end, doing only what is missing."""
     logger = _logger()
     if start_at not in STAGES:
         raise ValueError(f"start_at must be one of {STAGES}; got {start_at!r}")
@@ -277,7 +311,10 @@ def dbt_pipeline(start_at="tables", annotated_splits=SPLITS,
         download(annotated_splits, max_normal_patients, max_gb_added, seed, force=force)
     if "preprocess" in todo:
         preprocess(corpus_splits, force=force)
-    return build_catalog()
+    db_path = build_catalog() if "catalog" in todo else config.CATALOG_DB
+    if "publish" in todo:
+        publish()
+    return db_path
 
 
 # --- CLI ----------------------------------------------------------------------------
@@ -345,7 +382,11 @@ def describe(args):
             lines.append(f"  preprocess  {corpus} corpus ({','.join(args.corpus_splits)}):"
                          f" {len(expected)} expected, {len(recorded)} in manifest"
                          f" -> {f'{len(missing)} to build' if missing else 'skip'}")
-    lines.append(f"  catalog     always rebuilt -> {os.path.relpath(config.CATALOG_DB, config.ROOT)}")
+    if "catalog" in todo:
+        lines.append(f"  catalog     always rebuilt -> {os.path.relpath(config.CATALOG_DB, config.ROOT)}")
+    if "publish" in todo:
+        endpoint = object_store_endpoint()
+        lines.append(f"  publish     {'-> sync to ' + endpoint if endpoint else 'BREASTCANCER_S3_ENDPOINT not set -> skip'}")
     return "\n".join(lines)
 
 

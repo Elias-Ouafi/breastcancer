@@ -23,7 +23,8 @@ l'archive publique jusqu'à une application web.
 3. **Contrôler et tracer** chaque fichier produit : validation de schéma au moment de
    l'écriture, manifeste de lignage (quelle source, quels paramètres, quel commit).
 4. **Cataloguer** l'ensemble dans une base DuckDB construite avec dbt, interrogeable en
-   SQL et testée à chaque build.
+   SQL et testée à chaque build, puis **publier** tables, manifestes et Parquet vers un
+   stockage objet S3 (MinIO en local).
 5. **Entraîner et évaluer** des modèles avec une méthodologie stricte : découpage par
    patient, intervalles de confiance, seuil fixé hors échantillon.
 6. **Servir** le résultat dans une application web qui se lance depuis un simple clone.
@@ -44,6 +45,7 @@ la projection d'intensité maximale.*
 |---|---|
 | **Pipeline de données** (collecte, transformation, validation, lignage) | Opérationnel : 5 060 patients catalogués, deux corpus construits (260 séries annotées, 870 examens à deux classes), 0 avertissement de validation |
 | **Orchestration** (Prefect) | Opérationnelle : deux flows ; la chaîne DBT calcule hors ligne ce qui manque et n'exécute que ça ; téléchargements protégés par un délai maximal et repris en cas d'échec |
+| **Stockage objet** (S3 / MinIO) | Opérationnel : synchronisation idempotente des tables, manifestes et tables en Parquet, lisibles directement depuis le bucket ; vérifié contre un point d'accès S3 local (MinIO fourni dans docker-compose, non exécuté ici faute de Docker) |
 | **Catalogue de métadonnées** (DuckDB + dbt) | Opérationnel : 22 032 séries, 36 tests de qualité qui passent, reconstruit en ~10 s |
 | **Localisation de lésion** (IRM, modèle de la démo) | Fonctionne **quand on lui montre la bonne coupe** : lésion trouvée dans 88 % des cas [IC 82–93 %] sur 28 patients de test |
 | **Détection du cancer au niveau de l'examen** (DBT) | **Ne fonctionne pas, et c'est publié** : ROC-AUC 0,457 [0,369–0,544] sur 272 patients, soit le hasard |
@@ -57,8 +59,8 @@ Au seuil visé, la valeur prédictive positive (20,4 %) égale la prévalence (2
 la réponse du modèle n'apporte aucune information. La piste suivante est un détecteur
 supervisé par les boîtes de lésion, en résolution native.
 
-**Priorité actuelle : le data engineering** — stockage objet (MinIO) pour la couche
-brute, puis structure du code (`src/`) et build Docker en CI.
+**Priorité actuelle : le data engineering** — structure du code (`src/`), découpage de
+`TransformData.py` et build de l'image Docker en CI.
 
 ## Architecture
 
@@ -95,6 +97,7 @@ flowchart TB
     ART[("models/ · reports/<br/>checkpoints + métriques")]
     APP["App Flask + API JSON<br/>Docker, lecture seule, local uniquement"]
     CAT[("catalog.duckdb · dbt<br/>raw → stg → mart · 36 tests · Parquet")]
+    S3[("Bucket S3 / MinIO<br/>raw/ · preprocessed/ · curated/")]
 
     DBT --> TABLES
     DBT --> SERIES
@@ -109,10 +112,13 @@ flowchart TB
     RAW -.-> CAT
     LINEAGE -.-> CAT
     ART -.-> CAT
+    CAT --> S3
+    RAW -.->|tables| S3
 ```
 
 Les flèches en pointillés alimentent le catalogue : tables d'annotations, disque,
-manifestes et scores des modèles, joints et testés.
+manifestes et scores des modèles, joints et testés. Le catalogue et les tables sont
+ensuite publiés vers un stockage objet S3.
 
 ## Démarrage rapide
 
@@ -133,9 +139,9 @@ docker compose up --build
 Chaîne de données DBT et catalogue (nécessitent les tables et les données téléchargées) :
 
 ```bash
-pip install -e ".[orchestration,catalog]"
+pip install -e ".[orchestration,catalog,storage]"
 python -m pipelines.dbt --dry-run     # ce qui manque, calculé hors ligne
-python -m pipelines.dbt               # télécharge, prétraite, catalogue ce qui manque
+python -m pipelines.dbt               # télécharge, prétraite, catalogue, publie ce qui manque
 python -m catalog query --file catalog/queries/01_data_funnel.sql
 ```
 
@@ -158,7 +164,7 @@ python -m catalog query --file catalog/queries/01_data_funnel.sql
 
 ## Stack
 
-Python 3.12 · SQL · dbt · DuckDB · Parquet · pydicom · NumPy · pandas · PyTorch ·
+Python 3.12 · SQL · dbt · DuckDB · Parquet · S3 / MinIO (boto3) · pydicom · NumPy · pandas · PyTorch ·
 Prefect · Flask · Docker · GitHub Actions
 
 ## Organisation du dépôt
@@ -172,6 +178,7 @@ config.py           tous les chemins, définis une fois
 pipelines/          flows Prefect : chaîne DBT (planifiée hors ligne) et chaîne IRM
 http_timeouts.py    délai maximal sur les requêtes du client TCIA
 catalog/            catalogue de métadonnées : chargement, projet dbt, requêtes d'exemple
+objectstore/        publication idempotente vers un stockage objet S3 / MinIO
 imaging/            jeux de données, banques, U-Net, classifieurs, métriques, évaluation
 inference.py        chargement des modèles et prédiction pour l'app
 app/                application Flask (HTML + API JSON)
