@@ -104,7 +104,7 @@ def write_manifest(output_dir, uids):
 # --- stages and plan ------------------------------------------------------------
 
 def test_stage_order_is_the_dependency_order():
-    assert flow.STAGES == ["tables", "download", "preprocess", "catalog"]
+    assert flow.STAGES == ["tables", "download", "preprocess", "catalog", "publish"]
 
 
 def test_rejects_an_unknown_resume_point():
@@ -234,6 +234,37 @@ def test_the_catalogue_stage_returns_the_database_when_tests_pass(monkeypatch):
     assert flow.build_catalog.fn() == "catalog.duckdb"
 
 
+# --- publish ----------------------------------------------------------------------
+
+def test_publish_is_skipped_without_an_endpoint(monkeypatch):
+    monkeypatch.delenv("BREASTCANCER_S3_ENDPOINT", raising=False)
+    assert flow.publish.fn() is None
+
+
+def test_publish_syncs_to_the_configured_bucket(monkeypatch):
+    monkeypatch.setenv("BREASTCANCER_S3_ENDPOINT", "http://127.0.0.1:9000")
+    monkeypatch.setenv("BREASTCANCER_S3_BUCKET", "lake")
+    seen = {}
+    fake = types.ModuleType("objectstore.sync")
+    fake.DEFAULT_BUCKET = "breastcancer"
+    fake.client_from_env = lambda endpoint: seen.setdefault("endpoint", endpoint)
+    fake.publishable_files = lambda: ["file"]
+    fake.run_sync = lambda client, bucket, files: seen.update(bucket=bucket, files=files) or \
+        types.SimpleNamespace(summary=lambda: {"new": 1})
+    monkeypatch.setitem(__import__("sys").modules, "objectstore.sync", fake)
+
+    assert flow.publish.fn() == {"new": 1}
+    assert seen == {"endpoint": "http://127.0.0.1:9000", "bucket": "lake", "files": ["file"]}
+
+
+def test_starting_at_publish_does_not_rebuild_the_catalogue(monkeypatch):
+    calls = []
+    monkeypatch.setattr(flow, "build_catalog", lambda: calls.append("catalog"))
+    monkeypatch.setattr(flow, "publish", lambda: calls.append("publish"))
+    flow.dbt_pipeline.fn(start_at="publish")
+    assert calls == ["publish"]
+
+
 # --- dry run ------------------------------------------------------------------------
 
 def _args(**overrides):
@@ -252,6 +283,7 @@ def test_the_dry_run_plans_from_tables_disk_and_manifests(world):
     assert "2 missing across 2 patient(s): P1, P3" in plan
     assert "exam corpus (train,validation): 2 expected, 1 in manifest -> 1 to build" in plan
     assert "lesion corpus (train,validation): 1 expected, 0 in manifest -> 1 to build" in plan
+    assert "publish" in plan
     assert world.calls == []  # no network, no download
 
 
