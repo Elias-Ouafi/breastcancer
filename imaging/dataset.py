@@ -119,8 +119,11 @@ def split_npz_by_patient(data_dir, val_frac=0.15, test_frac=0.15, seed=42,
     paths = sorted(glob(os.path.join(data_dir, "*.npz")))
     if not paths:
         raise FileNotFoundError(
-            f"No .npz files found in {data_dir!r}. "
-            "Run TransformData.process_all_mri_data first to generate them."
+            f"No .npz files found in {data_dir!r}. Generate them first with the "
+            "preprocessing function for that corpus: "
+            "TransformData.preprocess_dce_mri_with_boxes (annotated DCE-MRI), "
+            "preprocess_dce_mri_exams (unannotated DCE-MRI), "
+            "preprocess_dbt_with_boxes or preprocess_dbt_exams (DBT)."
         )
 
     groups = OrderedDict()

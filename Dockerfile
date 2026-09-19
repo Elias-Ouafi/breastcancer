@@ -5,7 +5,8 @@
 # What this image is NOT: the training environment. Training needs CUDA, ~90 GB of
 # DICOM and a GPU; none of that belongs in an image whose job is to make a reviewer
 # see the thing work in one command. So the install is deliberately narrow -- no
-# PySpark, no JVM, no ITK, no TCIA client. That is the difference between a ~700 MB
+# PySpark, no JVM, no TCIA client (ITK and SimpleITK left the dependency list
+# altogether on 2026-09-19). That is the difference between a ~700 MB
 # image and a multi-gigabyte one, and none of it is reachable from the demo path.
 
 FROM python:3.12-slim AS base

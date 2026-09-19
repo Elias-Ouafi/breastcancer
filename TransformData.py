@@ -10,28 +10,8 @@ import pydicom
 import config
 import lineage
 import validation
-from logging_setup import setup_logging
 
 log = logging.getLogger(__name__)
-
-# Optional heavy dependencies. Each is only needed by a specific pipeline (MRI SEG
-# resampling, 3D viewing...). They are imported lazily so the module — and the
-# lightweight DBT box-annotation preprocessing — works without the full stack
-# installed. Functions that use a missing dependency will fail only when called.
-try:
-    import SimpleITK as sitk
-except ImportError:
-    sitk = None
-try:
-    from tcia_utils import nbia
-except ImportError:
-    nbia = None
-try:
-    import itk
-    import itkwidgets
-    from itkwidgets import view
-except ImportError:
-    itk = itkwidgets = view = None
 
 
 def load_dicom_volume(dicom_dir):
@@ -887,154 +867,6 @@ def extract_patient_ids(root_dir=config.TCIA_DIR):
     return patient_ids
 
 
-def process_all_mri_data(root_dir=config.TCIA_DIR, output_dir=config.DBT_PREPROCESSED_DIR,
-                         delete_source=False):
-    """
-    Loop through all MRI data to preprocess them.
-
-    Set `delete_source=True` to remove each raw DICOM folder after it has been
-    successfully preprocessed into a compressed .npz (reclaims most of the disk
-    space). It is off by default because it is destructive.
-    """
-    # No logging.basicConfig here: this is a library function, and configuring the
-    # root logger from one would hijack logging for every caller. Entry points call
-    # logging_setup.setup_logging() instead.
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Store all subdirectories in a list to loop through
-    mri_dirs = [d for d in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, d))]
-    
-    processed_count = 0
-    failed_count = 0
-    
-    for mri_dir in mri_dirs:
-        try:
-            log.info(f"Processing MRI directory: {mri_dir}")
-            local_dicom_path = os.path.join(root_dir, mri_dir)
-            
-            # Process the MRI data
-            volume, mask = preprocess_mri_data(
-                series_instance_uid=mri_dir,
-                local_dicom_path=local_dicom_path,
-                output_dir=output_dir,
-                delete_source=delete_source
-            )
-            
-            if volume is not None and mask is not None:
-                processed_count += 1
-            else:
-                failed_count += 1
-                
-        except Exception as e:
-            log.error(f"Failed to process {mri_dir}: {str(e)}")
-            failed_count += 1
-            continue
-    
-    log.info(f"Successfully processed: {processed_count}")
-    log.info(f"Failed to process: {failed_count}")
-    return processed_count, failed_count
-
-def preprocess_mri_data(series_instance_uid, local_dicom_path,
-                        output_dir=config.DBT_PREPROCESSED_DIR, delete_source=False):
-    """
-    Preprocess MRI data to add its segmentations.
-
-    If `delete_source` is True, the raw DICOM folder is deleted once the compressed
-    .npz has been written successfully (see `delete_dicom_source`).
-    """
-    try:
-        # STEP 1 - Load the MRI series
-        log.info(" Loading MRI series...")
-        dicom_files = [f for f in os.listdir(local_dicom_path) if f.endswith('.dcm')]
-        if not dicom_files:
-            raise ValueError(f"No DICOM files found in {local_dicom_path}")
-            
-        # STEP 2 -Read DICOM images with single or multiple files
-        if len(dicom_files) == 1:
-            log.info("Single DICOM file.")
-            image = sitk.ReadImage(os.path.join(local_dicom_path, dicom_files[0]))
-        else:
-            log.info("Multiple DICOM files.")
-            reader = sitk.ImageSeriesReader()
-            dicom_names = reader.GetGDCMSeriesFileNames(local_dicom_path)
-            reader.SetFileNames(dicom_names)
-            image = reader.Execute()
-        
-        # STEP 3 - Convert images to numpy array first, then to float32
-        image_array = sitk.GetArrayFromImage(image)
-        image_array = image_array.astype(np.float32)
-        image = sitk.GetImageFromArray(image_array)
-        # Use the right spacing and size
-        original_spacing = image.GetSpacing()
-        original_size = image.GetSize()
-        standard_spacing = (1.0, 1.0, 1.0)
-        resampler = sitk.ResampleImageFilter()
-        resampler.SetOutputSpacing(standard_spacing)
-        resampler.SetSize([int(sz * spc / nspc) for sz, spc, nspc in zip(original_size, original_spacing, standard_spacing)])
-        resampler.SetInterpolator(sitk.sitkLinear)
-        resampled_image = resampler.Execute(image)
-        
-        # STEP 4 - Convert to numpy array for processing
-        image_array = sitk.GetArrayFromImage(resampled_image)
-        
-        # STEP 5 - Normalize the array
-        normalized_array = normalize_intensity(image_array)
-        mask = np.zeros_like(normalized_array, dtype=np.uint8)
-        
-        # STEP 6 - Segment the data
-        seg_files = [f for f in os.listdir(local_dicom_path) if f.endswith('.dcm')]
-        for seg_file in seg_files:
-            seg_path = os.path.join(local_dicom_path, seg_file)
-            try:
-                # Read DICOM file
-                ds = pydicom.dcmread(seg_path)
-                
-                # Check if it's a segmentation file
-                if ds.SOPClassUID == '1.2.840.10008.5.1.4.1.1.66.4':
-                    log.info(f"Processing SEG file: {seg_file}")
-                    seg_image = sitk.ReadImage(seg_path)
-                    # Convert to numpy array first, then to float32
-                    seg_array = sitk.GetArrayFromImage(seg_image)
-                    seg_array = seg_array.astype(np.float32)
-                    seg_image = sitk.GetImageFromArray(seg_array)
-                    resampled_seg = resampler.Execute(seg_image)
-                    seg_array = sitk.GetArrayFromImage(resampled_seg)
-                    mask = np.logical_or(mask, seg_array > 0).astype(np.uint8)
-                    
-                elif ds.SOPClassUID == '1.2.840.10008.5.1.4.1.1.481.3':  # RTSTRUCT
-                    log.info(f"Processing RTSTRUCT file: {seg_file}")
-                    # Convert RTSTRUCT to binary mask
-                    rtstruct = itk.imread(seg_path)
-                    rtstruct_resampled = itk.resample_image_filter(
-                        rtstruct,
-                        size=resampled_image.GetSize(),
-                        spacing=standard_spacing
-                    )
-                    rtstruct_array = itk.GetArrayFromImage(rtstruct_resampled)
-                    mask = np.logical_or(mask, rtstruct_array > 0).astype(np.uint8)
-                    
-            except Exception as e:
-                log.warning(f"Could not process segmentation file {seg_file}: {str(e)}")
-                continue
-        
-        # STEP 7 - Save preprocessed data (compressed to keep files small)
-        patient_id = os.path.basename(local_dicom_path)
-        npz_path = save_preprocessed(patient_id, normalized_array, mask, output_dir)
-        if mask.any():
-            view(normalized_array, mask, ui_collapsed=True)
-
-        # STEP 8 - Optionally reclaim disk space by deleting the raw DICOM source
-        if delete_source:
-            delete_dicom_source(local_dicom_path, npz_path)
-
-        # The end
-        log.info(f"✅ Successfully processed {patient_id}")
-        return normalized_array, mask
-        
-    except Exception as e:
-        log.error(f"❌ Failed to process series {series_instance_uid}: {str(e)}")
-        return None, None
-
 # --------------------------------------------------------------------------- #
 # DCE-MRI (Duke-Breast-Cancer-MRI): multiphase subtraction + box annotations
 # --------------------------------------------------------------------------- #
@@ -1125,9 +957,79 @@ def _read_mri_boxes(boxes_path):
     return df
 
 
+def dce_subtraction(pre, post):
+    """Build the enhancement volume of a DCE-MRI pair: ``post - pre``, clipped at 0,
+    then z-normalised.
+
+    Both DCE preprocessing paths call this, so an exam prepared for inference cannot
+    end up on a different intensity scale from the corpus the checkpoint was trained
+    on. A test pins that equality.
+    """
+    return normalize_intensity(np.clip(post - pre, a_min=0, a_max=None))
+
+
+def preprocess_dce_mri_exams(root_dir,
+                             output_dir=config.DCE_MRI_PREPROCESSED_DIR,
+                             post_phase_rank=2):
+    """Preprocess DCE-MRI exams that carry no annotation, ready for inference.
+
+    :func:`preprocess_dce_mri_with_boxes` skips every patient absent from the
+    annotation table, so it cannot prepare an exam nobody has read yet -- which is
+    every new exam. This path asks only for what a subtraction needs: the
+    pre-contrast series and the chosen post-contrast pass.
+
+    The mask is empty and the frame is never cropped. Both follow from having no
+    annotation: there is no lesion to crop to, and full frame is the geometry the
+    served checkpoint was trained on, so a crop would hand the model a picture it has
+    never seen.
+
+    Returns ``(saved, skipped)``.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    groups = group_dce_series_by_patient(root_dir)
+
+    saved, skipped, summary = 0, 0, {}
+    for pid, phases in groups.items():
+        if 0 not in phases or post_phase_rank not in phases:
+            log.warning(f"[MRI] {pid}: missing pre or post-phase {post_phase_rank} series, skipping.")
+            skipped += 1
+            continue
+
+        pre = _load_series_volume(phases[0])
+        post = _load_series_volume(phases[post_phase_rank])
+        if pre.shape != post.shape:
+            log.warning(f"[MRI] {pid}: phase shape mismatch {pre.shape} vs {post.shape}, skipping.")
+            skipped += 1
+            continue
+
+        subtraction = dce_subtraction(pre, post)
+        save_preprocessed(pid, subtraction, np.zeros(subtraction.shape, dtype=np.uint8),
+                          output_dir, crop=False, case_id=pid, summary=summary,
+                          expect_lesion=False)
+        saved += 1
+        log.info(f"[MRI] {pid}: {subtraction.shape[0]} slices -> saved (no annotation).")
+
+    lineage.write_manifest(
+        output_dir,
+        source=root_dir,
+        parameters={
+            "pipeline": "preprocess_dce_mri_exams",
+            "post_phase_rank": post_phase_rank,
+            "crop": False,
+            "annotated": False,
+            "skipped": skipped,
+        },
+        cases=summary,
+        warnings=[w for case in summary.values() for w in case.get("warnings", [])],
+    )
+
+    log.info(f"[MRI] Saved {saved} unannotated exam(s), skipped {skipped}.")
+    return saved, skipped
+
+
 def preprocess_dce_mri_with_boxes(root_dir, boxes_path,
                                   output_dir=config.DCE_MRI_PREPROCESSED_DIR,
-                                  post_phase_rank=2, crop=True):
+                                  post_phase_rank=2, crop=False):
     """Preprocess Duke-Breast-Cancer-MRI series into subtraction volumes + box masks.
 
     For each patient with both a pre-contrast (rank 0) and the chosen post-contrast
@@ -1146,17 +1048,23 @@ def preprocess_dce_mri_with_boxes(root_dir, boxes_path,
     1. Loads both phases (:func:`_load_series_volume`) -- they are acquired in the
        same session without repositioning, so no inter-phase registration is applied
        for this first pass.
-    2. Computes the enhancement subtraction ``post - pre`` (clipped at 0: only
-       contrast uptake is informative for lesion conspicuity), then z-normalises it
-       with :func:`normalize_intensity` -- the same convention already used by the
-       DBT path, so the resulting ``.npz`` is a drop-in for the existing
-       ``imaging/`` training/inference code (single-channel volume + mask).
+    2. Computes the enhancement volume with :func:`dce_subtraction` -- the same
+       convention already used by the DBT path, so the resulting ``.npz`` is a
+       drop-in for the existing ``imaging/`` training/inference code.
     3. Builds a binary lesion mask from the matching row(s) in the TCIA annotation
        boxes file via :func:`create_mask` (1-indexed bounds are converted to the
        0-indexed slicing ``create_mask``/numpy expect).
 
+    ``crop`` defaults to ``False`` because that is the corpus the served checkpoint
+    was trained on -- measured, not assumed: every volume under
+    ``data/preprocessed_data/dce_mri_p2/`` carries ``crop_offset == (0, 0, 0)`` at
+    full 512x512. Cropping to the lesion ROI is what made the task artificially easy
+    and produced the confidence-always-1.0 bug (DOCUMENTATION.md section 4.2), so the
+    default used to contradict every caller in the repository.
+
     Patients with mismatched phase shapes (rare acquisition inconsistencies) or no
-    matching box row are skipped. Returns ``(saved, skipped)``.
+    matching box row are skipped -- for an exam that has no annotation at all, use
+    :func:`preprocess_dce_mri_exams`. Returns ``(saved, skipped)``.
     """
     os.makedirs(output_dir, exist_ok=True)
     boxes = _read_mri_boxes(boxes_path)
@@ -1181,7 +1089,7 @@ def preprocess_dce_mri_with_boxes(root_dir, boxes_path,
             skipped += 1
             continue
 
-        subtraction = np.clip(post - pre, a_min=0, a_max=None)
+        subtraction = dce_subtraction(pre, post)
 
         mask = np.zeros(subtraction.shape, dtype=np.uint8)
         for _, r in rows.iterrows():
@@ -1194,7 +1102,6 @@ def preprocess_dce_mri_with_boxes(root_dir, boxes_path,
             }
             mask = np.logical_or(mask, create_mask(subtraction.shape, bbox)).astype(np.uint8)
 
-        subtraction = normalize_intensity(subtraction)
         save_preprocessed(pid, subtraction, mask, output_dir, crop=crop, case_id=pid,
                           summary=summary)
         saved += 1
@@ -1277,16 +1184,3 @@ def make_demo_case(source_npz, out_path, slice_index, slim=True, slab=12):
     kwargs["source_n_slices"] = np.asarray(offset[0] + depth, dtype=np.int32)
     np.savez_compressed(out_path, **kwargs)
     return out_path
-
-
-# Example usage
-if __name__ == "__main__":
-    setup_logging(logfile="preprocess.log")
-    # delete_source=True also removes each raw DICOM folder after it is safely
-    # preprocessed. It is destructive, so keep it False until you have verified the
-    # compressed .npz outputs are correct.
-    processed_count, failed_count = process_all_mri_data(
-        root_dir=config.TCIA_DIR,
-        output_dir=config.DBT_PREPROCESSED_DIR,
-        delete_source=False
-    )
