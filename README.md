@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml/badge.svg)](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
-![Tests : 287](https://img.shields.io/badge/tests-287-brightgreen)
+![Tests : 288](https://img.shields.io/badge/tests-288-brightgreen)
 [![Licence : MIT](https://img.shields.io/badge/licence-MIT-lightgrey)](LICENSE)
 
 > **Research Use Only — Not for diagnostic use.** Outil de recherche, pas un dispositif
@@ -48,7 +48,7 @@ la projection d'intensité maximale.*
 | **Stockage objet** (S3 / MinIO) | Opérationnel : synchronisation idempotente des tables, manifestes et tables en Parquet, lisibles directement depuis le bucket ; vérifié contre un point d'accès S3 local (MinIO fourni dans docker-compose, non exécuté ici faute de Docker) |
 | **Catalogue de métadonnées** (DuckDB + dbt) | Opérationnel : 22 032 séries, 36 tests de qualité qui passent, reconstruit en ~10 s |
 | **Localisation de lésion** (IRM, modèle de la démo) | Fonctionne **quand on lui montre la bonne coupe** : lésion trouvée dans 88 % des cas [IC 82–93 %] sur 28 patients de test |
-| **Nouvelle IRM** (examen jamais annoté) | Opérationnel depuis le 2026-09-19 : `preprocess_dce_mri_exams` prépare un examen sans annotation, et un test vérifie qu'il produit **le volume identique** à celui du corpus d'entraînement |
+| **Nouvelle IRM** (examen jamais annoté) | Opérationnel : `preprocess_dce_mri_exams` prépare un examen sans annotation. Vérifié sur **DICOM brut réel** — le volume produit est **identique bit à bit** à celui du corpus d'entraînement, puis servi par l'app en 3,9 s |
 | **Détection du cancer au niveau de l'examen** (DBT) | **Ne fonctionne pas, et c'est publié** : ROC-AUC 0,457 [0,369–0,544] sur 272 patients, soit le hasard |
 | **Démo** | Se lance depuis un clone, sans téléchargement de données |
 
@@ -157,6 +157,9 @@ python -m catalog query --file catalog/queries/01_data_funnel.sql
   programme national de dépistage (82,8 %), calé sur les autres plis.
 - **Des tests qui savent échouer** : chaque contrôle de qualité clé du catalogue est mis
   en défaut sur des données où l'erreur est injectée.
+- **Un examen neuf préparé exactement comme le corpus d'entraînement** : les deux chemins
+  de prétraitement partagent une seule définition de la soustraction, et sur du DICOM
+  brut réel le volume obtenu est identique **bit à bit** à celui du corpus.
 - **Une migration vérifiée** : le passage du catalogue à dbt a été validé par comparaison
   ligne à ligne avec l'ancienne version.
 - **Une orchestration qui décide depuis un plan** : chaque étape compare ce qui devrait

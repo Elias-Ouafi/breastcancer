@@ -209,7 +209,11 @@ Deux pièges propres à ces données :
 ```
 data/
 ├── raw_data/          exactement ce que la source publie, jamais réécrit
-│   └── tcia/          séries DICOM + tables d'annotations (138 Go)
+│   └── tcia/          tables d'annotations BCS-DBT + séries DICOM (138 Go)
+│       ├── <SeriesInstanceUID>/   séries DBT, à plat (82,6 Go, 1 047 séries)
+│       └── duke_mri/  séries DCE-MRI, un niveau plus bas (60 Go, 840 séries)
+│                      — cet écart de profondeur a déjà fait conclure à tort que
+│                      la couche IRM était absente (§4.16)
 ├── preprocessed_data/ volumes z-normalisés + masques, un .npz par série
 │   ├── dbt/           preprocess_dbt_with_boxes : examens annotés, recadrés sur la lésion
 │   ├── dbt_exams/     preprocess_dbt_exams : tous les examens en 384×384, cancer ou non
@@ -915,11 +919,11 @@ n'a lu — ni `label`, ni `exam_status`, ni coupe imposée, et le résultat affi
 `slice_preselected: false`.
 
 **Coût** : deux fonctions de prétraitement DCE au lieu d'une, dont la partie qui
-compte n'est écrite qu'une fois. Le chemin DICOM → `.npz` n'a **pas** pu être vérifié
-ici sur une IRM brute réelle : la couche brute DCE-MRI (30 Go) a été supprimée le
-2026-08-10 comme reconstructible, et un balayage de 152 dossiers répartis sur les
-1 073 présents n'a trouvé que du DBT. Ce qui a été vérifié sur données réelles est la
-fin de la chaîne (§4.16).
+compte n'est écrite qu'une fois. **Vérifié sur DICOM brut réel** : sur les 4 séries
+dynamiques de `Breast_MRI_037`, le chemin non annoté reproduit le volume du corpus
+**bit à bit** (§4.16). La première version de cet ADR affirmait que la couche brute
+DCE-MRI était absente de la machine — c'était une erreur de balayage, corrigée au
+§4.16.
 
 ---
 
@@ -1341,28 +1345,47 @@ uniquement le maximum. Ce n'est pas un défaut — c'est un fenêtrage, et c'est
 raisons pour lesquelles les statistiques du §4.9 ne valent que **par examen**. La
 propriété a maintenant son propre test plutôt que de rester une surprise.
 
-**Vérifié sur données réelles — et ce qui ne l'a pas été.** La couche brute DCE-MRI
-n'est pas sur cette machine (30 Go supprimés le 2026-08-10 comme reconstructibles ;
-balayage de 152 dossiers sur les 1 073 présents : que du DBT). Le chemin
-DICOM → `.npz` n'est donc couvert que par des DICOM synthétiques. La **fin** de la
-chaîne a été vérifiée sur un vrai volume du corpus, réduit à ce qu'est une IRM neuve
-(volume seul, masque vide, aucune coupe imposée) :
+**Vérification initiale, et l'erreur de mesure qu'elle contenait.** La première
+rédaction de cette section affirmait que la couche brute DCE-MRI n'était pas sur la
+machine, et que le chemin DICOM → `.npz` ne pouvait donc être couvert que par des
+DICOM synthétiques. **C'était faux.** Le balayage qui avait conclu cela listait les
+sous-dossiers de `data/raw_data/tcia/` et lisait le premier `.dcm` de chacun : les IRM
+vivent un niveau plus bas, dans `tcia/duke_mri/<SeriesInstanceUID>/`, un dossier qui ne
+contient aucun `.dcm` directement et que le balayage a donc sauté. **60 Go et 840 séries
+étaient là depuis le début.** Deux indices auraient dû alerter : le §4.1 parle des
+volumes d'expériences archivées supprimés le 2026-08-10, pas de la couche brute, et les
+138 Go mesurés sous `raw_data/tcia/` ne se réduisent pas aux 82,6 Go de DBT.
+**Leçon : un résultat négatif tiré d'un balayage doit être vérifié contre la
+disposition des dossiers qu'il suppose, pas seulement relu.**
+
+**Vérifié sur DICOM brut réel (2026-09-19).** `preprocess_dce_mri_exams` a été exécuté
+sur les 4 séries dynamiques réelles de `Breast_MRI_037` (144 coupes chacune, convention
+« ax dyn pre / 1st / 2nd / 3rd pass », plus un `ax t1` correctement ignoré) :
 
 | Étape | Mesure |
 |---|---|
-| `predict_dce_mri` sur un volume 192×448×448 | **4,31 s** (CPU), `slice_selector: "classifier"`, `slice_preselected: false` |
-| `POST /api/predict` sur le même fichier (26,6 Mo) | **HTTP 200 en 4,83 s**, inférence 2 802 ms, overlay PNG produit |
-| Coupe choisie (117) contre le masque réel (87–135) | **dans la lésion** — un cas, donc une cohérence, **pas une mesure** : ce patient peut être dans le split d'entraînement. Le chiffre citable reste 43 % de top-1 sur 28 patients de test (§4.3) |
+| DICOM brut → `.npz`, chemin **non annoté** | 1 sauvé, 0 sauté, 0 avertissement, **7,6 s** |
+| Volume obtenu contre `dce_mri_p2/Breast_MRI_037.npz` (corpus, chemin **annoté**) | **identique bit à bit** — `(144, 320, 320)` float16, `crop_offset=(0,0,0)` de part et d'autre |
+| Masque écrit | 0 voxel (aucune annotation), contre 1 144 pour la référence annotée |
+| `POST /api/predict` sur ce `.npz` (11,8 Mo) | **HTTP 200 en 3,86 s**, inférence 2 171 ms, `slice_preselected: false`, `slice_selector: "classifier"` |
+| Coupe choisie (88) contre le masque réel (87–94, soit 8 coupes sur 144) | **dans la lésion** — un cas, donc une cohérence, **pas une mesure** : ce patient peut être dans le split d'entraînement. Le chiffre citable reste 43 % de top-1 sur 28 patients de test (§4.3) |
 
-**Tests** : 20 ajoutés (`tests/test_dce_mri_new_exam.py`), **287 fonctions de test** au
-total. Le chiffre a d'abord été obtenu localement (242 collectés + 45 comptés par AST
+L'égalité bit à bit est la vérification la plus forte disponible : elle prouve sur des
+données réelles, et pas seulement sur des fixtures, qu'une IRM neuve arrive au
+checkpoint dans exactement l'état du corpus qui l'a entraîné. Elle n'est pas restée une
+vérification ponctuelle : `test_real_dicom_reproduces_the_corpus_volume_bit_for_bit`
+la rejoue (5,8 s) sur une machine qui possède les deux couches, et se saute ailleurs —
+donc en CI et sur un clone neuf.
+
+**Tests** : 21 ajoutés (`tests/test_dce_mri_new_exam.py`), **288 fonctions de test** au
+total. Le chiffre a d'abord été obtenu localement (243 collectés + 45 comptés par AST
 dans les trois fichiers que cette machine ne peut pas collecter — Prefect et moto
 refusent de s'installer, chemins longs Windows désactivés), puis **confirmé par la CI**
 de la PR #31, qui exécute la suite complète :
 
 | Job CI | Rapport pytest |
 |---|---|
-| `check` | 246 passés, 4 ignorés — soit 250 items |
+| `check` | 246 passés, 4 ignorés — soit 250 items (la vérification sur données réelles ajoutée depuis s'y saute, portant les ignorés à 5) |
 | `orchestration` | 35 passés |
 
 Les deux comptes se recoupent exactement : 237 (les 242 locaux moins les 5 tests
@@ -1374,7 +1397,7 @@ tombent sur les 23 + 12 comptés par AST.
 **Un total exécuté est toujours inférieur au total écrit** : la CI scinde la suite en
 deux jobs et exclut délibérément le client TCIA. Le nombre qui se cite est celui des
 fonctions de test du dépôt, 287. Contrôle : 287 − 20 = 267, exactement le total publié
-au §4.15. **Le badge du README disait 254** : il avait dérivé une quatrième fois, il est
+au §4.15 (le 21ᵉ test, ajouté ensuite, porte le total à 288). **Le badge du README disait 254** : il avait dérivé une quatrième fois, il est
 corrigé.
 
 ---
@@ -1447,8 +1470,8 @@ Applications 2023.
 | IC du top-1 à 43 % | Aucun code ni artefact versionné ne produit l'intervalle cité |
 | Erreur `cudaErrorIllegalAddress` | Observée une fois sur `/demo/1`, non reproduite |
 | Registre de traitement RGPD | Une page à écrire : base légale, nature des données, finalité, conservation, sécurité |
-| Chemin DICOM → `.npz` d'une IRM neuve | Couvert par des DICOM synthétiques seulement : la couche brute DCE-MRI n'est pas sur la machine (§4.16). À rejouer sur un examen brut réel |
 | Coupe choisie sur une IRM neuve | 43 % de top-1 (§4.3) : l'examen est préparé et servi correctement, la coupe reste le maillon faible |
+| Corpus DCE-MRI et couche brute | 186 volumes prétraités contre 840 séries brutes présentes (60 Go) : le corpus ne couvre pas tout ce qui est sur disque, écart jamais expliqué |
 | Nom de produit et logo | À choisir |
 
 ---
@@ -1471,6 +1494,7 @@ tests se recompte, il ne s'estime pas — et le badge se recompte avec le texte.
 | 2026-09-15 | 202 tests annoncés, 176 réels ; backend `unet` documenté mais impossible ; checkpoint mal documenté ; « aucun manifeste » alors que deux existaient ; « ~80 Go » pour 138 Go | Corrigés |
 | 2026-09-16 | 176 tests annoncés, 198 réels ; « 0,76 s par volume » pour 0,825 s ; « ~110 ms » pour ~70 ms mesurés ; « ~200 Mo par patient » pour ~310 Mo ; taille d'image Docker jamais mesurée | Corrigés |
 | 2026-09-16 | « 222 tests » en local contre 211 en CI, noté « non expliqué » ; « 152 normaux, non investigué » | Expliqués (§4.14) : 12 tests d'orchestration sans Prefect + 1 test Windows ; 2 normaux hors tirage |
+| 2026-09-19 | « La couche brute DCE-MRI n'est pas sur cette machine », écrit dans §4.16, l'ADR 0013 et la PR #31 | **Faux** : 60 Go et 840 séries étaient dans `tcia/duke_mri/`, que le balayage sautait faute de `.dcm` à sa racine. Corrigé, et le chemin DICOM → `.npz` est désormais vérifié bit à bit sur données réelles (§4.16) |
 | 2026-09-19 | Badge README « 254 tests » contre 267 dans le texte ; `crop=True` par défaut alors que le corpus servi est en pleine trame ; message d'erreur d'`imaging/dataset.py` renvoyant à une fonction cassée ; `SimpleITK`/`itk`/`itkwidgets` déclarés mais importés nulle part | Corrigés (§4.16), badge recompté à 287 |
 | — | `models/dce_mri_p2_negfix/` nomme une expérience | Ouvert (le renommer casserait la démo) |
 
@@ -1518,8 +1542,8 @@ cliniques.
 ```bash
 pip install -e ".[dev]"
 ruff check .
-pytest                 # 287 tests, sans GPU ni jeu de données
-                       # (242 collectés sans les extras orchestration/storage)
+pytest                 # 288 tests, sans GPU ni jeu de données
+                       # (243 collectés sans les extras orchestration/storage)
 ```
 
 La [CI](.github/workflows/ci.yml) a deux jobs à chaque push et pull request : `check`

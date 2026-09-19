@@ -10,7 +10,10 @@ The load-bearing test here is
 only meaningful to the checkpoint if it lands on the same intensity scale and geometry
 as the corpus that trained it. The rest guard the ways an exam can be incomplete.
 
-Fixtures are synthetic single-slice DICOM series -- no dataset, no network.
+Fixtures are synthetic single-slice DICOM series -- no dataset, no network. The one
+exception is ``test_real_dicom_reproduces_the_corpus_volume_bit_for_bit``, which runs
+only on a machine that has both the raw DCE-MRI layer and the built corpus, and is the
+strongest check available: real DICOM in, the corpus's own volume out.
 """
 import os
 
@@ -383,6 +386,66 @@ def test_the_app_accepts_a_new_exam_and_says_it_chose_the_slice(tmp_path, monkey
     # a human chose it -- that conflation was the on-screen claim removed on 2026-09-12.
     assert body["slice_preselected"] is False
     assert body["slice_selector"] == "classifier"
+
+
+# --- against the real collection, when it is on the machine -----------------
+
+
+def test_real_dicom_reproduces_the_corpus_volume_bit_for_bit():
+    """Real DICOM in, the corpus's own volume out -- no fixture can prove this.
+
+    The corpus under ``dce_mri_p2/`` was written by the *annotated* path. Feeding the
+    same patient's raw series to the *unannotated* path has to land on exactly the same
+    array, or a new exam reaches the checkpoint on a distribution it never saw.
+
+    Skipped unless both layers are present, so CI and a fresh clone stay green. Slow:
+    it reads one DICOM header per series folder to find the patient.
+    """
+    import config
+
+    raw_root = os.path.join(config.TCIA_DIR, "duke_mri")
+    corpus = config.DCE_MRI_PREPROCESSED_DIR
+    if not os.path.isdir(raw_root) or not os.path.isdir(corpus):
+        pytest.skip("raw DCE-MRI layer or built corpus not on this machine")
+
+    import pydicom
+
+    # Pick a patient the corpus already holds, then find its series on disk. Reading
+    # one header per folder is what `group_dce_series_by_patient` does anyway.
+    built = {f[:-4] for f in os.listdir(corpus) if f.endswith(".npz")}
+    if not built:
+        pytest.skip("corpus is empty")
+
+    phases = {}
+    patient = None
+    for name in sorted(os.listdir(raw_root)):
+        folder = os.path.join(raw_root, name)
+        if not os.path.isdir(folder):
+            continue
+        dcm = next((f for f in os.listdir(folder) if f.lower().endswith(".dcm")), None)
+        if dcm is None:
+            continue
+        header = pydicom.dcmread(os.path.join(folder, dcm), stop_before_pixels=True)
+        pid = str(getattr(header, "PatientID", ""))
+        if pid not in built or (patient is not None and pid != patient):
+            continue
+        rank = T._dce_phase_rank(getattr(header, "SeriesDescription", ""))
+        if rank in (0, 2):
+            patient, phases[rank] = pid, folder
+        if len(phases) == 2:
+            break
+
+    if len(phases) != 2:
+        pytest.skip("no patient with both phases on disk and a volume in the corpus")
+
+    pre = T._load_series_volume(phases[0])
+    post = T._load_series_volume(phases[2])
+    rebuilt = T.dce_subtraction(pre, post).astype(np.float16)
+
+    with np.load(os.path.join(corpus, f"{patient}.npz")) as data:
+        np.testing.assert_array_equal(rebuilt, data["volume"])
+        # The corpus is full frame; a crop here would mean the two disagree on geometry.
+        assert tuple(data["crop_offset"]) == (0, 0, 0)
 
 
 # --- lineage ----------------------------------------------------------------
