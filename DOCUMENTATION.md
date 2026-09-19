@@ -214,6 +214,7 @@ data/
 │   ├── dbt/           preprocess_dbt_with_boxes : examens annotés, recadrés sur la lésion
 │   ├── dbt_exams/     preprocess_dbt_exams : tous les examens en 384×384, cancer ou non
 │   └── dce_mri_p2/    preprocess_dce_mri_with_boxes (le modèle de la démo)
+│                      preprocess_dce_mri_exams pour un examen jamais annoté
 └── curated_data/      dérivé et reconstructible : banques de coupes, cas de démo, catalogue
 models/                checkpoints + les métriques qui les justifient
 reports/               rapports JSON
@@ -273,6 +274,35 @@ refaire). **Seul le téléchargement réessaie** : un échec TCIA est transitoir
 entraînement qui plante replanterait au même endroit une heure plus tard. Les tâches
 appellent les mêmes fonctions que les commandes manuelles, qui ne peuvent donc pas
 diverger.
+
+### Préparer une IRM jamais annotée (2026-09-19)
+
+Le flow ci-dessus prépare le corpus **annoté** : `preprocess_dce_mri_with_boxes`
+ignore tout patient absent de la table d'annotations. Un examen nouveau est exactement
+ce patient-là — il n'y avait donc aucun chemin du DICOM jusqu'à un volume que l'app
+accepte. `preprocess_dce_mri_exams` le fournit :
+
+```python
+from TransformData import preprocess_dce_mri_exams
+
+# root_dir contient les dossiers de séries du patient (un par SeriesInstanceUID).
+preprocess_dce_mri_exams("data/raw_data/nouveaux_examens",
+                         output_dir="data/preprocessed_data/nouveaux_examens")
+```
+
+Il ne demande que ce qu'exige une soustraction : la série pré-contraste et la passe
+post-contraste choisie (la 2ᵉ par défaut, §4.1). Le masque est vide et **la trame
+n'est jamais recadrée** — les deux découlent de l'absence d'annotation : il n'y a
+aucune lésion sur laquelle recadrer, et la pleine trame est la géométrie sur laquelle
+le checkpoint servi a été entraîné.
+
+**Ce qui garantit que le volume est le bon.** Les deux chemins appellent la même
+fonction `dce_subtraction` — une seule définition de « post − pré, seuillé à 0, puis
+z-normalisé ». L'égalité est donc structurelle, pas seulement testée ; un test la
+vérifie quand même, et une mutation prouve qu'il sait échouer (§4.16).
+
+Un examen incomplet (pré ou post manquante, passe demandée absente, formes
+discordantes entre phases) est compté et sauté, sans interrompre les autres.
 
 ### Chaîne DBT orchestrée (Prefect)
 
@@ -696,7 +726,9 @@ renforce la crédibilité.
 ### L'application web (`app/`)
 
 Une petite app Flask : on envoie une IRM DCE prétraitée, elle renvoie le verdict, la
-coupe et le cadre. Elle parle uniquement à un `Predictor` (`app/predictor.py`) :
+coupe et le cadre. Le `.npz` envoyé vient de `preprocess_dce_mri_exams` pour un
+examen neuf, ou de `preprocess_dce_mri_with_boxes` pour un examen de la collection
+annotée — les deux écrivent le même volume, et un test l'épingle (§4.16). Elle parle uniquement à un `Predictor` (`app/predictor.py`) :
 
 | Backend | Sélection | Rôle |
 |---|---|---|
@@ -860,6 +892,34 @@ fourni dans `docker-compose.yml` sous un profil. **Coût** : boto3 en dépendanc
 moto en dépendance de test ; MinIO lui-même non exécuté ici — le code n'utilise que des
 appels S3 standard, vérifiés contre un point d'accès S3 réel (serveur moto) ; copier les
 83 Go de DICOM doublerait l'espace disque en local pour peu de valeur.
+
+### ADR 0013 — Un examen non annoté a son propre chemin, et la soustraction n'a qu'une définition (2026-09-19)
+
+**Contexte** : tout ce que le modèle servi a jamais lu a été produit par
+`preprocess_dce_mri_with_boxes`, qui saute tout patient absent de la table
+d'annotations. Un examen neuf est précisément ce patient : il n'existait aucun chemin
+du DICOM jusqu'à un `.npz` que l'app accepte. Deux pièges bordaient la correction
+évidente (« recopier la fonction sans les boîtes ») : une copie dérive dès que l'une
+des deux est modifiée, et le défaut `crop=True` de la fonction existante **ne
+reproduisait pas** le corpus servi — mesuré, tous les volumes de `dce_mri_p2/` portent
+`crop_offset == (0, 0, 0)` en pleine trame, et chaque appelant du dépôt passait déjà
+`crop=False` explicitement.
+
+**Décision** : (1) extraire `dce_subtraction`, définition unique de « post − pré,
+seuillé à 0, z-normalisé », appelée par les deux chemins — l'égalité des volumes
+devient structurelle et non plus seulement testée ; (2) ajouter
+`preprocess_dce_mri_exams`, qui n'exige aucune annotation, écrit un masque vide et ne
+recadre jamais ; (3) aligner le défaut de `preprocess_dce_mri_with_boxes` sur
+`crop=False`, celui du corpus réel ; (4) ne rien inventer sur un examen que personne
+n'a lu — ni `label`, ni `exam_status`, ni coupe imposée, et le résultat affiche
+`slice_preselected: false`.
+
+**Coût** : deux fonctions de prétraitement DCE au lieu d'une, dont la partie qui
+compte n'est écrite qu'une fois. Le chemin DICOM → `.npz` n'a **pas** pu être vérifié
+ici sur une IRM brute réelle : la couche brute DCE-MRI (30 Go) a été supprimée le
+2026-08-10 comme reconstructible, et un balayage de 152 dossiers répartis sur les
+1 073 présents n'a trouvé que du DBT. Ce qui a été vérifié sur données réelles est la
+fin de la chaîne (§4.16).
 
 ---
 
@@ -1243,6 +1303,80 @@ données** :
 eux-mêmes, pas du code : `write_text` convertit `\n` en `\r\n` sous Windows, et un test
 supposait qu'un `plan` avait déjà envoyé les fichiers.
 
+### 4.16 Le chemin « nouvelle IRM » : trois défauts, et ce que la mesure a corrigé (2026-09-19)
+
+**Le défaut principal.** `preprocess_dce_mri_with_boxes` saute tout patient absent de
+la table d'annotations (`if rows.empty: skipped += 1; continue`). Une IRM neuve est ce
+patient : aucune fonction du dépôt ne pouvait la préparer. La docstring d'inférence le
+disait déjà à sa façon — « a web upload must be the already-preprocessed `.npz` » —
+sans qu'aucun chemin ne produise ce `.npz` pour un examen non lu.
+
+**Deux défauts trouvés en l'écrivant.**
+
+| # | Défaut | Preuve |
+|---|---|---|
+| 2 | Le défaut `crop=True` ne reproduisait pas le corpus servi | tous les `.npz` de `dce_mri_p2/` portent `crop_offset == (0,0,0)` en pleine trame ; `pipelines/dce_mri.py` passait déjà `crop=False` avec un commentaire l'expliquant |
+| 3 | `python TransformData.py` lançait du code hérité | son `__main__` appelait `process_all_mri_data`, qui écrivait des volumes IRM dans le corpus **DBT** et ouvrait un widget interactif `itkwidgets.view` depuis une fonction de bibliothèque |
+
+Le message d'erreur d'`imaging/dataset.py` orientait de surcroît l'utilisateur vers
+cette même fonction cassée. Corrigé : il nomme désormais les quatre fonctions réelles.
+
+**Ce qui a été supprimé.** `process_all_mri_data`, `preprocess_mri_data` et le bloc
+`__main__` : 105 lignes, `TransformData.py` passe de 1 291 à 1 186 lignes. Leurs seuls
+appelants étaient eux-mêmes. Conséquence mesurée : **SimpleITK, itk et itkwidgets ne
+sont plus importés nulle part dans le dépôt** et quittent les dépendances.
+
+**L'invariant qui rend une nouvelle IRM exploitable.** Un examen neuf n'a de sens pour
+le checkpoint que s'il arrive sur la même échelle d'intensité et la même géométrie que
+le corpus qui l'a entraîné. `dce_subtraction` est désormais la définition unique
+appelée par les deux chemins. Le test qui l'épingle **sait échouer** : en réinjectant
+une soustraction sans seuillage à 0 dans le seul chemin annoté, les deux volumes
+divergent d'au plus **0,160** et le test le voit.
+
+**Une propriété de la normalisation, trouvée par un test qui échouait.** La première
+fixture produisait un volume constant. Cause : `normalize_intensity` écrête au 99ᵉ
+percentile, et une lésion occupant moins de 1 % du volume est ramenée au même plafond
+que le 1 % le plus brillant du reste. Elle reste saturée, elle cesse d'être
+uniquement le maximum. Ce n'est pas un défaut — c'est un fenêtrage, et c'est une des
+raisons pour lesquelles les statistiques du §4.9 ne valent que **par examen**. La
+propriété a maintenant son propre test plutôt que de rester une surprise.
+
+**Vérifié sur données réelles — et ce qui ne l'a pas été.** La couche brute DCE-MRI
+n'est pas sur cette machine (30 Go supprimés le 2026-08-10 comme reconstructibles ;
+balayage de 152 dossiers sur les 1 073 présents : que du DBT). Le chemin
+DICOM → `.npz` n'est donc couvert que par des DICOM synthétiques. La **fin** de la
+chaîne a été vérifiée sur un vrai volume du corpus, réduit à ce qu'est une IRM neuve
+(volume seul, masque vide, aucune coupe imposée) :
+
+| Étape | Mesure |
+|---|---|
+| `predict_dce_mri` sur un volume 192×448×448 | **4,31 s** (CPU), `slice_selector: "classifier"`, `slice_preselected: false` |
+| `POST /api/predict` sur le même fichier (26,6 Mo) | **HTTP 200 en 4,83 s**, inférence 2 802 ms, overlay PNG produit |
+| Coupe choisie (117) contre le masque réel (87–135) | **dans la lésion** — un cas, donc une cohérence, **pas une mesure** : ce patient peut être dans le split d'entraînement. Le chiffre citable reste 43 % de top-1 sur 28 patients de test (§4.3) |
+
+**Tests** : 20 ajoutés (`tests/test_dce_mri_new_exam.py`), **287 fonctions de test** au
+total. Le chiffre a d'abord été obtenu localement (242 collectés + 45 comptés par AST
+dans les trois fichiers que cette machine ne peut pas collecter — Prefect et moto
+refusent de s'installer, chemins longs Windows désactivés), puis **confirmé par la CI**
+de la PR #31, qui exécute la suite complète :
+
+| Job CI | Rapport pytest |
+|---|---|
+| `check` | 246 passés, 4 ignorés — soit 250 items |
+| `orchestration` | 35 passés |
+
+Les deux comptes se recoupent exactement : 237 (les 242 locaux moins les 5 tests
+`test_extract_download`, que la CI n'installe pas) + 10 (`objectstore`) + 3 entrées de
+modules ignorés = 250 ; les 4 ignorés sont ces 3 modules (`tcia_utils` et Prefect
+absents du job `check`) plus le test propre à Windows. Les 35 du job `orchestration`
+tombent sur les 23 + 12 comptés par AST.
+
+**Un total exécuté est toujours inférieur au total écrit** : la CI scinde la suite en
+deux jobs et exclut délibérément le client TCIA. Le nombre qui se cite est celui des
+fonctions de test du dépôt, 287. Contrôle : 287 − 20 = 267, exactement le total publié
+au §4.15. **Le badge du README disait 254** : il avait dérivé une quatrième fois, il est
+corrigé.
+
 ---
 
 ## Prochaines pistes pour l'étape 1
@@ -1284,6 +1418,7 @@ Applications 2023.
 | 2026-09-13 | Tables BCS-DBT téléchargeables, statut par vue, examens normaux téléchargés, appariement par jointure, corpus d'examens à deux classes, `examclf` mesuré (négatif) |
 | 2026-09-14 | Étape 2 retirée ; warm start, score relatif, mesures sans modèle (négatives) ; split test téléchargé |
 | 2026-09-15 | Point de fonctionnement publié ; code mort retiré ; paquet réparé ; écarts doc ↔ code corrigés |
+| 2026-09-19 | Chemin « nouvelle IRM » : `preprocess_dce_mri_exams`, `dce_subtraction` en définition unique, défaut `crop` aligné sur le corpus, code hérité IRM retiré (−105 lignes, 3 dépendances lourdes en moins), 20 tests (§4.16) |
 | 2026-09-16 | **P0 portfolio** : README réorienté data engineering, décisions d'architecture, licence MIT, citations TCIA, GIF de démo, documentation unique en français. **P1** : catalogue DuckDB, migration dbt, flow Prefect DBT, délai sur les requêtes TCIA, trois défauts corrigés (§4.14) |
 
 ### Feuille de route « portfolio data engineering »
@@ -1312,6 +1447,8 @@ Applications 2023.
 | IC du top-1 à 43 % | Aucun code ni artefact versionné ne produit l'intervalle cité |
 | Erreur `cudaErrorIllegalAddress` | Observée une fois sur `/demo/1`, non reproduite |
 | Registre de traitement RGPD | Une page à écrire : base légale, nature des données, finalité, conservation, sécurité |
+| Chemin DICOM → `.npz` d'une IRM neuve | Couvert par des DICOM synthétiques seulement : la couche brute DCE-MRI n'est pas sur la machine (§4.16). À rejouer sur un examen brut réel |
+| Coupe choisie sur une IRM neuve | 43 % de top-1 (§4.3) : l'examen est préparé et servi correctement, la coupe reste le maillon faible |
 | Nom de produit et logo | À choisir |
 
 ---
@@ -1322,9 +1459,10 @@ Applications 2023.
 elle-même, et chaque écart corrigé reste noté ici — ce sont les chiffres qu'un relecteur
 vérifie en premier.
 
-**Le nombre de tests a dérivé trois fois** : « 202 » et « 209 » ont été écrits sans
-mesure, puis « 176 », mesuré le 2026-09-15, est devenu faux dès les tests suivants. Un
-nombre de tests se recompte, il ne s'estime pas.
+**Le nombre de tests a dérivé quatre fois** : « 202 » et « 209 » ont été écrits sans
+mesure, puis « 176 », mesuré le 2026-09-15, est devenu faux dès les tests suivants ;
+le badge du README est resté à « 254 » quand le texte disait déjà 267. Un nombre de
+tests se recompte, il ne s'estime pas — et le badge se recompte avec le texte.
 
 | Date | Écart | Correction |
 |---|---|---|
@@ -1333,6 +1471,7 @@ nombre de tests se recompte, il ne s'estime pas.
 | 2026-09-15 | 202 tests annoncés, 176 réels ; backend `unet` documenté mais impossible ; checkpoint mal documenté ; « aucun manifeste » alors que deux existaient ; « ~80 Go » pour 138 Go | Corrigés |
 | 2026-09-16 | 176 tests annoncés, 198 réels ; « 0,76 s par volume » pour 0,825 s ; « ~110 ms » pour ~70 ms mesurés ; « ~200 Mo par patient » pour ~310 Mo ; taille d'image Docker jamais mesurée | Corrigés |
 | 2026-09-16 | « 222 tests » en local contre 211 en CI, noté « non expliqué » ; « 152 normaux, non investigué » | Expliqués (§4.14) : 12 tests d'orchestration sans Prefect + 1 test Windows ; 2 normaux hors tirage |
+| 2026-09-19 | Badge README « 254 tests » contre 267 dans le texte ; `crop=True` par défaut alors que le corpus servi est en pleine trame ; message d'erreur d'`imaging/dataset.py` renvoyant à une fonction cassée ; `SimpleITK`/`itk`/`itkwidgets` déclarés mais importés nulle part | Corrigés (§4.16), badge recompté à 287 |
 | — | `models/dce_mri_p2_negfix/` nomme une expérience | Ouvert (le renommer casserait la démo) |
 
 ---
@@ -1379,7 +1518,8 @@ cliniques.
 ```bash
 pip install -e ".[dev]"
 ruff check .
-pytest                 # 254 tests en local, sans GPU ni jeu de données
+pytest                 # 287 tests, sans GPU ni jeu de données
+                       # (242 collectés sans les extras orchestration/storage)
 ```
 
 La [CI](.github/workflows/ci.yml) a deux jobs à chaque push et pull request : `check`

@@ -116,10 +116,12 @@ class DceMriUNetPredictor(_CachedUNetPredictor):
     Set ``MRI_APP_BACKEND=dce_mri`` to connect it
     (the checkpoint at ``models/dce_mri_p2_negfix/unet_best.pt`` must exist -- second
     post-contrast pass, scratch GroupNorm U-Net, 186-patient full-frame sample; see
-    DOCUMENTATION.md §4.1). The upload must be a preprocessed ``.npz`` (see
-    ``TransformData.preprocess_dce_mri_with_boxes``) -- unlike DBT there is no
-    single-file raw-DICOM path, since DCE-MRI needs two whole series (pre +
-    post-contrast) to build the subtraction.
+    DOCUMENTATION.md §4.1). The upload must be a preprocessed ``.npz``: unlike DBT
+    there is no single-file raw-DICOM path, since DCE-MRI needs two whole series
+    (pre + post-contrast) to build the subtraction. Build one with
+    ``TransformData.preprocess_dce_mri_exams`` for a new exam, or
+    ``preprocess_dce_mri_with_boxes`` when the exam is in the annotated collection --
+    both write the same volume, which a test pins.
 
     KNOWN LIMITATION (DOCUMENTATION.md §4.2): automatic slice selection does not yet work on
     a raw full-volume upload -- verified 0/186 on held-out patients, the model's

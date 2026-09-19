@@ -22,9 +22,9 @@ dependencies = [
     "tqdm==4.66.1",
     "numpy>=1.26,<2",
     "openpyxl==3.1.2",
-    "SimpleITK>=2.3.1",
-    "itk>=5.4",
-    "itkwidgets==0.32.6",
+    # SimpleITK, itk and itkwidgets were dropped on 2026-09-19 with the legacy
+    # single-series MRI path that was their only caller. Nothing in the repository
+    # imports them now.
     "torch>=2.2",
     "python-gdcm>=3.0",
     "Flask>=3.0",
