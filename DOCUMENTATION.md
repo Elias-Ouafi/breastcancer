@@ -1354,12 +1354,28 @@ chaîne a été vérifiée sur un vrai volume du corpus, réduit à ce qu'est un
 | `POST /api/predict` sur le même fichier (26,6 Mo) | **HTTP 200 en 4,83 s**, inférence 2 802 ms, overlay PNG produit |
 | Coupe choisie (117) contre le masque réel (87–135) | **dans la lésion** — un cas, donc une cohérence, **pas une mesure** : ce patient peut être dans le split d'entraînement. Le chiffre citable reste 43 % de top-1 sur 28 patients de test (§4.3) |
 
-**Tests** : 20 ajoutés (`tests/test_dce_mri_new_exam.py`), **287** au total —
-242 collectés ici, 45 comptés par AST dans les trois fichiers que cette machine ne peut
-pas collecter (Prefect et moto refusent de s'installer, chemins longs Windows
-désactivés). La méthode de comptage se contrôle sur un chiffre connu : 287 − 20 = 267,
-exactement le total publié au §4.15. **Le badge du README disait 254** : il avait
-dérivé une quatrième fois, il est corrigé.
+**Tests** : 20 ajoutés (`tests/test_dce_mri_new_exam.py`), **287 fonctions de test** au
+total. Le chiffre a d'abord été obtenu localement (242 collectés + 45 comptés par AST
+dans les trois fichiers que cette machine ne peut pas collecter — Prefect et moto
+refusent de s'installer, chemins longs Windows désactivés), puis **confirmé par la CI**
+de la PR #31, qui exécute la suite complète :
+
+| Job CI | Rapport pytest |
+|---|---|
+| `check` | 246 passés, 4 ignorés — soit 250 items |
+| `orchestration` | 35 passés |
+
+Les deux comptes se recoupent exactement : 237 (les 242 locaux moins les 5 tests
+`test_extract_download`, que la CI n'installe pas) + 10 (`objectstore`) + 3 entrées de
+modules ignorés = 250 ; les 4 ignorés sont ces 3 modules (`tcia_utils` et Prefect
+absents du job `check`) plus le test propre à Windows. Les 35 du job `orchestration`
+tombent sur les 23 + 12 comptés par AST.
+
+**Un total exécuté est toujours inférieur au total écrit** : la CI scinde la suite en
+deux jobs et exclut délibérément le client TCIA. Le nombre qui se cite est celui des
+fonctions de test du dépôt, 287. Contrôle : 287 − 20 = 267, exactement le total publié
+au §4.15. **Le badge du README disait 254** : il avait dérivé une quatrième fois, il est
+corrigé.
 
 ---
 
