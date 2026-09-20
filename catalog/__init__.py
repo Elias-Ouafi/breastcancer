@@ -10,7 +10,7 @@ package loads all of it once and layers it the way a warehouse would:
     mart   fct_series, dim_patient, corpus and coverage tables <- dbt models
     qa     offending rows of every dbt test, and their results <- dbt tests
 
-    python -m catalog build        # ~10 s; writes data/curated_data/catalog/
+    python -m catalog build        # ~10 s; writes data/gold/catalog/
     python -m catalog checks       # the data-quality report of the last build
     python -m catalog query "SELECT split, status, count(*) FROM mart.dim_patient GROUP BY ALL"
     python -m catalog docs         # dbt documentation site, lineage graph included

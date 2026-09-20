@@ -1,4 +1,4 @@
-"""Regenerate the three curated demo cases shipped in ``data/curated_data/demo_cases/``.
+"""Regenerate the three curated demo cases shipped in ``data/gold/demo_cases/``.
 
 The cases in git are slim (a 25-slice slab, 4-5 MB each) so the demo works straight out
 of a clone. This script rebuilds them from the full preprocessed DCE-MRI volumes,
@@ -9,7 +9,7 @@ redone, or to verify that what is committed matches what the pipeline produces.
     python scripts/make_demo_cases.py --verify              # rebuild + score them
     python scripts/make_demo_cases.py --source-dir <dir>    # other volume source
 
-Requires the full volumes (``data/preprocessed_data/dce_mri_p2/``, produced by
+Requires the full volumes (``data/silver/dce_mri_p2/``, produced by
 ``TransformData.preprocess_dce_mri_with_boxes`` with ``post_phase_rank=2`` and
 ``crop=False``). Those are patient data and stay out of git -- which is exactly why
 the *outputs* are committed instead.
@@ -39,7 +39,7 @@ DEMO_CASES = [
     ("demo_3_Breast_MRI_079.npz", "Breast_MRI_079", 104, 0.728),
 ]
 
-DEFAULT_SOURCE_DIR = config.DCE_MRI_PREPROCESSED_DIR
+DEFAULT_SOURCE_DIR = config.DCE_MRI_SILVER_DIR
 DEFAULT_OUT_DIR = config.DEMO_CASES_DIR
 
 

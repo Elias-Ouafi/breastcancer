@@ -55,8 +55,8 @@ class Sources:
                         config.DBT_FILE_PATHS_TEST],
             tcia_dir=config.TCIA_DIR,
             manifests={
-                "dbt": os.path.join(config.DBT_PREPROCESSED_DIR, "manifest.json"),
-                "dbt_exams": os.path.join(config.DBT_EXAMS_PREPROCESSED_DIR, "manifest.json"),
+                "dbt": os.path.join(config.DBT_SILVER_DIR, "manifest.json"),
+                "dbt_exams": os.path.join(config.DBT_EXAMS_SILVER_DIR, "manifest.json"),
             },
             predictions=config.EXAMCLF_PREDICTIONS,
         )

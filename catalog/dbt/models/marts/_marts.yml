@@ -2,7 +2,7 @@ version: 2
 
 models:
   - name: fct_series
-    description: One row per series the collection publishes - what the tables say, whether it is on disk, which corpus holds it.
+    description: One row per series the collection publishes - what the tables say, whether it was downloaded (on_disk, any zone), whether the raw bytes are still in bronze, which corpus holds it.
     columns:
       - name: series_uid
         description: Grain. The DICOM SeriesInstanceUID, also the download folder name.
@@ -36,7 +36,7 @@ models:
               arguments: {values: [cancer, benign, actionable, normal]}
 
   - name: collection_coverage
-    description: Patients per split and status at each stage - published, on disk, in the exam corpus, scored.
+    description: Patients per split and status at each stage - published, downloaded, in the exam corpus, scored - and the bronze still held.
 
   - name: corpus_summary
     description: One row per preprocessed corpus with its class balance and the run that wrote it.

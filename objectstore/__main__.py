@@ -2,7 +2,7 @@
 
     python -m objectstore plan [--dicom-sample N]
     python -m objectstore sync [--dicom-sample N]
-    python -m objectstore ls [--prefix curated/]
+    python -m objectstore ls [--prefix gold/]
 
 The endpoint and bucket come from BREASTCANCER_S3_ENDPOINT (e.g. http://127.0.0.1:9000
 for the MinIO service of docker-compose.yml) and BREASTCANCER_S3_BUCKET (default

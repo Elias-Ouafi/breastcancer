@@ -42,7 +42,9 @@ def _write_csv(path, header, rows):
 
 
 def _make_sources(root, *, exam_cases=None, lesion_cases=None, predictions=None,
-                  on_disk=("1.1", "1.2", "1.3", "2.1", "2.2")):
+                  in_bronze=(), promoted=("1.1", "1.2", "1.3", "2.1", "2.2")):
+    """``promoted`` series are in the exam corpus (silver); ``in_bronze`` are the raw
+    folders still held. The default is the state after a purge: promoted, not in bronze."""
     tcia = root / "tcia"
     tcia.mkdir()
     labels, boxes, paths = [], [], []
@@ -72,7 +74,7 @@ def _make_sources(root, *, exam_cases=None, lesion_cases=None, predictions=None,
                     for pid, sid, view, cls in BOXES[split]])
         boxes.append(str(p))
 
-    for uid in on_disk:
+    for uid in in_bronze:
         folder = tcia / uid
         folder.mkdir()
         (folder / "1-1.dcm").write_bytes(b"\0" * 1000)
@@ -82,7 +84,7 @@ def _make_sources(root, *, exam_cases=None, lesion_cases=None, predictions=None,
         path = root / f"{name}_manifest.json"
         path.write_text(json.dumps({
             "generated_at": "2026-09-13T00:00:00+00:00", "git_revision": "abc1234",
-            "source": "data/raw_data/tcia", "output_dir": f"data/preprocessed_data/{name}",
+            "source": "data/bronze/tcia", "output_dir": f"data/silver/{name}",
             "parameters": {}, "n_cases": len(cases), "validation_warnings": [],
             "cases": cases,
         }))
@@ -94,7 +96,7 @@ def _make_sources(root, *, exam_cases=None, lesion_cases=None, predictions=None,
                   "exam_status": STATUS[uid], "label": int(STATUS[uid] == "cancer"),
                   "warnings": [], "mirrored": False}
             for series in FILE_PATHS.values() for pid, sid, view, uid in series
-            if uid in on_disk
+            if uid in promoted
         }
     if lesion_cases is None:
         lesion_cases = {"1.1": {"shape": [37, 200, 200], "case_id": "P1", "study_uid": "S1",
@@ -127,7 +129,23 @@ def test_clean_fixture_builds_and_passes_every_check(tmp_path):
     assert _failing(result) == set()
     assert result.row_counts["mart.fct_series"] == 6
     assert result.row_counts["mart.dim_patient"] == 3
-    assert result.row_counts["raw.disk_series"] == 5  # duke_mri/ is not a series
+    assert result.row_counts["raw.disk_series"] == 0  # purged: nothing left in bronze
+    con.close()
+
+
+def test_bronze_holds_only_series_folders_and_counts_as_downloaded(tmp_path):
+    # 3.1 was downloaded and is not in a corpus yet, so it is the one thing bronze holds.
+    result, con = _build(tmp_path, in_bronze=("3.1",))
+    assert result.row_counts["raw.disk_series"] == 1  # duke_mri/ is not a series
+    assert _failing(result) == set()
+    row = con.execute("""
+        SELECT on_disk, in_bronze, bronze_bytes FROM mart.fct_series
+        WHERE series_uid = '3.1'""").fetchone()
+    assert row == (True, True, 1000)
+    # Promoted and purged: downloaded all the same, and no longer in bronze.
+    assert con.execute("""
+        SELECT on_disk, in_bronze, bronze_bytes FROM mart.fct_series
+        WHERE series_uid = '1.1'""").fetchone() == (True, False, None)
     con.close()
 
 
@@ -152,7 +170,9 @@ def test_disk_corpus_and_predictions_are_joined(tmp_path):
         SELECT n_series_on_disk, fully_on_disk, n_series_in_exam_corpus,
                n_series_in_lesion_corpus, examclf_score
         FROM mart.dim_patient WHERE patient_id = 'P1'""").fetchone()
-    assert p1 == (3, True, 3, 1, 0.9)
+    assert p1 == (3, True, 3, 1, 0.9)  # downloaded although none is in bronze any more
+    assert con.execute("SELECT n_series_in_bronze, bronze_gb FROM mart.dim_patient "
+                       "WHERE patient_id = 'P1'").fetchone() == (0, 0.0)
     p3 = con.execute("SELECT n_series_on_disk, examclf_score FROM mart.dim_patient "
                      "WHERE patient_id = 'P3'").fetchone()
     assert p3 == (0, None)
@@ -206,14 +226,18 @@ def test_prediction_label_disagreeing_with_the_corpus_fails(tmp_path):
     assert "predictions_label_matches_corpus" in _failing(result)
 
 
-def test_missing_download_is_a_warning_not_an_error(tmp_path):
-    # 1.3 preprocessed but its raw folder is gone: rebuildable no more, labels still right.
-    result, _ = _build(tmp_path, on_disk=("1.1", "1.2", "2.1", "2.2"), exam_cases={
+def test_a_promoted_series_still_in_bronze_is_a_warning_not_an_error(tmp_path):
+    # 1.3 is in silver and its raw folder is still there: the purge has not run (or the
+    # run kept bronze). The medallion rule is broken, the labels are still right.
+    result, con = _build(tmp_path, in_bronze=("1.3",), exam_cases={
         "1.3": {"shape": [60, 384, 384], "case_id": "P1", "study_uid": "S1", "view": "rcc",
                 "exam_status": "normal", "label": 0, "warnings": []},
     }, predictions=[("P1", 0, 0.9, 0)])
-    assert _failing(result) == {"corpus_series_on_disk"}
+    assert _failing(result) == {"bronze_series_already_in_silver"}
     assert result.failed_errors == []
+    assert con.execute("SELECT corpus, series_uid FROM qa.bronze_series_already_in_silver"
+                       ).fetchall() == [("dbt_exams", "1.3")]
+    con.close()
 
 
 def test_optional_sources_may_be_absent(tmp_path):

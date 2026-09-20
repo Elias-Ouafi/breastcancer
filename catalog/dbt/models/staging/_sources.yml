@@ -14,7 +14,7 @@ sources:
       - name: dbt_file_paths
         description: BCS-DBT-file-paths-*.csv, the series inventory. Its classic_path names the series folder.
       - name: disk_series
-        description: Series folders present under data/raw_data/tcia, sized with stat (no DICOM opened).
+        description: Series folders still in bronze (data/bronze/tcia), sized with stat (no DICOM opened). Purged once promoted to silver.
       - name: manifest_cases
         description: One row per case of each preprocessing run's manifest.json (lineage.py).
       - name: manifest_runs

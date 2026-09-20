@@ -7,7 +7,7 @@ SELECT
     patients_on_disk,
     patients_in_exam_corpus,
     patients_scored,
-    disk_gb
+    bronze_gb
 FROM mart.collection_coverage
 ORDER BY split, CASE status WHEN 'cancer' THEN 1 WHEN 'benign' THEN 2
                             WHEN 'actionable' THEN 3 ELSE 4 END;

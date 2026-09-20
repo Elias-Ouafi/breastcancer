@@ -1,6 +1,6 @@
 """Slice-level lesion classifier: "does this slice contain a lesion?".
 
-    python -m imaging.sliceclf --slice-bank data/curated_data/slice_bank_p2 --epochs 20
+    python -m imaging.sliceclf --slice-bank data/gold/slice_bank_p2 --epochs 20
 
 Why a separate model
 --------------------
@@ -274,7 +274,7 @@ def train(args):
 
 def build_arg_parser():
     p = argparse.ArgumentParser(description="Train a slice-level lesion classifier.")
-    p.add_argument("--data-dir", default=config.DCE_MRI_PREPROCESSED_DIR)
+    p.add_argument("--data-dir", default=config.DCE_MRI_SILVER_DIR)
     p.add_argument("--slice-bank", default=config.SLICE_BANK_DIR)
     p.add_argument("--output-dir", default=config.SLICE_CLF_DIR)
     p.add_argument("--epochs", type=int, default=20)

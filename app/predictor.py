@@ -128,7 +128,7 @@ class DceMriUNetPredictor(_CachedUNetPredictor):
     confidence saturates on essentially every slice. It segments well once shown the
     right slice, it just cannot find that slice on its own yet. Use
     ``TransformData.make_demo_case`` to pin a verified-good ``forced_slice`` for
-    reliable demo cases (see ``data/curated_data/demo_cases/``) until that ranking problem is fixed.
+    reliable demo cases (see ``data/gold/demo_cases/``) until that ranking problem is fixed.
     """
 
     name = "dce_mri"

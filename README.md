@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml/badge.svg)](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
-![Tests : 305](https://img.shields.io/badge/tests-305-brightgreen)
+![Tests : 341](https://img.shields.io/badge/tests-341-brightgreen)
 [![Licence : MIT](https://img.shields.io/badge/licence-MIT-lightgrey)](LICENSE)
 
 > **Research Use Only — Not for diagnostic use.** Outil de recherche, pas un dispositif
@@ -77,7 +77,7 @@ flowchart TB
         SERIES["download_*_series<br/>reprenable · plafonné · tirage avec graine"]
     end
 
-    RAW[("raw_data/tcia<br/>tel que publié, jamais réécrit")]
+    RAW[("bronze/tcia<br/>tel que publié · supprimé une fois en silver")]
 
     subgraph TRANSFORM["Transformation — TransformData.py"]
         JOIN["Jointure boîte ↔ série<br/>sur PatientID, StudyUID, View"]
@@ -87,8 +87,8 @@ flowchart TB
 
     VALID{{"validation.py<br/>contrôle de schéma à l'écriture"}}
     LINEAGE[/"lineage.py<br/>manifest.json : commit, paramètres, stats"/]
-    PRE[("preprocessed_data<br/>un .npz par série")]
-    CUR[("curated_data<br/>banques de coupes, cas de démo")]
+    PRE[("silver<br/>un .npz par série · seule copie")]
+    CUR[("gold<br/>banques de coupes, cas de démo")]
 
     subgraph ML["Entraînement et évaluation — imaging/"]
         TRAIN["U-Net · classifieur de coupe · classifieur d'examen<br/>découpage par patient, validation croisée"]
@@ -98,7 +98,7 @@ flowchart TB
     ART[("models/ · reports/<br/>checkpoints + métriques")]
     APP["App Flask + API JSON<br/>Docker, lecture seule, local uniquement"]
     CAT[("catalog.duckdb · dbt<br/>raw → stg → mart · 36 tests · Parquet")]
-    S3[("Bucket S3 / MinIO<br/>raw/ · preprocessed/ · curated/")]
+    S3[("Bucket S3 / MinIO<br/>bronze/ · silver/ · gold/")]
 
     DBT --> TABLES
     DBT --> SERIES
@@ -107,6 +107,7 @@ flowchart TB
     SERIES --> RAW
     RAW --> JOIN --> LABEL --> GEOM
     GEOM --> VALID --> PRE
+    PRE -.->|"purge du bronze"| RAW
     PRE -.-> LINEAGE
     PRE --> CUR --> TRAIN --> EVAL --> ART
     ART --> APP
@@ -128,7 +129,7 @@ versionnés. Elle n'a besoin que de quatre paquets — `torch`, `Flask`, `numpy`
 `Pillow` — et pas du reste du pipeline :
 
 ```bash
-pip install -r requirements-demo.txt
+pip install -e .              # le socle de pyproject.toml : ces quatre paquets seulement
 python run_demo.py --open     # préflight, puis http://127.0.0.1:5000
 ```
 
@@ -145,16 +146,19 @@ quatre paquets aussi (§4.17 de [DOCUMENTATION.md](DOCUMENTATION.md)) :
 docker compose up --build
 ```
 
-Pour tout le reste — collecte, transformation, catalogue —, l'installation complète :
+Pour tout le reste — collecte, transformation, catalogue —, l'installation complète. Un seul
+fichier déclare les dépendances, `pyproject.toml` : le socle est la démo, chaque autre usage
+est un extra (`data`, `collect`, `catalog`, `orchestration`, `storage`, `dev`) et `all` les
+réunit :
 
 ```bash
-pip install -r requirements.txt
+pip install -e ".[all]"
 ```
 
 Chaîne de données DBT et catalogue (nécessitent les tables et les données téléchargées) :
 
 ```bash
-pip install -e ".[orchestration,catalog,storage]"
+pip install -e ".[data,collect,catalog,orchestration,storage]"
 python -m pipelines.dbt --dry-run     # ce qui manque, calculé hors ligne
 python -m pipelines.dbt               # télécharge, prétraite, catalogue, publie ce qui manque
 python -m catalog query --file catalog/queries/01_data_funnel.sql
@@ -188,7 +192,7 @@ Prefect · Flask · Docker · GitHub Actions
 ## Organisation du dépôt
 
 ```
-requirements-demo.txt  les 4 paquets de la démo ; l'image Docker lit le même fichier
+pyproject.toml         dépendances : socle = les 4 paquets de la démo, plus des extras ; l'image Docker lit le socle
 ExtractData.py      collecte TCIA : tables d'annotations, séries annotées et normales
 TransformData.py    DICOM → volumes normalisés + masques, jointure boîte/série, étiquettes
 validation.py       contrôles de schéma au point unique d'écriture

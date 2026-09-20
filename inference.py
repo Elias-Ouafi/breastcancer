@@ -52,7 +52,7 @@ def load_unet(checkpoint: str, base: int = 32, device=None):
     if not os.path.exists(checkpoint):
         raise FileNotFoundError(
             f"No U-Net checkpoint at {checkpoint!r}. Train it first: "
-            "python -m imaging.train --data-dir data/preprocessed_data/dbt"
+            "python -m imaging.train --data-dir data/silver/dbt"
         )
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(base_channels=base)
@@ -477,7 +477,7 @@ if __name__ == "__main__":
     # Tiny smoke path for the imaging side: score the first preprocessed volume.
     from glob import glob
 
-    npzs = sorted(glob(os.path.join(config.DCE_MRI_PREPROCESSED_DIR, "*.npz")))
+    npzs = sorted(glob(os.path.join(config.DCE_MRI_SILVER_DIR, "*.npz")))
     if npzs:
         log.info(f"Scoring {npzs[0]} ...")
         log.info(predict_dce_mri(npzs[0]))

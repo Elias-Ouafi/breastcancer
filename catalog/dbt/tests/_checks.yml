@@ -25,11 +25,11 @@ data_tests:
   - name: predictions_label_matches_corpus
     description: A scored patient's label is the max of their exam-corpus labels.
     config: {severity: error}
-  - name: corpus_series_on_disk
-    description: Every preprocessed case still has its raw series on disk, so it can be rebuilt.
+  - name: bronze_series_already_in_silver
+    description: A series still in bronze although a silver corpus holds it - a purge pending, or a run with --keep-bronze.
     config: {severity: warn}
   - name: disk_series_in_inventory
-    description: Every downloaded series folder is listed by the inventory.
+    description: Every series folder in bronze is listed by the inventory.
     config: {severity: warn}
   - name: file_paths_have_labels
     description: Every inventoried series has a labels row; one without is skipped by preprocess_dbt_exams.

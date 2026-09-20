@@ -23,16 +23,20 @@ WORKDIR /app
 
 # CPU-only torch, from the index that serves it. The default wheel carries bundled
 # CUDA libraries that cannot be used here: the container is not given a GPU. Done
-# before the requirements file so the resolution below finds torch already
+# before the dependency list so the resolution below finds torch already
 # satisfied and never reaches for the PyPI wheel.
 RUN pip install --no-cache-dir "torch>=2.2" --index-url https://download.pytorch.org/whl/cpu
 
 # The demo's actual dependency surface -- Flask serves it, numpy and Pillow render
-# the slices -- read from the same file a host install uses, so the image and a
-# clone cannot drift apart (a test pins that they do not). Installed before the
-# source is copied so editing a template does not reinstall PyTorch.
-COPY requirements-demo.txt ./
-RUN pip install --no-cache-dir -r requirements-demo.txt
+# the slices -- read from `dependencies` in pyproject.toml, the same list a host
+# `pip install -e .` uses, so the image and a clone cannot drift apart (a test pins
+# that they do not). tomllib rather than `pip install .`: that would build the project
+# before its source is copied. Installed before the source is copied so editing a
+# template does not reinstall PyTorch.
+COPY pyproject.toml ./
+RUN python -c "import tomllib; print(*tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies'], sep='\n')" > /tmp/demo-requirements.txt \
+    && pip install --no-cache-dir -r /tmp/demo-requirements.txt \
+    && rm /tmp/demo-requirements.txt
 
 # Source last: it changes on every commit, the layers above almost never do.
 COPY config.py logging_setup.py inference.py run_demo.py validation.py lineage.py ./
@@ -40,7 +44,7 @@ COPY app/ ./app/
 COPY imaging/ ./imaging/
 COPY models/dce_mri_p2_negfix/ ./models/dce_mri_p2_negfix/
 COPY models/sliceclf/ ./models/sliceclf/
-COPY data/curated_data/demo_cases/ ./data/curated_data/demo_cases/
+COPY data/gold/demo_cases/ ./data/gold/demo_cases/
 
 # Nothing here needs root. If the image is ever run with a bind mount, this is what
 # keeps it from writing root-owned files into the host checkout.

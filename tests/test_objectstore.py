@@ -68,16 +68,16 @@ def keys(files):
 
 def test_the_keys_mirror_the_local_layers(layers):
     assert keys(layers()) == [
-        "curated/catalog/dim_patient.parquet",
-        "preprocessed/dbt_exams/manifest.json",
-        "raw/tcia/tables/BCS-DBT-boxes-train.csv",
-        "raw/tcia/tables/BCS-DBT-labels-train-v2.csv",
+        "bronze/tcia/tables/BCS-DBT-boxes-train.csv",
+        "bronze/tcia/tables/BCS-DBT-labels-train-v2.csv",
+        "gold/catalog/dim_patient.parquet",
+        "silver/dbt_exams/manifest.json",
     ]
 
 
 def test_dicom_is_published_only_for_the_requested_sample(layers):
     assert [k for k in keys(layers(dicom_sample=1)) if "series" in k] == [
-        "raw/tcia/series/1.2.3/1-1.dcm"]
+        "bronze/tcia/series/1.2.3/1-1.dcm"]
 
 
 def test_planning_against_a_missing_bucket_sends_nothing_and_creates_nothing(s3, layers):
@@ -98,8 +98,8 @@ def test_a_changed_file_is_uploaded_again(s3, layers):
     run_sync(s3, BUCKET, layers())
     (layers.tcia / "BCS-DBT-labels-train-v2.csv").write_bytes(b"PatientID,View\nP1,rcc\n")
     plan = run_sync(s3, BUCKET, layers())
-    assert [f.key for f in plan.upload_changed] == ["raw/tcia/tables/BCS-DBT-labels-train-v2.csv"]
-    body = s3.get_object(Bucket=BUCKET, Key="raw/tcia/tables/BCS-DBT-labels-train-v2.csv")
+    assert [f.key for f in plan.upload_changed] == ["bronze/tcia/tables/BCS-DBT-labels-train-v2.csv"]
+    body = s3.get_object(Bucket=BUCKET, Key="bronze/tcia/tables/BCS-DBT-labels-train-v2.csv")
     assert body["Body"].read() == b"PatientID,View\nP1,rcc\n"
 
 
@@ -116,11 +116,11 @@ def test_multipart_uploads_are_compared_by_stored_md5(s3, tmp_path, monkeypatch)
 
     big = tmp_path / "big.bin"
     big.write_bytes(os.urandom(6 * 1024 * 1024))
-    files = [LocalFile(str(big), "raw/big.bin", big.stat().st_size)]
+    files = [LocalFile(str(big), "bronze/big.bin", big.stat().st_size)]
     monkeypatch.setattr(sync, "MULTIPART_THRESHOLD", 5 * 1024 * 1024)
 
     run_sync(s3, BUCKET, files, multipart_threshold=5 * 1024 * 1024)
-    head = s3.head_object(Bucket=BUCKET, Key="raw/big.bin")
+    head = s3.head_object(Bucket=BUCKET, Key="bronze/big.bin")
     assert "-" in head["ETag"]  # a multipart ETag, not an MD5
     assert MD5_METADATA_KEY in head["Metadata"]
     assert plan_sync(s3, BUCKET, files).summary()["unchanged"] == 1
@@ -128,10 +128,10 @@ def test_multipart_uploads_are_compared_by_stored_md5(s3, tmp_path, monkeypatch)
 
 def test_objects_only_in_the_bucket_are_reported_and_kept(s3, layers):
     run_sync(s3, BUCKET, layers())
-    s3.put_object(Bucket=BUCKET, Key="raw/tcia/tables/old-table.csv", Body=b"x")
+    s3.put_object(Bucket=BUCKET, Key="bronze/tcia/tables/old-table.csv", Body=b"x")
     plan = run_sync(s3, BUCKET, layers())
-    assert plan.remote_only == ["raw/tcia/tables/old-table.csv"]
-    s3.head_object(Bucket=BUCKET, Key="raw/tcia/tables/old-table.csv")  # still there
+    assert plan.remote_only == ["bronze/tcia/tables/old-table.csv"]
+    s3.head_object(Bucket=BUCKET, Key="bronze/tcia/tables/old-table.csv")  # still there
 
 
 def test_each_sync_is_recorded_in_the_bucket(s3, layers):

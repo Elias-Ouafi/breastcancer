@@ -7,10 +7,10 @@
 
 Keys mirror the local layers, so a path in the bucket says which layer it belongs to:
 
-    raw/tcia/tables/BCS-DBT-labels-train-v2.csv
-    raw/tcia/series/<SeriesInstanceUID>/<file>.dcm
-    preprocessed/<corpus>/manifest.json
-    curated/catalog/<table>.parquet
+    bronze/tcia/tables/BCS-DBT-labels-train-v2.csv
+    bronze/tcia/series/<SeriesInstanceUID>/<file>.dcm
+    silver/<corpus>/manifest.json
+    gold/catalog/<table>.parquet
     _meta/last_sync.json
 
 What is published by default is what is light and worth sharing: the 9 annotation

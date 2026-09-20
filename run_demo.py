@@ -7,7 +7,7 @@ importantly, it fails with a sentence you can act on instead of a stack trace
 mid-pitch.
 
 Everything it needs is committed (checkpoint + the three curated cases), so a fresh
-``git clone`` + ``pip install -r requirements-demo.txt`` is enough. ``--check`` runs
+``git clone`` + ``pip install -e .`` is enough. ``--check`` runs
 the preflight and exits, which is the fast way to confirm a machine is demo-ready
 without occupying a port.
 
@@ -32,7 +32,7 @@ ROOT = config.ROOT
 CHECKPOINT = os.path.relpath(config.DCE_MRI_UNET_CKPT, ROOT)
 DEMO_DIR = os.path.relpath(config.DEMO_CASES_DIR, ROOT)
 
-INSTALL_HINT = "    -> pip install -r requirements-demo.txt"
+INSTALL_HINT = "    -> pip install -e ."
 
 
 def _port_is_free(port: int, host: str = "127.0.0.1") -> bool:

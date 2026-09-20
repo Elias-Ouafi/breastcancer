@@ -1,24 +1,33 @@
 """What a clone must install for the demo, and what the UI may promise about it.
 
-Two drifts this pins, both of which show up only in front of an audience:
+Three drifts this pins, all of which show up only in front of an audience:
 
-* ``requirements-demo.txt`` and the Dockerfile install different things, so the
-  image works and a host clone does not (or the reverse).
-* The upload widget offers a format the served backend cannot score. That was a
-  real 500 on a dropped DICOM, with the server-side temp path printed on the page.
+* the base install of ``pyproject.toml`` and the Dockerfile install different things, so
+  the image works and a host clone does not (or the reverse);
+* a use case gets an extra but not a place in ``all``, or code imports a package no
+  extra declares -- ``pip install -e ".[all]"`` then no longer means "everything";
+* the upload widget offers a format the served backend cannot score. That was a real
+  500 on a dropped DICOM, with the server-side temp path printed on the page.
 """
 from __future__ import annotations
 
+import ast
 import os
 import re
+import subprocess
+import sys
+import tomllib
 
 import pytest
 
 import config
 
-DEMO_REQUIREMENTS = os.path.join(config.ROOT, "requirements-demo.txt")
 DOCKERFILE = os.path.join(config.ROOT, "Dockerfile")
 PYPROJECT = os.path.join(config.ROOT, "pyproject.toml")
+
+# Import name -> distribution name, where the two differ.
+IMPORT_TO_DISTRIBUTION = {"botocore": "boto3", "PIL": "pillow", "tcia_utils": "tcia-utils", "gdcm": "python-gdcm",
+                          "yaml": "pyyaml"}
 
 
 def _read(path):
@@ -26,42 +35,98 @@ def _read(path):
         return handle.read()
 
 
-def _requirements(text):
-    """Requirement lines, comments and blanks dropped."""
-    return [line.strip() for line in text.splitlines()
-            if line.strip() and not line.strip().startswith("#")]
+def _project():
+    with open(PYPROJECT, "rb") as handle:
+        return tomllib.load(handle)["project"]
 
 
-def test_the_demo_requirements_cover_what_the_demo_imports():
+def _name(requirement):
+    return re.split(r"[<>=!~\[ ]", requirement.strip())[0].lower().replace("_", "-")
+
+
+def test_the_base_install_is_exactly_the_demo():
     """torch, Flask, numpy, Pillow: the whole third-party surface of the demo path.
 
     run_demo -> app.server -> app.predictor -> inference -> imaging.unet. Anything
-    else in the list is weight a reviewer downloads for nothing; anything missing
-    is an ImportError on a machine that installed only this file.
+    else in the base install is weight a reviewer downloads for nothing; anything
+    missing is an ImportError on a machine that installed only this.
     """
-    names = {re.split(r"[<>=!~\[]", line)[0].strip().lower()
-             for line in _requirements(_read(DEMO_REQUIREMENTS))}
+    names = {_name(requirement) for requirement in _project()["dependencies"]}
     assert names == {"torch", "flask", "numpy", "pillow"}, sorted(names)
 
 
-def test_the_demo_requirements_match_the_project_pins():
-    """Same version bounds as `pyproject.toml`, so the two installs agree."""
-    pyproject = _read(PYPROJECT)
-    for requirement in _requirements(_read(DEMO_REQUIREMENTS)):
-        assert f'"{requirement}"' in pyproject, (
-            f"{requirement} n'apparaît pas tel quel dans pyproject.toml : "
-            "les deux installations divergeraient"
-        )
+def test_the_all_extra_is_the_union_of_every_other_extra():
+    """A new extra that is not in `all` is a use case `pip install -e ".[all]"` forgets."""
+    extras = _project()["optional-dependencies"]
+    (self_reference,) = extras["all"]
+    included = set(re.search(r"\[(.*)\]", self_reference).group(1).replace(" ", "").split(","))
+    assert included == set(extras) - {"all"}, (
+        f"`all` couvre {sorted(included)}, les extras sont {sorted(set(extras) - {'all'})}"
+    )
 
 
-def test_the_image_installs_from_the_same_file():
+def test_every_third_party_import_of_the_project_is_declared_somewhere():
+    """Nothing the code imports may be absent from both the base install and the extras.
+
+    Walks the project's own modules (tests excluded: they import pytest and moto, which
+    `dev` declares, and the scan would only restate that). A package imported at module
+    level and declared nowhere is the bug that turns "install everything" into a
+    ModuleNotFoundError on the first command.
+    """
+    project = _project()
+    declared = {_name(r) for r in project["dependencies"]}
+    for requirements in project["optional-dependencies"].values():
+        declared |= {_name(r) for r in requirements if not r.startswith("breastcancer[")}
+    # dbt is imported as `dbt`, shipped by dbt-duckdb (which depends on dbt-core).
+    declared |= {"dbt"}
+    stdlib = set(sys.stdlib_module_names)
+
+    tracked = subprocess.run(["git", "ls-files", "*.py"], cwd=config.ROOT, check=True,
+                             capture_output=True, text=True).stdout.split()
+    # The project's own names: every module and package. The imaging modules import their
+    # siblings twice on purpose (`from .dataset` and a bare `from dataset`), so a
+    # sibling counts as local, not as a package to declare.
+    local = {os.path.splitext(os.path.basename(path))[0] for path in tracked}
+    local |= {part for path in tracked for part in path.split("/")[:-1]}
+    undeclared = {}
+    for path in tracked:
+        if path.startswith(("tests/", "scripts/", "data/")) or path == "conftest.py":
+            continue
+        tree = ast.parse(_read(os.path.join(config.ROOT, path)))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                roots = [alias.name.split(".")[0] for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                roots = [node.module.split(".")[0]]
+            else:
+                continue
+            for root in roots:
+                dist = IMPORT_TO_DISTRIBUTION.get(root, root).lower().replace("_", "-")
+                if root in stdlib or root in local or dist in declared or root == "__future__":
+                    continue
+                undeclared.setdefault(root, set()).add(path)
+    assert not undeclared, (
+        "importés mais déclarés dans aucun extra de pyproject.toml : "
+        + ", ".join(f"{k} ({', '.join(sorted(v))})" for k, v in sorted(undeclared.items()))
+    )
+
+
+def test_the_image_installs_from_the_same_list():
     """One list, read by both. A second copy in the Dockerfile is a copy that rots."""
     dockerfile = _read(DOCKERFILE)
-    assert "pip install --no-cache-dir -r requirements-demo.txt" in dockerfile
+    assert "COPY pyproject.toml" in dockerfile
+    assert "tomllib" in dockerfile and "['project']['dependencies']" in dockerfile
     # torch stays a separate line: it comes from the CPU index, not PyPI.
     assert 'pip install --no-cache-dir "Flask' not in dockerfile, (
-        "le Dockerfile réinstalle une liste en dur à côté de requirements-demo.txt"
+        "le Dockerfile réinstalle une liste en dur à côté de pyproject.toml"
     )
+
+
+def test_no_requirements_file_is_left_to_drift():
+    """`pyproject.toml` is the only list; a `requirements*.txt` would be a second one."""
+    leftovers = [name for name in os.listdir(config.ROOT)
+                 if name.startswith("requirements") and name.endswith(".txt")]
+    assert leftovers == [], leftovers
 
 
 def test_the_image_healthcheck_stays_within_its_timeout():

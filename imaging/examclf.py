@@ -1,6 +1,6 @@
 """Cancer / no-cancer on a full DBT exam: step 1's decision head, at last measurable.
 
-    python -m imaging.examclf --data-dir data/preprocessed_data/dbt_exams --folds 5
+    python -m imaging.examclf --data-dir data/silver/dbt_exams --folds 5
 
 What this is, and why it could not exist before
 -------------------------------------------------
@@ -98,7 +98,7 @@ from logging_setup import setup_logging
 log = logging.getLogger(__name__)
 
 DEFAULT_OUTPUT_DIR = os.path.join(config.MODELS_DIR, "examclf")
-DEFAULT_BANK_DIR = os.path.join(config.CURATED_DATA_DIR, "exam_bank")
+DEFAULT_BANK_DIR = os.path.join(config.GOLD_DIR, "exam_bank")
 
 
 class ExamBagDataset(Dataset):
@@ -568,7 +568,7 @@ def _smoke_report(args):
 
 def build_arg_parser():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--data-dir", default=config.DBT_EXAMS_PREPROCESSED_DIR)
+    p.add_argument("--data-dir", default=config.DBT_EXAMS_SILVER_DIR)
     p.add_argument("--bank-dir", default=DEFAULT_BANK_DIR)
     p.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     p.add_argument("--folds", type=int, default=5)

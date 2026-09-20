@@ -4,16 +4,17 @@
     python -m pipelines.dbt                      # run what is missing
     python -m pipelines.dbt --from preprocess    # skip the network stages
 
-Five stages, in dependency order:
+Six stages, in dependency order:
 
-    tables -> download -> preprocess -> catalog -> publish
-    (9 CSVs)  (raw DICOM)  (2 corpora)   (DuckDB +    (object storage,
-                                          dbt tests)   when configured)
+    tables -> download -> preprocess -> purge -> catalog -> publish
+    (9 CSVs)  (bronze:     (silver:      (bronze   (gold:      (object storage,
+               raw DICOM)   2 corpora)    emptied)  DuckDB +    when configured)
+                                                    dbt tests)
 
 Why each stage decides from a plan rather than from "does the folder exist"
 ---------------------------------------------------------------------------
 The DCE-MRI flow skips a stage when its output folder is non-empty. For this chain that
-rule would be wrong in exactly the case that matters: the raw layer here grows over
+rule would be wrong in exactly the case that matters: bronze here grows over
 time (normals on 2026-09-13, the test split on 2026-09-14), and a corpus built before a
 download is a folder that exists and is stale. Skipping it silently is the failure this
 orchestration exists to prevent.
@@ -25,6 +26,10 @@ should exist, compares it with what does, and runs only if something is missing:
   against the series folders on disk;
 * preprocess: the series each corpus should contain given what is on disk, against the
   cases its manifest records;
+* purge: the medallion rule. Bronze is a transit zone, so a series folder is deleted once
+  **every** corpus that reads it holds it in silver -- the lesion and the exam corpus
+  share the same series, and purging after the first would strand the second. A series
+  no corpus reads is not processed and stays. ``--keep-bronze`` opts out;
 * catalog: always rebuilt (~10 s), and its error-severity dbt tests fail the flow --
   a label that disagrees with its source is not something to hand to a model;
 * publish: tables, manifests and catalogue Parquet synced to the S3-compatible bucket
@@ -52,7 +57,7 @@ from logging_setup import setup_logging
 
 log = logging.getLogger(__name__)
 
-STAGES = ["tables", "download", "preprocess", "catalog", "publish"]
+STAGES = ["tables", "download", "preprocess", "purge", "catalog", "publish"]
 SPLITS = ("train", "validation", "test")
 SERIES_FOLDER = re.compile(r"^[0-9]+(\.[0-9]+)+$")
 
@@ -66,8 +71,8 @@ TABLES = {
                    "test": config.DBT_FILE_PATHS_TEST},
 }
 CORPORA = {
-    "lesion": config.DBT_PREPROCESSED_DIR,
-    "exam": config.DBT_EXAMS_PREPROCESSED_DIR,
+    "lesion": config.DBT_SILVER_DIR,
+    "exam": config.DBT_EXAMS_SILVER_DIR,
 }
 
 
@@ -154,6 +159,39 @@ def manifest_cases(output_dir):
     return set((manifest.get("cases") or {}).keys())
 
 
+def silver_series(output_dir):
+    """The series a corpus really holds: in its manifest *and* with a volume on disk."""
+    return {uid for uid in manifest_cases(output_dir)
+            if os.path.exists(os.path.join(output_dir, f"{uid}.npz"))}
+
+
+def promoted_series():
+    """Series that reached silver in at least one corpus.
+
+    Once bronze is purged these are the series that are no longer "on disk" but were
+    downloaded all the same. Download planning must count them, or every run after a
+    purge would find the whole collection missing and fetch 80 GB again.
+    """
+    return set().union(*(silver_series(d) for d in CORPORA.values()))
+
+
+def purgeable_series(corpus_splits, on_disk):
+    """``{series_uid: [silver .npz paths]}`` for the bronze series safe to delete.
+
+    A series is safe when at least one corpus reads it and *every* corpus that reads it
+    already holds it. "Reads it" is :func:`expected_cases`, the same rule the
+    preprocessing follows, so the plan and the build cannot disagree about ownership.
+    """
+    owners = {corpus: expected_cases(corpus, corpus_splits, on_disk) for corpus in CORPORA}
+    held = {corpus: silver_series(output_dir) for corpus, output_dir in CORPORA.items()}
+    plan = {}
+    for uid in on_disk:
+        readers = [corpus for corpus in CORPORA if uid in owners[corpus]]
+        if readers and all(uid in held[corpus] for corpus in readers):
+            plan[uid] = [os.path.join(CORPORA[corpus], f"{uid}.npz") for corpus in readers]
+    return plan
+
+
 # --- Stages ---------------------------------------------------------------------
 
 @task(name="dbt-tables", retries=3, retry_delay_seconds=60)
@@ -185,7 +223,7 @@ def download(annotated_splits=SPLITS, max_normal_patients=150, max_gb_added=50, 
     logger = _logger()
     annotated, normals = planned_patients(annotated_splits, max_normal_patients, seed)
     inv = inventory()
-    on_disk = series_on_disk()
+    on_disk = series_on_disk() | promoted_series()
     missing = planned_series(annotated + normals, inv) - on_disk
     logger.info("Plan: %d annotated + %d normal patients; %d series planned, %d missing.",
                 len(annotated), len(normals), len(planned_series(annotated + normals, inv)),
@@ -203,7 +241,7 @@ def download(annotated_splits=SPLITS, max_normal_patients=150, max_gb_added=50, 
     download_dbt_series_for(todo_annotated, max_gb_added=max_gb_added, raise_on_failure=True)
     download_dbt_series_for(todo_normals, max_gb_added=max_gb_added, raise_on_failure=True)
 
-    still = planned_series(annotated + normals, inv) - series_on_disk()
+    still = planned_series(annotated + normals, inv) - (series_on_disk() | promoted_series())
     if still:
         logger.warning("%d planned series still missing (size cap reached?).", len(still))
     return {"missing_before": len(missing), "missing_after": len(still)}
@@ -211,7 +249,7 @@ def download(annotated_splits=SPLITS, max_normal_patients=150, max_gb_added=50, 
 
 @task(name="dbt-preprocess")
 def preprocess(corpus_splits=("train", "validation"), force=False):
-    """Bring both corpora up to date with the raw layer.
+    """Bring both corpora up to date with bronze.
 
     Not retried: a failure here is a DICOM or an annotation problem, and running it
     again produces the same failure.
@@ -247,6 +285,35 @@ def preprocess(corpus_splits=("train", "validation"), force=False):
                            "preprocessing log for why).", corpus, len(left))
         report[corpus] = {"expected": len(expected), "missing": len(left), "ran": True}
     return report
+
+
+@task(name="dbt-purge")
+def purge(corpus_splits=("train", "validation"), keep_bronze=False):
+    """Delete the bronze series that every corpus reading them already holds in silver.
+
+    Not retried: ``purge_bronze_series`` refuses rather than fails, and a second attempt
+    would refuse for the same reason. Interrupted, it is safe to run again -- what was
+    deleted was already in silver, and what was not is planned again.
+    """
+    logger = _logger()
+    on_disk = series_on_disk()
+    plan = purgeable_series(corpus_splits, on_disk)
+    logger.info("Purge: %d of %d bronze series are held in silver by every corpus that "
+                "reads them.", len(plan), len(on_disk))
+    if keep_bronze:
+        logger.info("--keep-bronze: bronze left as it is.")
+        return {"purgeable": len(plan), "purged": 0, "freed_bytes": 0, "kept": True}
+
+    from TransformData import purge_bronze_series
+
+    purged, freed = 0, 0
+    for uid in sorted(plan):
+        n_bytes = purge_bronze_series(os.path.join(config.TCIA_DIR, uid), plan[uid],
+                                      bronze_root=config.TCIA_DIR)
+        purged += bool(n_bytes)
+        freed += n_bytes
+    logger.info("Purged %d series from bronze, %.1f GB freed.", purged, freed / 1e9)
+    return {"purgeable": len(plan), "purged": purged, "freed_bytes": freed, "kept": False}
 
 
 @task(name="dbt-catalog")
@@ -297,7 +364,7 @@ def publish():
 @flow(name="dbt-data-chain", log_prints=True)
 def dbt_pipeline(start_at="tables", annotated_splits=SPLITS,
                  corpus_splits=("train", "validation"), max_normal_patients=150,
-                 max_gb_added=50, seed=0, force=False):
+                 max_gb_added=50, seed=0, force=False, keep_bronze=False):
     """Run the DBT chain from ``start_at`` to the end, doing only what is missing."""
     logger = _logger()
     if start_at not in STAGES:
@@ -311,6 +378,8 @@ def dbt_pipeline(start_at="tables", annotated_splits=SPLITS,
         download(annotated_splits, max_normal_patients, max_gb_added, seed, force=force)
     if "preprocess" in todo:
         preprocess(corpus_splits, force=force)
+    if "purge" in todo:
+        purge(corpus_splits, keep_bronze=keep_bronze)
     db_path = build_catalog() if "catalog" in todo else config.CATALOG_DB
     if "publish" in todo:
         publish()
@@ -337,10 +406,13 @@ def build_arg_parser():
                         "the corpora every published measurement used).")
     p.add_argument("--max-normal-patients", type=int, default=150)
     p.add_argument("--max-gb-added", type=float, default=50,
-                   help="Cap on what one download call adds to the raw layer.")
+                   help="Cap on what one download call adds to bronze.")
     p.add_argument("--seed", type=int, default=0, help="Seed of the normal-patient sample.")
     p.add_argument("--force", action="store_true",
                    help="Re-run stages even when their plan says nothing is missing.")
+    p.add_argument("--keep-bronze", action="store_true",
+                   help="Do not delete the raw DICOM once they are in silver (default: "
+                        "delete, bronze being a transit zone).")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the plan, computed offline from tables, disk and manifests.")
     return p
@@ -361,16 +433,17 @@ def describe(args):
         return "\n".join(lines)
 
     on_disk = series_on_disk()
+    promoted = promoted_series()
     if "download" in todo:
         annotated, normals = planned_patients(args.annotated_splits,
                                               args.max_normal_patients, args.seed)
         inv = inventory()
         planned = planned_series(annotated + normals, inv)
-        missing = planned - on_disk
+        missing = planned - on_disk - promoted
         patients = sorted({inv[uid][0] for uid in missing})
         lines.append(f"  download    {len(annotated)} annotated ({','.join(args.annotated_splits)})"
                      f" + {len(normals)} normal patients -> {len(planned)} series planned,"
-                     f" {len(on_disk)} series on disk")
+                     f" {len(on_disk)} in bronze, {len(promoted)} in silver")
         lines.append(f"  {'':<11} -> {len(missing)} missing"
                      + (f" across {len(patients)} patient(s): {', '.join(patients[:6])}"
                         + ("..." if len(patients) > 6 else "") if missing else ", skip"))
@@ -382,6 +455,12 @@ def describe(args):
             lines.append(f"  preprocess  {corpus} corpus ({','.join(args.corpus_splits)}):"
                          f" {len(expected)} expected, {len(recorded)} in manifest"
                          f" -> {f'{len(missing)} to build' if missing else 'skip'}")
+    if "purge" in todo:
+        plan = purgeable_series(args.corpus_splits, on_disk)
+        lines.append(f"  purge       {len(plan)} of {len(on_disk)} bronze series held in silver by"
+                     " every corpus that reads them"
+                     + (" -> kept (--keep-bronze)" if args.keep_bronze
+                        else f" -> {len(plan)} to delete" if plan else " -> skip"))
     if "catalog" in todo:
         lines.append(f"  catalog     always rebuilt -> {os.path.relpath(config.CATALOG_DB, config.ROOT)}")
     if "publish" in todo:
@@ -401,4 +480,5 @@ if __name__ == "__main__":
     dbt_pipeline(start_at=parsed.start_at, annotated_splits=parsed.annotated_splits,
                  corpus_splits=parsed.corpus_splits,
                  max_normal_patients=parsed.max_normal_patients,
-                 max_gb_added=parsed.max_gb_added, seed=parsed.seed, force=parsed.force)
+                 max_gb_added=parsed.max_gb_added, seed=parsed.seed, force=parsed.force,
+                 keep_bronze=parsed.keep_bronze)

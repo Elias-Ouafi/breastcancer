@@ -404,7 +404,7 @@ def test_real_dicom_reproduces_the_corpus_volume_bit_for_bit():
     import config
 
     raw_root = os.path.join(config.TCIA_DIR, "duke_mri")
-    corpus = config.DCE_MRI_PREPROCESSED_DIR
+    corpus = config.DCE_MRI_SILVER_DIR
     if not os.path.isdir(raw_root) or not os.path.isdir(corpus):
         pytest.skip("raw DCE-MRI layer or built corpus not on this machine")
 

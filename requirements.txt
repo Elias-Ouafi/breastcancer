@@ -1,7 +1,0 @@
-# The dependency list itself lives in pyproject.toml, so there is one source of truth.
-# This file stays because it is what the README and every habit point at.
-#
-# torch: installs the default wheel for your platform. For a CPU-only box, or a
-# specific CUDA build, install it first from the matching index, e.g.
-#   pip install torch --index-url https://download.pytorch.org/whl/cpu
---editable .

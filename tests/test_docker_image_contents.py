@@ -6,7 +6,7 @@ deux qui cassent en silence quand on déplace un fichier ou qu'on ajoute un impo
 
 * **La liste des `COPY` est complète.** Un module oublié ne se voit pas ici, où tout
   le dépôt est sur le disque ; il se voit dans le conteneur, au premier clic.
-* **Les paquets déclarés suffisent.** `requirements-demo.txt` en installe quatre. Un
+* **Les paquets déclarés suffisent.** Le socle de `pyproject.toml` en installe quatre. Un
   cinquième import qui se glisse dans le chemin de la démo passe inaperçu sur une
   machine de développement, où les 68 paquets du pipeline sont là.
 
@@ -34,7 +34,7 @@ import pytest
 import config
 
 DOCKERFILE = os.path.join(config.ROOT, "Dockerfile")
-DEMO_REQUIREMENTS = os.path.join(config.ROOT, "requirements-demo.txt")
+PYPROJECT = os.path.join(config.ROOT, "pyproject.toml")
 
 pytestmark = pytest.mark.skipif(
     not os.path.exists(config.DCE_MRI_UNET_CKPT),
@@ -44,7 +44,7 @@ pytestmark = pytest.mark.skipif(
 # Nom de distribution -> module importable, quand les deux diffèrent.
 DISTRIBUTION_TO_MODULE = {"pillow": "PIL"}
 
-# Ce que pip installe *avec* les quatre paquets de `requirements-demo.txt`. Mesuré le
+# Ce que pip installe *avec* les quatre paquets du socle de `pyproject.toml`. Mesuré le
 # 2026-09-20 par `pip install --dry-run --report` sur torch, Flask, numpy et Pillow :
 # 17 paquets au total. Les voici moins les quatre, en noms de modules.
 TRANSITIVE_MODULES = {
@@ -95,14 +95,15 @@ def _build_mirror(destination_root):
 
 
 def _declared_modules():
-    """Les modules qu'installe `requirements-demo.txt`, sous leur nom d'import."""
+    """Les modules qu'installe le socle de `pyproject.toml`, sous leur nom d'import."""
+    import tomllib
+
+    with open(PYPROJECT, "rb") as handle:
+        requirements = tomllib.load(handle)["project"]["dependencies"]
     modules = set()
-    with open(DEMO_REQUIREMENTS, encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if line and not line.startswith("#"):
-                name = re.split(r"[<>=!~\[]", line)[0].strip().lower()
-                modules.add(DISTRIBUTION_TO_MODULE.get(name, name))
+    for line in requirements:
+        name = re.split(r"[<>=!~\[]", line)[0].strip().lower()
+        modules.add(DISTRIBUTION_TO_MODULE.get(name, name))
     return modules
 
 
@@ -269,9 +270,9 @@ def test_the_guard_can_still_refuse(image_report):
     )
 
 
-def test_the_copy_list_and_the_requirements_file_stay_in_step():
+def test_the_copy_list_and_the_dependency_list_stay_in_step():
     """L'image installe la liste de la démo, et copie ce dont cette liste a besoin."""
     sources = {source for source, _ in _copy_pairs()}
-    assert "requirements-demo.txt" in sources
+    assert "pyproject.toml" in sources
     for expected in ("config.py", "inference.py", "run_demo.py", "app/", "imaging/"):
         assert expected in sources, f"{expected} n'est plus copié dans l'image"

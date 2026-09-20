@@ -16,33 +16,34 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      # Deliberately NOT `pip install -r requirements.txt`. The full dependency set
-      # pulls the TCIA client, which the test suite does not exercise and which would
-      # turn a ~1 minute check into several. torch comes from the CPU index: the
-      # default wheel ships CUDA and is ~2.5 GB. (ITK and SimpleITK left the
-      # dependency list entirely on 2026-09-19 with the legacy MRI path.)
+      # The extras of pyproject.toml, not a list of our own: `dev` (pytest, ruff, moto),
+      # `data` (pandas, pydicom, openpyxl), `catalog` (duckdb, dbt-duckdb) and `storage`
+      # (boto3), on top of the base install (torch, Flask, numpy, Pillow). Deliberately
+      # NOT `.[all]`: `collect` pulls the TCIA client, which the test suite does not
+      # exercise and which would turn a ~1 minute check into several. torch comes from
+      # the CPU index first: the default wheel ships CUDA and is ~2.5 GB, and pip then
+      # finds it already satisfied.
       #
-      # The list is exactly the third-party modules the suite imports at module level:
-      # pandas (the annotation tables), pydicom (the synthetic DICOM fixtures) and
+      # The extras are exactly the third-party modules the suite imports at module
+      # level: pandas (the annotation tables), pydicom (the synthetic DICOM fixtures) and
       # flask (rendering the result page) were missing, so collection failed on three
       # files and the whole run errored out -- red on every commit from 2026-09-13 to
-      # 2026-09-15 without anyone noticing. Adding a test that imports something new
-      # means adding it here too. duckdb and dbt-duckdb build the metadata catalogue
-      # (tests/test_catalog.py runs the real dbt project on miniature tables); boto3 and
-      # moto test the object-storage sync against an in-memory S3.
+      # 2026-09-15 without anyone noticing. A test that imports something new means
+      # putting it in the right extra. duckdb and dbt-duckdb build the metadata
+      # catalogue (tests/test_catalog.py runs the real dbt project on miniature tables);
+      # boto3 and moto test the object-storage sync against an in-memory S3.
       #
-      # pillow joined on 2026-09-20, and its absence was invisible until something
-      # asserted on it. `inference.render_overlay_png` imports PIL, and
-      # `app.server._overlay_data_uri` swallows the failure on purpose so a result
-      # page still renders without its image -- so every CI run had been exercising
-      # the text-only fallback of the demo, never the annotated slice the demo is
-      # for. tests/test_demo_smoke.py asserts the data URI is there; that is what
-      # found it.
+      # Pillow is in the base install, and its absence once went unnoticed:
+      # `inference.render_overlay_png` imports PIL, and `app.server._overlay_data_uri`
+      # swallows the failure on purpose so a result page still renders without its
+      # image -- so every CI run had been exercising the text-only fallback of the
+      # demo, never the annotated slice the demo is for. tests/test_demo_smoke.py
+      # asserts the data URI is there; that is what found it.
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install numpy pandas pydicom pillow flask duckdb dbt-duckdb boto3 "moto[s3]" pytest ruff
+          pip install -e ".[dev,data,catalog,storage]"
 
       - name: Lint
         run: ruff check .
@@ -54,7 +55,7 @@ jobs:
         run: python -m pytest
 
   # The flows' decisions (which stage runs, what is stale) are tested with Prefect
-  # installed. The job above does not install it -- Prefect is an optional extra -- so
+  # installed. The job above does not install it -- Prefect is the `orchestration` extra -- so
   # its test files are skipped there, and until 2026-09-16 that meant they ran nowhere
   # but on a developer's machine: the 13 tests between the local and CI counts were 12
   # of these plus one Windows-only test. A separate job keeps the main one lean.
@@ -68,14 +69,17 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      # `data` because the purge tests import TransformData (pandas, pydicom); torch from
+      # the CPU index first, as above, since the base install requires it.
       - name: Install orchestration test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install prefect pandas pytest
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[orchestration,data,dev]"
 
       # importorskip would turn a missing dependency into a green, empty job.
       - name: Check the tests will not be skipped
-        run: python -c "import prefect, pandas"
+        run: python -c "import prefect, pandas, pydicom"
 
       - name: Test the flows
         run: python -m pytest tests/test_pipeline_dce_mri.py tests/test_pipeline_dbt.py -rs

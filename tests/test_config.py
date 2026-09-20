@@ -43,14 +43,14 @@ def test_paths_are_absolute_and_inside_the_repo(name, value):
     """A relative path would resolve against the caller's cwd, not the project.
 
     That is exactly the bug this module was introduced to remove: ``--data-dir
-    preprocessed_data`` only worked when you happened to run from the repo root.
+    silver`` only worked when you happened to run from the repo root.
     """
     assert os.path.isabs(value), f"{name} is relative: {value}"
     assert os.path.commonpath([config.ROOT, value]) == config.ROOT, \
         f"{name} escapes the repo: {value}"
 
 
-@pytest.mark.parametrize("layer", ["RAW_DATA_DIR", "PREPROCESSED_DATA_DIR", "CURATED_DATA_DIR"])
+@pytest.mark.parametrize("layer", ["BRONZE_DIR", "SILVER_DIR", "GOLD_DIR"])
 def test_layers_live_under_the_data_tree(layer):
     """`.gitignore` excludes `data/*`; a layer outside it would leak into git."""
     assert os.path.commonpath([config.DATA_DIR, getattr(config, layer)]) == config.DATA_DIR

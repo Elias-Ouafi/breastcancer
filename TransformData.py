@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import shutil
+import zipfile
 
 import numpy as np
 import pandas as pd
@@ -159,27 +160,65 @@ def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, cr
     return out_path
 
 
-def delete_dicom_source(dicom_dir, npz_path):
-    """Delete the raw DICOM folder `dicom_dir` after preprocessing.
+def _is_silver_volume(npz_path):
+    """True when ``npz_path`` is a readable volume: the check that lets bronze be deleted.
 
-    Destructive — this permanently removes the original series. As a safety net the
-    deletion is skipped (with a warning) unless `npz_path` exists and is non-empty,
-    so a failed or partial save never costs you the source data.
-    Returns True if the folder was removed.
+    Opening the archive reads its central directory, not the arrays, so a truncated or
+    corrupt file fails here at the cost of a stat and not of a decode. "Exists and is not
+    empty" was not enough: a write interrupted halfway leaves a non-empty file.
     """
-    if not npz_path or not os.path.exists(npz_path) or os.path.getsize(npz_path) == 0:
-        log.warning(
-            f"Skipping deletion of {dicom_dir}: preprocessed file "
-            f"{npz_path} is missing or empty."
-        )
-        return False
     try:
-        shutil.rmtree(dicom_dir)
-        log.info(f"🗑️  Removed raw DICOM source {dicom_dir} (kept {npz_path}).")
-        return True
-    except OSError as e:
-        log.error(f"Failed to remove {dicom_dir}: {e}")
+        if not os.path.isfile(npz_path) or os.path.getsize(npz_path) == 0:
+            return False
+        with np.load(npz_path) as archive:
+            return "volume" in archive.files and "mask" in archive.files
+    except (OSError, ValueError, zipfile.BadZipFile):
         return False
+
+
+def purge_bronze_series(folder, silver_files, bronze_root=config.TCIA_DIR):
+    """Delete the bronze series ``folder`` once it is safely held in silver.
+
+    The medallion rule: raw bytes are kept only until they are in silver, so the data
+    ends up held once. This is the one place that deletes them, and it is destructive --
+    the DICOM series is not recoverable except by downloading it again -- so it refuses
+    rather than guesses:
+
+    * ``folder`` must be a direct child of ``bronze_root``; anything else raises
+      ``ValueError`` (a wrong path here must never reach ``rmtree``);
+    * every path of ``silver_files`` must be a readable ``.npz`` holding a volume and a
+      mask (:func:`_is_silver_volume`), and there must be at least one. Pass one file per
+      corpus that reads the series: purging on the first corpus alone would strand the
+      others.
+
+    Returns the number of bytes freed, or 0 when nothing was deleted (silver not ready,
+    folder already gone, or the deletion failed part-way -- the next run retries, the
+    silver file being already safe).
+    """
+    root = os.path.normcase(os.path.realpath(bronze_root))
+    target = os.path.normcase(os.path.realpath(folder))
+    if os.path.dirname(target) != root:
+        raise ValueError(f"refusing to delete {folder!r}: not a direct child of the "
+                         f"bronze root {bronze_root!r}")
+    if not os.path.isdir(folder):
+        return 0
+
+    silver_files = list(silver_files)
+    not_ready = [f for f in silver_files if not _is_silver_volume(f)]
+    if not silver_files or not_ready:
+        log.warning(f"Keeping {folder} in bronze: silver is not ready "
+                    f"({not_ready or 'no silver file given'}).")
+        return 0
+
+    n_bytes = sum(os.stat(os.path.join(d, f)).st_size
+                  for d, _, files in os.walk(folder) for f in files)
+    try:
+        shutil.rmtree(folder)
+    except OSError as e:
+        log.error(f"Failed to remove {folder}: {e}")
+        return 0
+    log.info(f"Purged bronze {folder} ({n_bytes / 1e6:.0f} MB), held in silver.")
+    return n_bytes
 
 
 def dbt_view_position(ds):
@@ -384,7 +423,7 @@ def _read_boxes(boxes_csv):
 
 def preprocess_dbt_with_boxes(root_dir=config.TCIA_DIR,
                               boxes_csv=config.DBT_BOXES_TRAIN,
-                              output_dir=config.DBT_PREPROCESSED_DIR,
+                              output_dir=config.DBT_SILVER_DIR,
                               file_paths_csv=config.DBT_FILE_PATHS,
                               skip_empty=True,
                               slice_margin=2,
@@ -692,7 +731,7 @@ def preprocess_dbt_exams(root_dir=config.TCIA_DIR,
                          labels_csv=None,
                          file_paths_csv=config.DBT_FILE_PATHS,
                          boxes_csv=None,
-                         output_dir=config.DBT_EXAMS_PREPROCESSED_DIR,
+                         output_dir=config.DBT_EXAMS_SILVER_DIR,
                          plane=EXAM_PLANE,
                          slice_margin=2,
                          skip_existing=True):
@@ -968,8 +1007,25 @@ def dce_subtraction(pre, post):
     return normalize_intensity(np.clip(post - pre, a_min=0, a_max=None))
 
 
+def _with_previous_cases(output_dir, summary):
+    """``summary`` plus the manifest entries of volumes this pass did not rewrite.
+
+    A manifest describes the corpus, not the last run. It used to be rewritten from the
+    cases of the pass alone, which was harmless while every pass re-read all of bronze.
+    Bronze is now purged once a series is in silver, so a second pass only sees what is
+    left -- often nothing -- and would replace a 186-case manifest with an empty one
+    while the 186 volumes sit beside it. An entry is carried only when its ``.npz`` is
+    still there, so a volume deleted by hand does not linger in the record.
+    """
+    previous = (lineage.read_manifest(output_dir) or {}).get("cases") or {}
+    carried = {case: entry for case, entry in previous.items()
+               if case not in summary
+               and os.path.exists(os.path.join(output_dir, f"{case}.npz"))}
+    return {**carried, **summary}
+
+
 def preprocess_dce_mri_exams(root_dir,
-                             output_dir=config.DCE_MRI_PREPROCESSED_DIR,
+                             output_dir=config.DCE_MRI_SILVER_DIR,
                              post_phase_rank=2):
     """Preprocess DCE-MRI exams that carry no annotation, ready for inference.
 
@@ -1009,6 +1065,7 @@ def preprocess_dce_mri_exams(root_dir,
         saved += 1
         log.info(f"[MRI] {pid}: {subtraction.shape[0]} slices -> saved (no annotation).")
 
+    cases = _with_previous_cases(output_dir, summary)
     lineage.write_manifest(
         output_dir,
         source=root_dir,
@@ -1019,8 +1076,8 @@ def preprocess_dce_mri_exams(root_dir,
             "annotated": False,
             "skipped": skipped,
         },
-        cases=summary,
-        warnings=[w for case in summary.values() for w in case.get("warnings", [])],
+        cases=cases,
+        warnings=[w for case in cases.values() for w in case.get("warnings", [])],
     )
 
     log.info(f"[MRI] Saved {saved} unannotated exam(s), skipped {skipped}.")
@@ -1028,7 +1085,7 @@ def preprocess_dce_mri_exams(root_dir,
 
 
 def preprocess_dce_mri_with_boxes(root_dir, boxes_path,
-                                  output_dir=config.DCE_MRI_PREPROCESSED_DIR,
+                                  output_dir=config.DCE_MRI_SILVER_DIR,
                                   post_phase_rank=2, crop=False):
     """Preprocess Duke-Breast-Cancer-MRI series into subtraction volumes + box masks.
 
@@ -1057,7 +1114,7 @@ def preprocess_dce_mri_with_boxes(root_dir, boxes_path,
 
     ``crop`` defaults to ``False`` because that is the corpus the served checkpoint
     was trained on -- measured, not assumed: every volume under
-    ``data/preprocessed_data/dce_mri_p2/`` carries ``crop_offset == (0, 0, 0)`` at
+    ``data/silver/dce_mri_p2/`` carries ``crop_offset == (0, 0, 0)`` at
     full 512x512. Cropping to the lesion ROI is what made the task artificially easy
     and produced the confidence-always-1.0 bug (DOCUMENTATION.md section 4.2), so the
     default used to contradict every caller in the repository.
@@ -1109,6 +1166,7 @@ def preprocess_dce_mri_with_boxes(root_dir, boxes_path,
 
     # Written last, and only on a completed pass: a folder with no manifest is a
     # folder whose run was interrupted, which is exactly what you want to know.
+    cases = _with_previous_cases(output_dir, summary)
     lineage.write_manifest(
         output_dir,
         source=root_dir,
@@ -1119,8 +1177,8 @@ def preprocess_dce_mri_with_boxes(root_dir, boxes_path,
             "boxes": lineage.relative_path(boxes_path),
             "skipped": skipped,
         },
-        cases=summary,
-        warnings=[w for case in summary.values() for w in case.get("warnings", [])],
+        cases=cases,
+        warnings=[w for case in cases.values() for w in case.get("warnings", [])],
     )
 
     log.info(f"[MRI] Saved {saved} patients, skipped {skipped}.")

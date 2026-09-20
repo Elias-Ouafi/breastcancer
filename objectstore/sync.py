@@ -65,8 +65,8 @@ def publishable_files(dicom_sample: int = 0, tcia_dir: str | None = None,
                       parquet_dir: str | None = None) -> list[LocalFile]:
     """Local files to publish, with their bucket keys. Missing sources are skipped."""
     tcia_dir = tcia_dir or config.TCIA_DIR
-    corpora = corpora or {"dbt": config.DBT_PREPROCESSED_DIR,
-                          "dbt_exams": config.DBT_EXAMS_PREPROCESSED_DIR}
+    corpora = corpora or {"dbt": config.DBT_SILVER_DIR,
+                          "dbt_exams": config.DBT_EXAMS_SILVER_DIR}
     parquet_dir = parquet_dir or config.CATALOG_PARQUET_DIR
     files = []
 
@@ -77,18 +77,18 @@ def publishable_files(dicom_sample: int = 0, tcia_dir: str | None = None,
     if os.path.isdir(tcia_dir):
         for name in sorted(os.listdir(tcia_dir)):
             if name.startswith("BCS-DBT-") and name.endswith(".csv"):
-                add(os.path.join(tcia_dir, name), f"raw/tcia/tables/{name}")
+                add(os.path.join(tcia_dir, name), f"bronze/tcia/tables/{name}")
     for corpus, folder in corpora.items():
-        add(os.path.join(folder, "manifest.json"), f"preprocessed/{corpus}/manifest.json")
+        add(os.path.join(folder, "manifest.json"), f"silver/{corpus}/manifest.json")
     if os.path.isdir(parquet_dir):
         for name in sorted(os.listdir(parquet_dir)):
             if name.endswith(".parquet"):
-                add(os.path.join(parquet_dir, name), f"curated/catalog/{name}")
+                add(os.path.join(parquet_dir, name), f"gold/catalog/{name}")
     for uid in _series_folders(tcia_dir)[:dicom_sample]:
         for root, _, names in os.walk(os.path.join(tcia_dir, uid)):
             for name in sorted(names):
                 rel = os.path.relpath(os.path.join(root, name), tcia_dir).replace(os.sep, "/")
-                add(os.path.join(root, name), f"raw/tcia/series/{rel}")
+                add(os.path.join(root, name), f"bronze/tcia/series/{rel}")
     return files
 
 

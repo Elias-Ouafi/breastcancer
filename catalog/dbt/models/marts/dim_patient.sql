@@ -1,5 +1,5 @@
--- One row per patient: the worst status over all their views, what is downloaded and
--- preprocessed, and the exam classifier's out-of-fold score where there is one.
+-- One row per patient: the worst status over all their views, what is downloaded, what
+-- is still in bronze, what is in silver, and the exam classifier's out-of-fold score where there is one.
 --
 -- Grain: patient_id. `split` is unique per patient in BCS-DBT (checked by
 -- qa.patient_single_split); any_value would hide a violation, so the check exists.
@@ -18,7 +18,8 @@ WITH per_patient AS (
         END                                                   AS status,
         sum(n_boxes)                                          AS n_boxes,
         count(*) FILTER (WHERE on_disk)                       AS n_series_on_disk,
-        round(coalesce(sum(disk_bytes), 0) / 1e9, 3)          AS disk_gb,
+        count(*) FILTER (WHERE in_bronze)                     AS n_series_in_bronze,
+        round(coalesce(sum(bronze_bytes), 0) / 1e9, 3)        AS bronze_gb,
         count(*) FILTER (WHERE in_lesion_corpus)              AS n_series_in_lesion_corpus,
         count(*) FILTER (WHERE in_exam_corpus)                AS n_series_in_exam_corpus
     FROM {{ ref('fct_series') }}

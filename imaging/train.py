@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    python -m imaging.train --data-dir data/preprocessed_data/dbt --epochs 30
+    python -m imaging.train --data-dir data/silver/dbt --epochs 30
 
 The target masks come from the annotation bounding boxes, so this learns lesion
 *localisation* (Dice/IoU against the box), the objective chosen for the first
@@ -269,7 +269,7 @@ def train(args):
 
 def build_arg_parser():
     p = argparse.ArgumentParser(description="Train a 2D U-Net for MRI lesion localisation.")
-    p.add_argument("--data-dir", default=config.DBT_PREPROCESSED_DIR,
+    p.add_argument("--data-dir", default=config.DBT_SILVER_DIR,
                    help="Folder of preprocessed .npz volumes.")
     p.add_argument("--output-dir", default=_DEFAULT_OUTPUT_DIR,
                    help="Where to write metrics and checkpoints.")

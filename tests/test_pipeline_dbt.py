@@ -13,6 +13,7 @@ import json
 import os
 import types
 
+import numpy as np
 import pytest
 
 pytest.importorskip("prefect", reason="orchestration extra not installed")
@@ -101,10 +102,20 @@ def write_manifest(output_dir, uids):
                            cases={uid: {"label": 0} for uid in uids})
 
 
+def put_in_silver(output_dir, *uids):
+    """A corpus that really holds ``uids``: a readable volume each, and the manifest."""
+    os.makedirs(output_dir, exist_ok=True)
+    for uid in uids:
+        np.savez_compressed(os.path.join(output_dir, f"{uid}.npz"),
+                            volume=np.zeros((2, 4, 4), np.float16),
+                            mask=np.zeros((2, 4, 4), np.uint8))
+    write_manifest(output_dir, uids)
+
+
 # --- stages and plan ------------------------------------------------------------
 
 def test_stage_order_is_the_dependency_order():
-    assert flow.STAGES == ["tables", "download", "preprocess", "catalog", "publish"]
+    assert flow.STAGES == ["tables", "download", "preprocess", "purge", "catalog", "publish"]
 
 
 def test_rejects_an_unknown_resume_point():
@@ -296,3 +307,100 @@ def test_the_dry_run_stops_at_the_tables_when_they_are_missing(world):
 def test_the_manifest_reader_tolerates_a_corpus_never_built(world):
     assert flow.manifest_cases(world.corpora["exam"]) == set()
     json.dumps(sorted(flow.manifest_cases(world.corpora["exam"])))
+
+
+# --- purge: bronze is a transit zone ------------------------------------------------
+
+CORPUS_SPLITS = ("train", "validation")
+
+
+def test_a_series_is_purgeable_only_once_every_corpus_reading_it_holds_it(world):
+    """1.1 is read by both corpora (it carries a box); 1.2 and 2.1 only by the exam one.
+
+    The exam corpus alone is complete, so purging on it would delete 1.1 before the
+    lesion corpus had decoded it -- the failure the "every reader" rule exists for.
+    """
+    put_on_disk(world, "1.1", "1.2", "2.1")
+    put_in_silver(world.corpora["exam"], "1.1", "1.2", "2.1")
+
+    plan = flow.purgeable_series(CORPUS_SPLITS, flow.series_on_disk())
+    assert set(plan) == {"1.2", "2.1"}
+    assert plan["1.2"] == [os.path.join(world.corpora["exam"], "1.2.npz")]
+
+    put_in_silver(world.corpora["lesion"], "1.1")
+    plan = flow.purgeable_series(CORPUS_SPLITS, flow.series_on_disk())
+    assert set(plan) == {"1.1", "1.2", "2.1"}
+    assert plan["1.1"] == [os.path.join(world.corpora["lesion"], "1.1.npz"),
+                           os.path.join(world.corpora["exam"], "1.1.npz")]
+
+
+def test_a_series_no_corpus_reads_is_never_purgeable(world):
+    """4.1 has no labels flag and 3.1 is in the test split: neither was processed, so
+    deleting them would lose data that exists nowhere else."""
+    put_on_disk(world, "4.1", "3.1")
+    put_in_silver(world.corpora["exam"], "1.1")
+    put_in_silver(world.corpora["lesion"], "1.1")
+    assert flow.purgeable_series(CORPUS_SPLITS, flow.series_on_disk()) == {}
+
+
+def test_a_manifest_entry_without_its_volume_does_not_count_as_held(world):
+    put_on_disk(world, "2.1")
+    write_manifest(world.corpora["exam"], ["2.1"])  # the manifest promises, no .npz exists
+    assert flow.purgeable_series(CORPUS_SPLITS, flow.series_on_disk()) == {}
+
+
+def test_purge_deletes_the_promoted_series_and_keeps_the_rest(world):
+    put_on_disk(world, "1.1", "1.2", "2.1", "4.1")
+    put_in_silver(world.corpora["exam"], "1.1", "1.2", "2.1")
+
+    report = flow.purge.fn(corpus_splits=CORPUS_SPLITS)
+
+    # 1.1 waits for the lesion corpus; 4.1 was never processed.
+    assert flow.series_on_disk() == {"1.1", "4.1"}
+    assert report["purged"] == 2 and report["purgeable"] == 2
+    assert report["freed_bytes"] == 2 and report["kept"] is False
+
+
+def test_keep_bronze_deletes_nothing(world):
+    put_on_disk(world, "1.2", "2.1")
+    put_in_silver(world.corpora["exam"], "1.2", "2.1")
+
+    report = flow.purge.fn(corpus_splits=CORPUS_SPLITS, keep_bronze=True)
+
+    assert flow.series_on_disk() == {"1.2", "2.1"}
+    assert report == {"purgeable": 2, "purged": 0, "freed_bytes": 0, "kept": True}
+
+
+def test_purge_refuses_a_series_whose_volume_is_unreadable(world):
+    put_on_disk(world, "2.1")
+    put_in_silver(world.corpora["exam"], "2.1")
+    open(os.path.join(world.corpora["exam"], "2.1.npz"), "wb").close()  # emptied afterwards
+
+    report = flow.purge.fn(corpus_splits=CORPUS_SPLITS)
+
+    assert flow.series_on_disk() == {"2.1"}
+    assert report["purged"] == 0
+
+
+def test_download_counts_the_series_already_in_silver_as_present(world):
+    """After a purge nothing is in bronze. Reading that as "nothing downloaded" would
+    fetch the whole collection again on every run."""
+    put_in_silver(world.corpora["exam"], "1.1", "1.2", "2.1")
+    put_in_silver(world.corpora["lesion"], "1.1")
+    assert flow.series_on_disk() == set()
+
+    result = flow.download.fn(annotated_splits=CORPUS_SPLITS, max_normal_patients=1)
+
+    assert result == {"missing_before": 0, "missing_after": 0}
+    assert world.calls == []
+
+
+def test_the_dry_run_reports_what_the_purge_would_delete(world):
+    put_on_disk(world, "1.2", "2.1")
+    put_in_silver(world.corpora["exam"], "1.2", "2.1")
+
+    plan = flow.describe(_args(max_normal_patients=1))
+    assert "purge       2 of 2 bronze series" in plan and "-> 2 to delete" in plan
+    assert "-> kept (--keep-bronze)" in flow.describe(
+        _args(max_normal_patients=1, keep_bronze=True))
+    assert flow.series_on_disk() == {"1.2", "2.1"}  # a dry run deletes nothing

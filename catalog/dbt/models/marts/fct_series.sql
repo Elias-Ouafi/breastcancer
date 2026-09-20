@@ -1,5 +1,6 @@
 -- One row per series the collection publishes: what the tables say about it, whether
--- it is on disk, and which corpus it made it into.
+-- it was downloaded, whether its raw bytes are still in bronze, and which corpus
+-- (silver) it made it into.
 --
 -- Grain: series_uid (unique and not null; tested in _marts.yml).
 WITH boxes AS (
@@ -27,8 +28,12 @@ SELECT
     l.status                               AS view_status,
     coalesce(b.n_boxes, 0)                 AS n_boxes,
     coalesce(b.n_cancer_boxes, 0)          AS n_cancer_boxes,
-    d.series_uid IS NOT NULL               AS on_disk,
-    d.n_bytes                              AS disk_bytes,
+    -- Downloaded = held in any zone. Bronze is purged once a series is in silver, so
+    -- "is the folder still in bronze" no longer says whether it was ever fetched.
+    (d.series_uid IS NOT NULL OR lc.series_uid IS NOT NULL
+        OR ec.series_uid IS NOT NULL)      AS on_disk,
+    d.series_uid IS NOT NULL               AS in_bronze,
+    d.n_bytes                              AS bronze_bytes,
     lc.series_uid IS NOT NULL              AS in_lesion_corpus,
     ec.series_uid IS NOT NULL              AS in_exam_corpus,
     ec.label                               AS exam_label,
