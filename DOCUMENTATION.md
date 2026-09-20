@@ -1510,10 +1510,40 @@ message d'erreur nomme le fichier envoyé.
 **Ce que la mesure n'a pas pu couvrir** : Docker n'est pas installé sur cette machine,
 donc `docker compose up --build` reste **non vérifié** — l'image n'est construite ni
 ici ni en CI (elle est au P2 de la feuille de route). Le README le dit maintenant à
-l'endroit où il propose la commande.
+l'endroit où il propose la commande. Installer Docker Desktop y demanderait WSL (absent
+de cette machine), des droits administrateur et deux redémarrages.
 
-**Tests** : 12 ajoutés (`tests/test_demo_smoke.py`, `tests/test_demo_install.py`),
-**300 au total**, dont le premier qui fasse réellement le clic de la démo —
+**Deux propriétés de l'image se vérifient pourtant sans daemon**
+(`tests/test_docker_image_contents.py`, 3,4 s) : le test reconstruit l'arbre que les
+lignes `COPY` produiraient — rien d'autre — puis lance un sous-processus qui s'y
+installe, **refuse à l'import tout paquet tiers absent de l'image**, et fait le clic de
+démo.
+
+| Ce qui est prouvé | Comment |
+|---|---|
+| La liste des `COPY` est complète | Le préflight complet (chargement du U-Net + une analyse) passe depuis le seul contenu de l'image |
+| Les quatre paquets déclarés suffisent | Clic de démo, coupe annotée, balayage, vue MIP, accueil et « Comment ça marche » rendent tous avec tout le reste bloqué à l'import |
+
+Quatre imports sont refusés sans conséquence — `tqdm`, `cffi`, `defusedxml`,
+`colorama` — que torch sonde et dont il se passe. Les voir dans `sys.modules` ne
+prouvait rien : ils y étaient par l'environnement, pas par la démo. Seul le refus
+tranche.
+
+**Le piège que ce test a révélé sur lui-même.** En retirant `COPY imaging/` pour
+vérifier qu'il savait échouer, le préflight est resté **vert** : `imaging` se
+résolvait encore, via le *finder* de l'installation éditable du dépôt présent dans le
+venv. Un `COPY` manquant aurait donc pu passer la mesure sur cette machine et casser
+en conteneur. D'où le test qui contrôle l'**origine** de chaque module du projet
+(`__file__` sous le miroir) — c'est lui qui est devenu rouge. Un second garde-fou
+vérifie que le blocage a bien mordu : sans lui, un jour où il ne bloquerait plus rien,
+les trois autres tests seraient verts en ne mesurant que la machine.
+
+**Ce qui reste hors de portée sans daemon** : le build lui-même — image de base,
+`apt-get`, torch depuis l'index CPU, chemins des `COPY` côté daemon, `chown` non-root
+— et au démarrage, `read_only`, `tmpfs` et la publication du port sur `127.0.0.1`.
+
+**Tests** : 17 ajoutés (`tests/test_demo_smoke.py`, `tests/test_demo_install.py`,
+`tests/test_docker_image_contents.py`), **305 au total**, dont le premier qui fasse réellement le clic de la démo —
 `POST /demo/1` sur le backend `dce_mri`, avec assertion sur la coupe imposée et sur
 la présence de l'image annotée. Jusqu'ici aucun test n'exécutait le modèle sur un cas
 de démonstration ; la CI installe PyTorch CPU, donc celui-ci y tourne.
@@ -1570,7 +1600,7 @@ Applications 2023.
 | 2026-09-14 | Étape 2 retirée ; warm start, score relatif, mesures sans modèle (négatives) ; split test téléchargé |
 | 2026-09-15 | Point de fonctionnement publié ; code mort retiré ; paquet réparé ; écarts doc ↔ code corrigés |
 | 2026-09-19 | Chemin « nouvelle IRM » : `preprocess_dce_mri_exams`, `dce_subtraction` en définition unique, défaut `crop` aligné sur le corpus, code hérité IRM retiré (−105 lignes, 3 dépendances lourdes en moins), 20 tests (§4.16) |
-| 2026-09-20 | Parcours de démo mesuré de bout en bout : installation dédiée (68 paquets → 17, 355 Mo → 153 Mo sur Windows), préflight qui analyse un vrai cas, port occupé détecté, formats de l'interface alignés sur le backend servi, 12 tests dont le premier clic de démo (§4.17) |
+| 2026-09-20 | Parcours de démo mesuré de bout en bout : installation dédiée (68 paquets → 17, 355 Mo → 153 Mo sur Windows), préflight qui analyse un vrai cas, port occupé détecté, formats de l'interface alignés sur le backend servi, 17 tests dont le premier clic de démo et le contenu de l'image vérifié sans daemon (§4.17) |
 | 2026-09-16 | **P0 portfolio** : README réorienté data engineering, décisions d'architecture, licence MIT, citations TCIA, GIF de démo, documentation unique en français. **P1** : catalogue DuckDB, migration dbt, flow Prefect DBT, délai sur les requêtes TCIA, trois défauts corrigés (§4.14) |
 
 ### Feuille de route « portfolio data engineering »
@@ -1625,7 +1655,7 @@ tests se recompte, il ne s'estime pas — et le badge se recompte avec le texte.
 | 2026-09-16 | « 222 tests » en local contre 211 en CI, noté « non expliqué » ; « 152 normaux, non investigué » | Expliqués (§4.14) : 12 tests d'orchestration sans Prefect + 1 test Windows ; 2 normaux hors tirage |
 | 2026-09-19 | « La couche brute DCE-MRI n'est pas sur cette machine », écrit dans §4.16, l'ADR 0013 et la PR #31 | **Faux** : 60 Go et 840 séries étaient dans `tcia/duke_mri/`, que le balayage sautait faute de `.dcm` à sa racine. Corrigé, et le chemin DICOM → `.npz` est désormais vérifié bit à bit sur données réelles (§4.16) |
 | 2026-09-19 | Badge README « 254 tests » contre 267 dans le texte ; `crop=True` par défaut alors que le corpus servi est en pleine trame ; message d'erreur d'`imaging/dataset.py` renvoyant à une fonction cassée ; `SimpleITK`/`itk`/`itkwidgets` déclarés mais importés nulle part | Corrigés (§4.16), badge recompté à 287 |
-| 2026-09-20 | « Port déjà utilisé → `--port 5001` » laissait croire qu'une erreur s'affichait : sous Windows le second lanceur affichait son bandeau de succès ; zone de dépôt annonçant DICOM/NIfTI sous un backend qui ne lit que `.npz` ; préflight qui ne chargeait jamais le modèle ; badge « 288 tests » | Corrigés (§4.17), badge recompté à 300 |
+| 2026-09-20 | « Port déjà utilisé → `--port 5001` » laissait croire qu'une erreur s'affichait : sous Windows le second lanceur affichait son bandeau de succès ; zone de dépôt annonçant DICOM/NIfTI sous un backend qui ne lit que `.npz` ; préflight qui ne chargeait jamais le modèle ; badge « 288 tests » | Corrigés (§4.17), badge recompté à 305 |
 | — | `models/dce_mri_p2_negfix/` nomme une expérience | Ouvert (le renommer casserait la démo) |
 
 ---
@@ -1672,7 +1702,7 @@ cliniques.
 ```bash
 pip install -e ".[dev]"
 ruff check .
-pytest                 # 300 tests, sans GPU ni jeu de données
+pytest                 # 305 tests, sans GPU ni jeu de données
                        # (236 collectés en retirant les 4 fichiers qui exigent
                        #  Prefect, dbt-duckdb ou boto3 ; mesuré le 2026-09-20)
 ```

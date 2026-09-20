@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml/badge.svg)](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
-![Tests : 300](https://img.shields.io/badge/tests-300-brightgreen)
+![Tests : 305](https://img.shields.io/badge/tests-305-brightgreen)
 [![Licence : MIT](https://img.shields.io/badge/licence-MIT-lightgrey)](LICENSE)
 
 > **Research Use Only — Not for diagnostic use.** Outil de recherche, pas un dispositif
@@ -137,8 +137,9 @@ checkpoint et analyse un cas** avant d'ouvrir le port, et refuse de démarrer si
 est occupé. `--check` fait le même contrôle sans lancer le serveur, `--fast-check` s'en
 tient à l'inventaire des fichiers.
 
-Ou avec Docker seul (image jamais construite sur cette machine, voir
-[DOCUMENTATION.md](DOCUMENTATION.md#démo-et-application-web)) :
+Ou avec Docker seul — l'image n'a **jamais été construite** ici ni en CI, mais son
+contenu est vérifié sans daemon : les `COPY` suffisent à faire tourner la démo, et ses
+quatre paquets aussi (§4.17 de [DOCUMENTATION.md](DOCUMENTATION.md)) :
 
 ```bash
 docker compose up --build
