@@ -1518,6 +1518,16 @@ l'endroit où il propose la commande.
 la présence de l'image annotée. Jusqu'ici aucun test n'exécutait le modèle sur un cas
 de démonstration ; la CI installe PyTorch CPU, donc celui-ci y tourne.
 
+**Et il a échoué au premier passage en CI, pour une raison qui valait le détour.**
+La page revenait bien en 200 avec le verdict, mais **sans image** : la CI n'installait
+pas Pillow. `inference.render_overlay_png` importe PIL, et
+`app.server._overlay_data_uri` avale l'échec **volontairement**, pour qu'un résultat
+s'affiche même sans son image. Conséquence : chaque run de CI exerçait depuis
+toujours le repli texte de la démo, jamais la coupe annotée — c'est-à-dire jamais ce
+que la démo montre. Vérifié localement en masquant `PIL` à l'import : même page, même
+200, data URI absente. Le correctif tient en un mot ajouté à la liste d'installation
+de la CI ; ce qui manquait était l'assertion qui regarde l'image.
+
 ---
 
 ## Prochaines pistes pour l'étape 1
