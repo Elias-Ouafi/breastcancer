@@ -116,8 +116,8 @@ class DceMriUNetPredictor(_CachedUNetPredictor):
     Set ``MRI_APP_BACKEND=dce_mri`` to connect it
     (the checkpoint at ``models/dce_mri_p2_negfix/unet_best.pt`` must exist -- second
     post-contrast pass, scratch GroupNorm U-Net, 186-patient full-frame sample; see
-    DOCUMENTATION.md §4.1). The upload must be a preprocessed ``.npz``: unlike DBT
-    there is no single-file raw-DICOM path, since DCE-MRI needs two whole series
+    DOCUMENTATION.md §4.1). The upload must be a preprocessed ``.npz``: there is
+    no single-file raw-DICOM path, since DCE-MRI needs two whole series
     (pre + post-contrast) to build the subtraction. Build one with
     ``TransformData.preprocess_dce_mri_exams`` for a new exam, or
     ``preprocess_dce_mri_with_boxes`` when the exam is in the annotated collection --
@@ -128,7 +128,7 @@ class DceMriUNetPredictor(_CachedUNetPredictor):
     confidence saturates on essentially every slice. It segments well once shown the
     right slice, it just cannot find that slice on its own yet. Use
     ``TransformData.make_demo_case`` to pin a verified-good ``forced_slice`` for
-    reliable demo cases (see ``data/curated_data/demo_cases/``) until that ranking problem is fixed.
+    reliable demo cases (see ``data/gold/demo_cases/``) until that ranking problem is fixed.
     """
 
     name = "dce_mri"

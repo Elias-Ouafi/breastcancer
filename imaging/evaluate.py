@@ -1,6 +1,6 @@
 """Honest evaluation of a trained lesion-localisation U-Net on the held-out split.
 
-    python -m imaging.evaluate --data-dir data/preprocessed_data/dce_mri_p2 \
+    python -m imaging.evaluate --data-dir data/silver/dce_mri_p2 \
         --checkpoint models/dce_mri_p2_negfix/unet_best.pt \
         --output-dir models/dce_mri_p2_negfix
 
@@ -307,7 +307,7 @@ def run(args):
 
 def build_arg_parser():
     p = argparse.ArgumentParser(description="Evaluate a lesion-localisation U-Net honestly.")
-    p.add_argument("--data-dir", default=config.DCE_MRI_PREPROCESSED_DIR)
+    p.add_argument("--data-dir", default=config.DCE_MRI_SILVER_DIR)
     p.add_argument("--checkpoint", default=config.DCE_MRI_UNET_CKPT)
     p.add_argument("--output-dir", default=config.DCE_MRI_MODEL_DIR)
     p.add_argument("--split", choices=["test", "val", "train"], default="test")

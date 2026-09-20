@@ -5,40 +5,57 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "breastcancer"
 version = "0.1.0"
-description = "Breast cancer detection from DCE-MRI/DBT screening exams"
+description = "Breast cancer lesion localisation from DCE-MRI"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
 
-# Kept in sync with requirements.txt, which now installs this project rather than
-# duplicating the list.
+# The one place dependencies are declared: no requirements*.txt, so no second list to
+# drift. The base install is the demo and nothing else -- torch, Flask, numpy and Pillow
+# are the whole third-party surface of run_demo -> app.server -> app.predictor ->
+# inference -> imaging.unet (measured 2026-09-20: 17 packages / 153 MB on Windows, against
+# 68 / 355 MB for everything). Every other use case is an extra, and `all` is the union.
+#
+#   pip install -e .                  the demo (then `python run_demo.py`)
+#   pip install -e ".[all]"           everything below
+#   pip install -e ".[data]"          + read the annotation tables and DICOM
+#   pip install -e ".[collect]"       + download from TCIA, decode compressed DICOM
+#   pip install -e ".[orchestration]" + the Prefect flows in pipelines/
+#   pip install -e ".[dev]"           + pytest, ruff, moto
+#
+# torch: the default wheel carries CUDA (~2.5 GB on Linux). For a CPU-only box, or a
+# specific CUDA build, install it first from the matching index and pip will find it
+# already satisfied:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#
+# The Dockerfile reads `dependencies` below with tomllib rather than repeating them.
 dependencies = [
-    "pandas>=2.2,<2.3",
-    "matplotlib>=3.8.2,<3.9",
-    "requests==2.31.0",
-    "pydicom==2.4.3",
-    "tcia-utils>=3.3",
-    "Pillow>=10.2,<11",
-    "tqdm==4.66.1",
-    "numpy>=1.26,<2",
-    "openpyxl==3.1.2",
-    # SimpleITK, itk and itkwidgets were dropped on 2026-09-19 with the legacy
-    # single-series MRI path that was their only caller. Nothing in the repository
-    # imports them now.
     "torch>=2.2",
-    "python-gdcm>=3.0",
     "Flask>=3.0",
-    "duckdb>=1.1",
+    "numpy>=1.26,<2",
+    "Pillow>=10.2,<11",
 ]
 
 [project.optional-dependencies]
-# What CI needs, and nothing else. The full dependency set pulls ITK and the TCIA
-# client, neither of which the test suite exercises, and installing them would turn a
-# 90-second check into a several-minute one.
-dev = [
-    "pytest>=8.0",
-    "ruff>=0.6",
-    "moto[s3]>=5.0",
+# What TransformData imports: the annotation tables (pandas, openpyxl for the MRI boxes
+# workbook) and DICOM (pydicom). Also all the test suite needs of the data path, so CI
+# installs this and not `collect`.
+data = [
+    "pandas>=2.2,<2.3",
+    "pydicom==2.4.3",
+    "openpyxl==3.1.2",
+]
+
+# Fetching from TCIA and decoding real, compressed DICOM. Kept apart from `data` because
+# the TCIA client is what turns a ~1 minute CI check into several, and no test exercises
+# it. SimpleITK, itk and itkwidgets were dropped on 2026-09-19 with the legacy
+# single-series MRI path that was their only caller; nothing imports them now.
+collect = [
+    "requests==2.31.0",
+    "tcia-utils>=3.3",
+    "matplotlib>=3.8.2,<3.9",
+    "tqdm==4.66.1",
+    "python-gdcm>=3.0",
 ]
 
 # Only `pipelines/` needs this. Kept out of the base install so the demo -- the thing
@@ -47,16 +64,31 @@ orchestration = [
     "prefect>=3.0",
 ]
 
-# `python -m catalog build` runs the catalogue's staging, marts and tests with dbt.
-# Querying a built catalogue needs only duckdb, which is in the base install.
-catalog = [
-    "dbt-duckdb>=1.10",
+# What the tests and the lint gate need.
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
 ]
 
-# `python -m objectstore` and the flow's publish stage: any S3-compatible endpoint
-# (MinIO locally, S3 in the cloud).
-storage = [
-    "boto3>=1.34",
+# The nnU-Net MRI corpus (`mri_nnunet/`), used together with `data` (it reuses the DCE series
+# grouping of TransformData): SimpleITK does everything geometric -- DICOM with its geometry,
+# N4, rigid registration, resampling, NIfTI -- so neither dcm2niix (an external binary) nor
+# ANTsPy (heavy) is needed. It was dropped from the dependencies on 2026-09-19 as unused and
+# is back because this is the pipeline that needs it. PyYAML reads the parameters, pydicom
+# the scanner/site/date tags, matplotlib the QC report, nibabel checks the NIfTI orientation,
+# and nnunetv2 is what trains on the exported dataset (nothing imports it here).
+nnunet = [
+    "SimpleITK>=2.3",
+    "PyYAML>=6.0",
+    "pydicom==2.4.3",
+    "matplotlib>=3.8.2,<3.9",
+    "nibabel>=5.0",
+    "nnunetv2>=2.5",
+]
+
+# Every use case at once. A new extra must be added here: a test fails if one is missing.
+all = [
+    "breastcancer[data,collect,nnunet,orchestration,dev]",
 ]
 
 [tool.setuptools]
@@ -80,19 +112,11 @@ py-modules = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["app*", "imaging*", "pipelines*", "catalog*", "objectstore*"]
+include = ["app*", "imaging*", "pipelines*", "mri_nnunet*"]
 
 [tool.setuptools.package-data]
-# The catalogue's dbt project and example queries are read at run time, not imported.
-catalog = [
-    "dbt/*.yml",
-    "dbt/macros/*.sql",
-    "dbt/models/*/*.sql",
-    "dbt/models/*/*.yml",
-    "dbt/tests/*.sql",
-    "dbt/tests/*.yml",
-    "queries/*.sql",
-]
+# The default parameters of the nnU-Net corpus are read at run time, not imported.
+mri_nnunet = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "imaging"]

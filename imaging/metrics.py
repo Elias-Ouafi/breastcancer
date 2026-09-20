@@ -136,7 +136,7 @@ class FocalTverskyLoss(nn.Module):
     """Focal Tversky loss (Abraham & Khan, 2018) for foreground/background imbalance.
 
     Built on `tversky_index`: ``alpha``/``beta`` trade precision vs recall (defaults
-    favour recall, suited to the tiny lesion-vs-background ratio in DBT/MRI slices),
+    favour recall, suited to the tiny lesion-vs-background ratio in MRI slices),
     and ``gamma`` raises ``(1 - Tversky)`` to a power < 1, which amplifies the loss
     for harder/less-accurate slices relative to easy ones already segmented well.
     """

@@ -83,7 +83,7 @@ def test_a_lesion_roi_crop_is_flagged():
 
 
 def test_an_intended_crop_is_not_flagged():
-    """The DBT pipeline and the demo cases crop on purpose; nagging them is noise."""
+    """The demo cases crop on purpose; nagging them is noise."""
     volume = _volume(depth=45, height=72, width=70)
     warnings = validate_volume_and_mask(volume, _mask(volume.shape, box=(10, 30)), "case",
                                         expect_full_frame=False)

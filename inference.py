@@ -9,14 +9,6 @@ without re-running the batch training scripts:
   bounding box, and the max per-pixel lesion probability -- which is not a calibrated
   detection score, see :func:`_localize_lesion`.
 
-There used to be a twin ``predict_dbt`` here, serving a DBT checkpoint at
-``models/dbt/unet_best.pt``. It is gone (2026-09-15) rather than left documented as
-available: that checkpoint was overwritten by a smoke test (DOCUMENTATION.md §4.1) and never
-rebuilt, so the entry point named a file that does not exist. What replaces it on the
-DBT side is not another segmentation U-Net — DOCUMENTATION.md §4.10 measures why — so there was
-nothing to re-point it at. ``imaging.train`` still writes a DBT checkpoint if you train
-one; wiring it back into a serving path is a deliberate act, not a leftover.
-
 The entry point retrains nothing; it loads a saved ``torch`` checkpoint.
 """
 from __future__ import annotations
@@ -52,7 +44,7 @@ def load_unet(checkpoint: str, base: int = 32, device=None):
     if not os.path.exists(checkpoint):
         raise FileNotFoundError(
             f"No U-Net checkpoint at {checkpoint!r}. Train it first: "
-            "python -m imaging.train --data-dir data/preprocessed_data/dbt"
+            "python -m imaging.train --data-dir data/silver/dce_mri_p2"
         )
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(base_channels=base)
@@ -208,10 +200,8 @@ def _load_volume_and_offset(volume):
     ``source_n_slices`` if present (as written by ``TransformData.make_demo_case``);
     anything else is treated as an already-loaded array.
 
-    It used to take a ``raw_loader``/``raw_extensions`` pair, for the DBT entry point
-    that accepted a raw ``.dcm`` upload. That caller is gone, and DCE-MRI has no
-    single-file raw path by construction — a subtraction needs two whole series — so
-    the branch was unreachable.
+    DCE-MRI has no single-file raw path by construction -- a subtraction needs two whole
+    series -- so a raw ``.dcm`` upload is not accepted.
     """
     crop_offset = (0, 0, 0)
     forced_slice = None
@@ -477,7 +467,7 @@ if __name__ == "__main__":
     # Tiny smoke path for the imaging side: score the first preprocessed volume.
     from glob import glob
 
-    npzs = sorted(glob(os.path.join(config.DCE_MRI_PREPROCESSED_DIR, "*.npz")))
+    npzs = sorted(glob(os.path.join(config.DCE_MRI_SILVER_DIR, "*.npz")))
     if npzs:
         log.info(f"Scoring {npzs[0]} ...")
         log.info(predict_dce_mri(npzs[0]))

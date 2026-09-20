@@ -10,7 +10,7 @@ from lineage import MANIFEST_NAME, git_revision, read_manifest, relative_path, w
 
 def test_manifest_round_trips(tmp_path):
     out = str(tmp_path / "dce")
-    write_manifest(out, source="data/raw_data/tcia", parameters={"crop": False},
+    write_manifest(out, source="data/bronze/tcia", parameters={"crop": False},
                    cases={"Breast_MRI_001": {"shape": [160, 448, 448]}})
 
     manifest = read_manifest(out)
@@ -32,7 +32,7 @@ def test_manifest_records_no_absolute_paths(tmp_path):
 
     raw = (tmp_path / "dce" / MANIFEST_NAME).read_text(encoding="utf-8")
     assert config.ROOT.replace(os.sep, "/") not in raw.replace("\\\\", "/")
-    assert json.loads(raw)["source"] == "data/raw_data/tcia"
+    assert json.loads(raw)["source"] == "data/bronze/tcia"
 
 
 def test_relative_path_tolerates_none():
