@@ -3,7 +3,7 @@
 Why this exists
 ---------------
 ``MRISliceDataset`` reads slices straight out of the compressed ``.npz`` volumes.
-That is fine for the small cropped DBT volumes it was written for, but it collapses
+That is fine for the small cropped volumes it was written for, but it collapses
 on the full-frame DCE-MRI set: one ``.npz`` costs ~0.2 s to inflate, a training
 epoch draws ~10k slices in shuffled order across ~130 volumes, and the in-memory LRU
 cache only holds a handful of them. Nearly every access therefore re-inflates a whole

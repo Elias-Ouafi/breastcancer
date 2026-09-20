@@ -10,7 +10,6 @@ data/bronze/
 data/silver/
 data/gold/slice_bank_p2/
 data/_legacy/
-models/dbt/
 models/tabular/
 models/lesionclf/
 models/_legacy/

@@ -155,6 +155,13 @@ def purge(raw_dir, keep_bronze=False):
     read by no subtraction) would never leave. Patients with no annotation were not
     preprocessed, so they stay.
 
+    When the nnU-Net corpus exists (``config.DCE_MRI_NNUNET_SILVER_DIR``) it is a second reader
+    of the same DICOM, and its needs are stricter: a series is deleted only if its native NIfTI
+    was written **and read back identical** (``mri_nnunet.pipeline.verified_phases``). That copy
+    is lossless, so the spacing, the normalisation and the channels stay re-tunable without
+    bronze. A phase that was not ingested (a patient without a box, a series with missing
+    slices) is kept.
+
     Returns ``{"purged_series", "freed_bytes", "kept"}``. Not retried: the primitive
     refuses rather than fails, and a second run would refuse for the same reason.
     """
@@ -169,19 +176,32 @@ def purge(raw_dir, keep_bronze=False):
     import lineage
     from TransformData import group_dce_series_by_patient, purge_bronze_series
 
+    nnunet_dir = config.DCE_MRI_NNUNET_SILVER_DIR
+    nnunet_required = os.path.isdir(os.path.join(nnunet_dir, "native"))
+    if nnunet_required:
+        from mri_nnunet.pipeline import verified_phases
+
     promoted = set(((lineage.read_manifest(config.DCE_MRI_SILVER_DIR) or {})
                     .get("cases") or {}))
-    purged, freed = 0, 0
+    purged, freed, kept_for_nnunet = 0, 0, 0
     for patient, phases in group_dce_series_by_patient(raw_dir).items():
         if patient not in promoted:
             continue
         npz = os.path.join(config.DCE_MRI_SILVER_DIR, f"{patient}.npz")
-        for folder in phases.values():
+        safe = verified_phases(nnunet_dir, patient) if nnunet_required else None
+        for rank, folder in phases.items():
+            if safe is not None and rank not in safe:
+                kept_for_nnunet += 1
+                continue
             n_bytes = purge_bronze_series(folder, [npz], bronze_root=raw_dir)
             purged += bool(n_bytes)
             freed += n_bytes
+    if kept_for_nnunet:
+        logger.info("Kept %d series in bronze: not yet ingested (and verified) by the nnU-Net corpus.",
+                    kept_for_nnunet)
     logger.info("Purged %d series from bronze, %.1f GB freed.", purged, freed / 1e9)
-    return {"purged_series": purged, "freed_bytes": freed, "kept": False}
+    return {"purged_series": purged, "freed_bytes": freed, "kept": False,
+            "kept_for_nnunet": kept_for_nnunet}
 
 
 @task(name="train-unet")

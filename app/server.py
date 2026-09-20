@@ -1,4 +1,4 @@
-"""Flask web app: upload an MRI/DBT study, get a cancer-detection verdict.
+"""Flask web app: upload an MRI study, get a lesion-localisation result.
 
 Run locally:
 

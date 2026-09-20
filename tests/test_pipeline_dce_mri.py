@@ -148,6 +148,8 @@ def _bronze_world(tmp_path, monkeypatch):
 
     monkeypatch.setattr(config, "TCIA_DIR", str(tmp_path / "tcia"))
     monkeypatch.setattr(config, "DCE_MRI_SILVER_DIR", str(silver))
+    # The real nnU-Net corpus must not leak in: by default there is none.
+    monkeypatch.setattr(config, "DCE_MRI_NNUNET_SILVER_DIR", str(tmp_path / "no_nnunet"))
     # Reading DICOM headers is not what is under test: hand the purge its grouping.
     monkeypatch.setattr(TransformData, "group_dce_series_by_patient", lambda root: groups)
     return raw, silver
@@ -159,7 +161,7 @@ def test_purge_deletes_every_phase_of_a_promoted_patient_and_only_theirs(tmp_pat
     report = purge.fn(str(raw))
 
     assert sorted(os.listdir(raw)) == ["B-0", "B-2"]  # B has no volume in silver: it stays
-    assert report == {"purged_series": 2, "freed_bytes": 200, "kept": False}
+    assert report == {"purged_series": 2, "freed_bytes": 200, "kept": False, "kept_for_nnunet": 0}
 
 
 def test_keep_bronze_leaves_the_dicom_where_they_are(tmp_path, monkeypatch):
@@ -216,3 +218,52 @@ def test_forcing_a_preprocess_on_a_purged_bronze_says_what_is_missing(tmp_path):
 def test_the_dry_run_shows_the_purge_and_the_opt_out():
     assert "deletes the patients now in silver" in _describe(_args())
     assert "--keep-bronze" in _describe(_args(keep_bronze=True))
+
+
+# --- purge with the nnU-Net corpus as a second reader ---------------------------------
+
+def _nnunet_world(tmp_path, monkeypatch, verified=(0,), write_files=True):
+    """The bronze world of `_bronze_world`, plus an nnU-Net corpus that ingested patient A."""
+    import json
+
+    raw, silver = _bronze_world(tmp_path, monkeypatch)
+    nnunet = tmp_path / "nnunet"
+    native = nnunet / "native" / "A"
+    native.mkdir(parents=True)
+    (native / "ingest.json").write_text(json.dumps({"phases": [0, 2], "verified_phases": list(verified)}))
+    if write_files:
+        for phase in (0, 2):
+            (native / f"A_ph{phase}.nii.gz").write_bytes(b"nifti")
+    monkeypatch.setattr(config, "DCE_MRI_NNUNET_SILVER_DIR", str(nnunet))
+    return raw
+
+
+def test_the_nnunet_corpus_keeps_the_phases_it_did_not_verify(tmp_path, monkeypatch):
+    raw = _nnunet_world(tmp_path, monkeypatch, verified=(0,))
+
+    report = purge.fn(str(raw))
+
+    assert sorted(os.listdir(raw)) == ["A-2", "B-0", "B-2"]      # only A's verified phase is gone
+    assert report["purged_series"] == 1 and report["kept_for_nnunet"] == 1
+
+
+def test_a_patient_the_nnunet_corpus_never_ingested_is_not_purged(tmp_path, monkeypatch):
+    raw = _nnunet_world(tmp_path, monkeypatch, verified=())
+
+    assert purge.fn(str(raw))["purged_series"] == 0
+    assert len(os.listdir(raw)) == 4
+
+
+def test_a_verified_phase_whose_native_file_is_gone_is_not_purged(tmp_path, monkeypatch):
+    """`ingest.json` says verified, but the copy is not on disk any more: the DICOM must stay."""
+    raw = _nnunet_world(tmp_path, monkeypatch, verified=(0, 2), write_files=False)
+
+    assert purge.fn(str(raw))["purged_series"] == 0
+    assert len(os.listdir(raw)) == 4
+
+
+def test_without_an_nnunet_corpus_the_purge_is_unchanged(tmp_path, monkeypatch):
+    raw, _ = _bronze_world(tmp_path, monkeypatch)
+    monkeypatch.setattr(config, "DCE_MRI_NNUNET_SILVER_DIR", str(tmp_path / "does_not_exist"))
+
+    assert purge.fn(str(raw))["purged_series"] == 2

@@ -1,0 +1,114 @@
+# Parameters of the nnU-Net MRI corpus (mri_nnunet/). Nothing below is hard-coded in the
+# steps: change a value and the cases whose parameters changed are the only ones redone
+# (each case records the hash of the sections it depends on).
+#
+# Two of these values rest on an assumption nobody has checked against a radiologist and
+# are marked ASSUMPTION: the channels and the contrast threshold.
+
+seed: 42
+
+# --- Ingestion: DICOM -> NIfTI in native geometry, reoriented to RAS ---------------------
+ingest:
+  # Every dynamic phase, not only the ones used as channels: the bronze DICOM are purged once
+  # a patient is in silver (config.py), and this lossless copy (native int16 + geometry) is
+  # what keeps the spacing, the normalisation and the channels re-tunable afterwards.
+  phases: [0, 1, 2, 3, 4]
+  # Series whose slice positions are not evenly spaced are missing slices (or worse); the
+  # tolerance is the largest relative deviation from the median spacing that is accepted.
+  max_slice_spacing_deviation: 0.05
+
+# --- Channels: what nnU-Net sees as _0000, _0001, ... ----------------------------------
+# ASSUMPTION: the pre-contrast series and the second post-contrast pass. The second pass is
+# the one the repository already uses (Zhou et al., see TransformData). The subtraction is not
+# a channel: the network can compute it, and a fixed subtraction would hide the inputs.
+channels:
+  - {name: pre, phase: 0}
+  - {name: post2, phase: 2}
+reference_channel: pre        # the space every other channel is registered to
+
+# --- 1. N4 bias-field correction ----------------------------------------------------------
+n4:
+  enabled: true
+  shrink_factor: 4            # fit on a 4x shrunken copy, apply the field at full resolution
+  iterations: [50, 50, 25]
+  convergence_threshold: 0.001
+  # A coarse Otsu foreground only conditions the bias-field fit (fitting the field on air is
+  # ill-posed); it is NOT the body mask, which comes after and is computed on the corrected image.
+  use_foreground_mask: true
+
+# --- 2. Body / organ mask -----------------------------------------------------------------
+body_mask:
+  method: otsu_morpho         # Otsu, closing, opening, largest component, holes filled
+  otsu_bins: 128
+  closing_radius_mm: 4.0
+  opening_radius_mm: 2.0
+
+# --- 3. Rigid co-registration of every channel to the reference ---------------------------
+# Same-session acquisitions on the same grid: the identity is already very good, and a rigid
+# registration can only make it worse. Measured on 8 real cases, mutual information *lowered* the
+# pre/post correlation in 7 of them (e.g. 0.61 -> 0.32, 7 mm of invented shift), so:
+#   * the metric is correlation, which optimises what the acceptance test below measures;
+#   * a transform is accepted only if it raises that correlation by at least `min_ncc_gain`
+#     over the identity, inside the organ mask; otherwise the identity is kept and both values
+#     are logged. Genuine patient motion is corrected, a spurious fit is not applied.
+registration:
+  enabled: true
+  metric: correlation             # or mattes_mi
+  min_ncc_gain: 0.002
+  histogram_bins: 32              # mattes_mi only
+  sampling_percentage: 0.2
+  shrink_factors: [4, 2, 1]
+  smoothing_sigmas: [2, 1, 0]
+  learning_rate: 2.0              # largest step of the regular-step descent, in scaled units
+  min_step: 0.0001                # stop when the step has shrunk below this
+  iterations: 100
+  max_translation_mm: 15.0
+  max_rotation_deg: 8.0
+
+# --- 4. Resampling -------------------------------------------------------------------------
+resample:
+  # "auto" derives it from the box distribution (spacing.min_voxels below); a number is mm.
+  spacing_mm: auto
+  image_interpolation_order: 3    # B-spline, order 3, for images
+  label_interpolation: nearest    # for labels; the pseudo-mask is rasterised, never interpolated
+  # An axis coarser than this many times the finest in-plane spacing keeps its native value.
+  anisotropy_ratio: 2.0
+
+# --- D. How the target spacing is chosen ---------------------------------------------------
+spacing:
+  min_voxels: 8               # smallest lesion axis must span at least this many voxels
+  percentile: 10              # ... for at least (100 - percentile)% of the lesions
+  floor_mm: 0.5
+  ceil_mm: 1.5
+
+# --- 5-6. Intensity ------------------------------------------------------------------------
+normalize:
+  clip_percentiles: [0.5, 99.5]   # per case, per channel, inside the mask
+  # z-score with mean/std of the same voxels; outside the mask the value is 0.
+
+# --- 7. Crop --------------------------------------------------------------------------------
+crop:
+  margin_voxels: 8            # around the bounding box of the organ mask
+
+# --- C. Boxes -> pseudo-masks ---------------------------------------------------------------
+pseudo_mask:
+  shape: ellipsoid            # inscribed in the box
+  # The published slice numbers are ranks by InstanceNumber, which runs against the spatial
+  # order in this collection (measured on real series: InstanceNumber 144 -> 1 along z).
+  # "position" would read them as ranks along z instead; check with the QC report first.
+  slice_basis: instance_number
+  # ASSUMPTION: a pseudo-mask that stands out from the rest of the organ by less than this many
+  # standard deviations of enhancement (see steps.enhancement_contrast) sits on a loose or
+  # misplaced box. Measured on 8 real cases the contrast ran 0.9 to 4.3 sd; 1.0 is where the
+  # weakest begin. Reported, never used to drop a case.
+  contrast_warn_below: 1.0
+  # The ellipsoid must weigh about pi/6 of its box; a discretised small lesion drifts from it.
+  ratio_tolerance: 0.35
+
+# --- Export -----------------------------------------------------------------------------------
+export:
+  dataset_id: 501
+  dataset_name: DukeDCEBreast
+  # The channels are already normalised inside the mask; nnU-Net's own z-score would re-centre
+  # them on the whole (zero-padded) array.
+  channel_normalization: noNorm

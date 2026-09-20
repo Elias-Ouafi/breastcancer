@@ -16,8 +16,8 @@ import config
 
 # Every public path constant, discovered rather than listed, so a new one added to
 # config.py is covered without touching this file. A constant may also be a *group* of
-# paths (``DBT_FILE_PATHS`` is the train + validation pair passed as one argument);
-# each member is checked, so grouping does not buy an exemption from the contract.
+# paths (a tuple of paths is checked member by member), so grouping does not buy an
+# exemption from the contract.
 def _path_members(name):
     value = getattr(config, name)
     if isinstance(value, str):

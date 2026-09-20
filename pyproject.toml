@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "breastcancer"
 version = "0.1.0"
-description = "Breast cancer detection from DCE-MRI/DBT screening exams"
+description = "Breast cancer lesion localisation from DCE-MRI"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
@@ -20,9 +20,7 @@ requires-python = ">=3.12"
 #   pip install -e ".[all]"           everything below
 #   pip install -e ".[data]"          + read the annotation tables and DICOM
 #   pip install -e ".[collect]"       + download from TCIA, decode compressed DICOM
-#   pip install -e ".[catalog]"       + build and query the DuckDB catalogue
 #   pip install -e ".[orchestration]" + the Prefect flows in pipelines/
-#   pip install -e ".[storage]"       + publish to an S3-compatible bucket
 #   pip install -e ".[dev]"           + pytest, ruff, moto
 #
 # torch: the default wheel carries CUDA (~2.5 GB on Linux). For a CPU-only box, or a
@@ -60,35 +58,37 @@ collect = [
     "python-gdcm>=3.0",
 ]
 
-# `python -m catalog build` runs the catalogue's staging, marts and tests with dbt;
-# querying an already built catalogue needs only duckdb.
-catalog = [
-    "duckdb>=1.1",
-    "dbt-duckdb>=1.10",
-]
-
 # Only `pipelines/` needs this. Kept out of the base install so the demo -- the thing
 # people actually run from a clone -- does not pull an orchestrator it never calls.
 orchestration = [
     "prefect>=3.0",
 ]
 
-# `python -m objectstore` and the flow's publish stage: any S3-compatible endpoint
-# (MinIO locally, S3 in the cloud).
-storage = [
-    "boto3>=1.34",
-]
-
-# What the tests and the lint gate need; moto fakes S3 for the object-store tests.
+# What the tests and the lint gate need.
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
-    "moto[s3]>=5.0",
+]
+
+# The nnU-Net MRI corpus (`mri_nnunet/`), used together with `data` (it reuses the DCE series
+# grouping of TransformData): SimpleITK does everything geometric -- DICOM with its geometry,
+# N4, rigid registration, resampling, NIfTI -- so neither dcm2niix (an external binary) nor
+# ANTsPy (heavy) is needed. It was dropped from the dependencies on 2026-09-19 as unused and
+# is back because this is the pipeline that needs it. PyYAML reads the parameters, pydicom
+# the scanner/site/date tags, matplotlib the QC report, nibabel checks the NIfTI orientation,
+# and nnunetv2 is what trains on the exported dataset (nothing imports it here).
+nnunet = [
+    "SimpleITK>=2.3",
+    "PyYAML>=6.0",
+    "pydicom==2.4.3",
+    "matplotlib>=3.8.2,<3.9",
+    "nibabel>=5.0",
+    "nnunetv2>=2.5",
 ]
 
 # Every use case at once. A new extra must be added here: a test fails if one is missing.
 all = [
-    "breastcancer[data,collect,catalog,orchestration,storage,dev]",
+    "breastcancer[data,collect,nnunet,orchestration,dev]",
 ]
 
 [tool.setuptools]
@@ -112,19 +112,11 @@ py-modules = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["app*", "imaging*", "pipelines*", "catalog*", "objectstore*"]
+include = ["app*", "imaging*", "pipelines*", "mri_nnunet*"]
 
 [tool.setuptools.package-data]
-# The catalogue's dbt project and example queries are read at run time, not imported.
-catalog = [
-    "dbt/*.yml",
-    "dbt/macros/*.sql",
-    "dbt/models/*/*.sql",
-    "dbt/models/*/*.yml",
-    "dbt/tests/*.sql",
-    "dbt/tests/*.yml",
-    "queries/*.sql",
-]
+# The default parameters of the nnU-Net corpus are read at run time, not imported.
+mri_nnunet = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "imaging"]

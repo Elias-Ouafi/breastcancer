@@ -2,12 +2,12 @@
 
 Run from the repository root:
 
-    python -m imaging.train --data-dir data/silver/dbt --epochs 30
+    python -m imaging.train --data-dir data/silver/dce_mri_p2 --epochs 30
 
 The target masks come from the annotation bounding boxes, so this learns lesion
 *localisation* (Dice/IoU against the box), the objective chosen for the first
-imaging brick. Metrics are written to ``models/dbt/segmentation_metrics.csv`` and
-the best checkpoint to ``models/dbt/unet_best.pt``.
+imaging brick. Metrics are written to ``models/dce_mri/segmentation_metrics.csv`` and
+the best checkpoint to ``models/dce_mri/unet_best.pt``.
 
 Use ``--smoke-test`` to validate the full forward/backward/eval loop on random
 tensors, without any real data (handy right after installing PyTorch).
@@ -41,7 +41,7 @@ from logging_setup import setup_logging
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_OUTPUT_DIR = config.DBT_MODEL_DIR
+_DEFAULT_OUTPUT_DIR = config.DCE_MRI_TRAIN_DIR
 
 
 def evaluate(model, loader, device, threshold=0.5):
@@ -165,8 +165,8 @@ def train(args):
         train_loader, val_loader, test_loader, n_train = _make_smoke_loaders(args)
         # A smoke run trains on random tensors, so its checkpoint is garbage. Keep it
         # out of the default --output-dir: writing there silently destroyed a real
-        # trained checkpoint (models/dbt/unet_best.pt, the DBT model the demo app
-        # serves) simply by running --smoke-test with no other flags.
+        # trained checkpoint (the one the demo app served) simply by running --smoke-test
+        # with no other flags.
         if args.output_dir == _DEFAULT_OUTPUT_DIR:
             args.output_dir = os.path.join(_DEFAULT_OUTPUT_DIR, "smoke_test")
             log.info(f"Smoke test: writing throwaway artefacts to {args.output_dir}")
@@ -269,7 +269,7 @@ def train(args):
 
 def build_arg_parser():
     p = argparse.ArgumentParser(description="Train a 2D U-Net for MRI lesion localisation.")
-    p.add_argument("--data-dir", default=config.DBT_SILVER_DIR,
+    p.add_argument("--data-dir", default=config.DCE_MRI_SILVER_DIR,
                    help="Folder of preprocessed .npz volumes.")
     p.add_argument("--output-dir", default=_DEFAULT_OUTPUT_DIR,
                    help="Where to write metrics and checkpoints.")
@@ -330,7 +330,7 @@ def build_arg_parser():
     p.add_argument("--no-augment", action="store_true",
                    help="Disable training-time augmentation (flips, small rotation/scale, "
                         "gamma jitter). Augmentation is on by default to help the small "
-                        "annotated DBT set generalise.")
+                        "annotated MRI set generalise.")
     p.add_argument("--slice-bank", default=None,
                    help="Directory for a memmapped slice bank (see imaging.slicebank). "
                         "Strongly recommended on full-frame volumes: reading slices "

@@ -46,9 +46,9 @@ def default_patient_key(path):
 def default_patient_label(path):
     """The exam-level label stored beside the volume, or ``None`` if it has none.
 
-    ``preprocess_dbt_with_boxes`` writes ``label`` (0 benign, 1 cancer) because the
-    class cannot be read off the mask. The DCE-MRI collection publishes no such
-    column, so its files have no label and ``None`` says exactly that.
+    A corpus may store an exam-level ``label`` (0/1) beside its volumes when the class
+    cannot be read off the mask. The DCE-MRI collection publishes no such column, so its
+    files have no label and ``None`` says exactly that.
     """
     try:
         with np.load(path) as data:
@@ -66,8 +66,7 @@ def _patient_labels(groups, patient_label):
     patient -- the same rule preprocessing applies to a series, and for the same
     reason: at the level where the decision is taken, one missed cancer is not offset
     by a correctly called benign. It is warned about rather than tolerated silently,
-    since in this collection it does not happen (82 benign-only and 59 cancer-only
-    patients across the pooled BCS-DBT box CSVs).
+    since a corpus that labels each patient once should never hold it.
     """
     labels = {}
     for key, files in groups.items():
@@ -122,8 +121,7 @@ def split_npz_by_patient(data_dir, val_frac=0.15, test_frac=0.15, seed=42,
             f"No .npz files found in {data_dir!r}. Generate them first with the "
             "preprocessing function for that corpus: "
             "TransformData.preprocess_dce_mri_with_boxes (annotated DCE-MRI), "
-            "preprocess_dce_mri_exams (unannotated DCE-MRI), "
-            "preprocess_dbt_with_boxes or preprocess_dbt_exams (DBT)."
+            "preprocess_dce_mri_exams (unannotated DCE-MRI), or mri_nnunet for the nnU-Net corpus."
         )
 
     groups = OrderedDict()

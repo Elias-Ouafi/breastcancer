@@ -26,7 +26,7 @@ DOCKERFILE = os.path.join(config.ROOT, "Dockerfile")
 PYPROJECT = os.path.join(config.ROOT, "pyproject.toml")
 
 # Import name -> distribution name, where the two differ.
-IMPORT_TO_DISTRIBUTION = {"botocore": "boto3", "PIL": "pillow", "tcia_utils": "tcia-utils", "gdcm": "python-gdcm",
+IMPORT_TO_DISTRIBUTION = {"PIL": "pillow", "tcia_utils": "tcia-utils", "gdcm": "python-gdcm",
                           "yaml": "pyyaml"}
 
 
@@ -77,11 +77,9 @@ def test_every_third_party_import_of_the_project_is_declared_somewhere():
     declared = {_name(r) for r in project["dependencies"]}
     for requirements in project["optional-dependencies"].values():
         declared |= {_name(r) for r in requirements if not r.startswith("breastcancer[")}
-    # dbt is imported as `dbt`, shipped by dbt-duckdb (which depends on dbt-core).
-    declared |= {"dbt"}
     stdlib = set(sys.stdlib_module_names)
 
-    tracked = subprocess.run(["git", "ls-files", "*.py"], cwd=config.ROOT, check=True,
+    tracked = subprocess.run(["git", "ls-files", "-co", "--exclude-standard", "*.py"], cwd=config.ROOT, check=True,
                              capture_output=True, text=True).stdout.split()
     # The project's own names: every module and package. The imaging modules import their
     # siblings twice on purpose (`from .dataset` and a bare `from dataset`), so a

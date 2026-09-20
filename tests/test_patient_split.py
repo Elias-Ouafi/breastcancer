@@ -47,7 +47,7 @@ def prevalence(paths, labels):
     return sum(labels[p] for p in patients) / len(patients)
 
 
-# The measured BCS-DBT balance: 48 benign patients, 24 cancers.
+# A labelled corpus the stratified split was designed for: 48 negatives, 24 positives.
 REAL_BALANCE = {**{f"DBT-B{i:03d}": 0 for i in range(48)},
                 **{f"DBT-C{i:03d}": 1 for i in range(24)}}
 
