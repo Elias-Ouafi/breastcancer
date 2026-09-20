@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml/badge.svg)](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
-![Tests : 288](https://img.shields.io/badge/tests-288-brightgreen)
+![Tests : 300](https://img.shields.io/badge/tests-300-brightgreen)
 [![Licence : MIT](https://img.shields.io/badge/licence-MIT-lightgrey)](LICENSE)
 
 > **Research Use Only — Not for diagnostic use.** Outil de recherche, pas un dispositif
@@ -50,7 +50,7 @@ la projection d'intensité maximale.*
 | **Localisation de lésion** (IRM, modèle de la démo) | Fonctionne **quand on lui montre la bonne coupe** : lésion trouvée dans 88 % des cas [IC 82–93 %] sur 28 patients de test |
 | **Nouvelle IRM** (examen jamais annoté) | Opérationnel : `preprocess_dce_mri_exams` prépare un examen sans annotation. Vérifié sur **DICOM brut réel** — le volume produit est **identique bit à bit** à celui du corpus d'entraînement, puis servi par l'app en 3,9 s |
 | **Détection du cancer au niveau de l'examen** (DBT) | **Ne fonctionne pas, et c'est publié** : ROC-AUC 0,457 [0,369–0,544] sur 272 patients, soit le hasard |
-| **Démo** | Se lance depuis un clone, sans téléchargement de données |
+| **Démo** | Se lance depuis un clone, sans téléchargement de données : 4 dépendances (153 Mo sur Windows) au lieu de 68 paquets, et le lanceur **analyse un cas réel avant d'ouvrir le port** |
 
 **Pourquoi la détection échoue.** Mesure après mesure (warm start, score relatif,
 statistiques sans modèle jusqu'en résolution native), le diagnostic converge : ce qui
@@ -124,17 +124,30 @@ ensuite publiés vers un stockage objet S3.
 ## Démarrage rapide
 
 La démo ne demande aucun téléchargement de données : le modèle et trois cas sont
-versionnés.
+versionnés. Elle n'a besoin que de quatre paquets — `torch`, `Flask`, `numpy`,
+`Pillow` — et pas du reste du pipeline :
 
 ```bash
-pip install -r requirements.txt
-python run_demo.py            # puis ouvrir http://127.0.0.1:5000
+pip install -r requirements-demo.txt
+python run_demo.py --open     # préflight, puis http://127.0.0.1:5000
 ```
 
-Ou avec Docker seul :
+`run_demo.py` ne se contente pas de vérifier que les fichiers sont là : il **charge le
+checkpoint et analyse un cas** avant d'ouvrir le port, et refuse de démarrer si le port
+est occupé. `--check` fait le même contrôle sans lancer le serveur, `--fast-check` s'en
+tient à l'inventaire des fichiers.
+
+Ou avec Docker seul (image jamais construite sur cette machine, voir
+[DOCUMENTATION.md](DOCUMENTATION.md#démo-et-application-web)) :
 
 ```bash
 docker compose up --build
+```
+
+Pour tout le reste — collecte, transformation, catalogue —, l'installation complète :
+
+```bash
+pip install -r requirements.txt
 ```
 
 Chaîne de données DBT et catalogue (nécessitent les tables et les données téléchargées) :
@@ -174,6 +187,7 @@ Prefect · Flask · Docker · GitHub Actions
 ## Organisation du dépôt
 
 ```
+requirements-demo.txt  les 4 paquets de la démo ; l'image Docker lit le même fichier
 ExtractData.py      collecte TCIA : tables d'annotations, séries annotées et normales
 TransformData.py    DICOM → volumes normalisés + masques, jointure boîte/série, étiquettes
 validation.py       contrôles de schéma au point unique d'écriture

@@ -45,15 +45,18 @@
       <span style="font-family: var(--font-heading); font-weight: 800; font-size: 16px;">
         Déposez votre examen
       </span>
+      {# Ce que le backend servi sait réellement lire, pas ce qu'un formulaire
+         générique pourrait accepter : sous `dce_mri`, seul un .npz prétraité est
+         scorable, et l'annoncer autrement produisait une erreur 500 en pleine démo. #}
       <span id="dropzone-name" class="text-muted" style="font-size: 12px; word-break: break-all;">
-        .npz, DICOM, NIfTI ou image
+        {{ accept_hint }}
       </span>
     </label>
     <!-- Volontairement sans `required` : un input masqué et `required` bloque la
          soumission sans message visible (contrôle non focusable). La validation
          est faite en JS ci-dessous, avec le contrôle serveur comme filet. -->
     <input id="mri" name="mri" type="file"
-           accept=".npz,.dcm,.dicom,.nii,.gz,.png,.jpg,.jpeg"
+           accept="{{ accept }}"
            style="width: 1px; height: 1px; opacity: 0; overflow: hidden; position: absolute;">
 
     <p id="mri-error" class="card-body" hidden
@@ -110,6 +113,17 @@
       var mriError = document.getElementById('mri-error');
       var says = document.querySelector('.assistant-says');
 
+      // `accept` ne filtre que le sélecteur de fichiers : un glisser-déposer passe
+      // au travers. Le serveur refuse quand même, mais il le fait après un
+      // aller-retour et un rechargement de page -- en démo, autant le dire tout de
+      // suite. Même liste des deux côtés, rendue par le serveur.
+      var accepted = {{ accept | tojson }}.split(',');
+
+      function extensionIsAccepted(name) {
+        var lower = name.toLowerCase();
+        return accepted.some(function (ext) { return lower.endsWith(ext); });
+      }
+
       function markActive() {
         dropzone.style.background = 'var(--color-accent-100)';
         dropzone.style.borderColor = 'var(--color-accent)';
@@ -120,11 +134,19 @@
       }
 
       input.addEventListener('change', function () {
-        if (input.files.length) {
-          nameEl.textContent = input.files[0].name;
-          markActive();
+        if (!input.files.length) return;
+        var chosen = input.files[0].name;
+        nameEl.textContent = chosen;
+        markActive();
+        if (extensionIsAccepted(chosen)) {
           mriError.hidden = true;
           if (says) { says.textContent = 'Fichier reçu. Lancez l’analyse quand vous voulez.'; }
+        } else {
+          mriError.textContent = 'Format non pris en charge : ' + chosen
+            + '. Ce modèle lit un volume prétraité (' + accepted.join(', ')
+            + '). Essayez un cas de démonstration ci-dessous.';
+          mriError.hidden = false;
+          if (says) { says.textContent = 'Ce format-là, je ne sais pas le lire.'; }
         }
       });
 
@@ -155,7 +177,12 @@
       form.addEventListener('submit', function (e) {
         if (!input.files.length) {
           e.preventDefault();
+          mriError.textContent = 'Veuillez d’abord sélectionner un fichier.';
           mriError.hidden = false;
+          return;
+        }
+        if (!extensionIsAccepted(input.files[0].name)) {
+          e.preventDefault();   // le message est déjà affiché par `change`
           return;
         }
         startAnalyzing();

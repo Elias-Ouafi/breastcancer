@@ -20,9 +20,17 @@ from flask import Flask, redirect, render_template, request, url_for
 import config
 from app.predictor import get_predictor
 
-# Accepted upload extensions. .npz is what the U-Net backend expects; the others are
-# allowed so the UI is usable with raw studies / preview images while mocking.
-ALLOWED_EXTENSIONS = {".npz", ".dcm", ".dicom", ".png", ".jpg", ".jpeg", ".nii", ".gz"}
+# Accepted upload extensions, per backend. The mock ignores the pixels, so it can
+# take anything that looks like a study and still render the flow end to end. The
+# real DCE-MRI backend cannot: it needs a preprocessed subtraction volume, because a
+# subtraction needs two whole series and no single uploaded file carries them.
+#
+# Offering .dcm / .nii / .png under that backend was an invitation to fail. Dropping
+# a DICOM during a demo returned HTTP 500 with an English exception -- and the
+# server-side temp path -- printed on the page. The set the UI advertises, the set
+# the form accepts and the set the model can score are now the same set.
+MOCK_EXTENSIONS = {".npz", ".dcm", ".dicom", ".png", ".jpg", ".jpeg", ".nii", ".gz"}
+VOLUME_EXTENSIONS = {".npz"}
 MAX_CONTENT_LENGTH = 512 * 1024 * 1024  # 512 MB
 
 app = Flask(__name__)
@@ -31,9 +39,34 @@ UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "mri_app_uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-def _allowed(filename: str) -> bool:
+def _allowed_extensions(backend: str) -> set:
+    """The extensions ``backend`` can actually score."""
+    return MOCK_EXTENSIONS if backend == "mock" else VOLUME_EXTENSIONS
+
+
+def _allowed(filename: str, backend: str) -> bool:
     lower = filename.lower()
-    return any(lower.endswith(ext) for ext in ALLOWED_EXTENSIONS)
+    return any(lower.endswith(ext) for ext in _allowed_extensions(backend))
+
+
+def _upload_hint(backend: str) -> str:
+    """One line under the drop zone naming what this backend takes."""
+    if backend == "mock":
+        return ".npz, DICOM, NIfTI ou image"
+    return ".npz prétraité (volume de soustraction)"
+
+
+def _page_context(predictor, **extra) -> dict:
+    """The context every render of index.html needs, so no route forgets one."""
+    backend = predictor.name
+    context = {
+        "backend": backend,
+        "demo_cases": _demo_cases(),
+        "accept": ",".join(sorted(_allowed_extensions(backend))),
+        "accept_hint": _upload_hint(backend),
+    }
+    context.update(extra)
+    return context
 
 
 def _overlay_data_uri(file_path: str, result: dict) -> str | None:
@@ -111,8 +144,7 @@ def _overlay_box_pct(file_path: str, result: dict) -> dict | None:
 
 @app.route("/", methods=["GET"])
 def index():
-    predictor = get_predictor()
-    return render_template("index.html", backend=predictor.name, demo_cases=_demo_cases())
+    return render_template("index.html", **_page_context(get_predictor()))
 
 
 DEMO_DIR = config.DEMO_CASES_DIR
@@ -149,16 +181,18 @@ def how_it_works():
 
 @app.route("/predict", methods=["POST"])
 def predict():
+    predictor = get_predictor()
     file = request.files.get("mri")
     if file is None or file.filename == "":
-        return render_template("index.html", backend=get_predictor().name,
-                               demo_cases=_demo_cases(),
-                               error="Veuillez sélectionner un fichier IRM à envoyer."), 400
-    if not _allowed(file.filename):
-        allowed = ", ".join(sorted(ALLOWED_EXTENSIONS))
-        return render_template("index.html", backend=get_predictor().name,
-                               demo_cases=_demo_cases(),
-                               error=f"Type de fichier non pris en charge. Formats acceptés : {allowed}"), 400
+        return render_template("index.html", **_page_context(
+            predictor, error="Veuillez sélectionner un fichier IRM à envoyer.")), 400
+    if not _allowed(file.filename, predictor.name):
+        allowed = ", ".join(sorted(_allowed_extensions(predictor.name)))
+        return render_template("index.html", **_page_context(predictor, error=(
+            f"Format non pris en charge : {os.path.basename(file.filename)}. "
+            f"Ce modèle lit un volume prétraité ({allowed}). "
+            "Essayez un cas de démonstration ci-dessous, ou préparez l'examen avec "
+            "TransformData.preprocess_dce_mri_exams."))), 400
 
     # Persist to a unique temp path (avoids collisions and path-traversal via filename).
     _, ext = os.path.splitext(file.filename)
@@ -184,9 +218,12 @@ def _render_prediction(path: str, display_name: str, cleanup: bool = True):
         overlay_box_pct = _overlay_box_pct(path, result)
         strip = _slice_strip(path, result)
     except Exception as exc:  # surface backend errors in the UI instead of a 500 page
-        return render_template("index.html", backend=predictor.name,
-                               demo_cases=_demo_cases(),
-                               error=f"Échec de la prédiction : {exc}"), 500
+        # `exc` carries the server-side temp path the upload was saved to, which is
+        # neither useful nor anyone else's business on a page. The display name is.
+        return render_template("index.html", **_page_context(predictor, error=(
+            f"Échec de l'analyse de {os.path.basename(display_name)} "
+            f"({type(exc).__name__}). Le fichier n'est probablement pas un volume "
+            "prétraité par ce pipeline ; essayez un cas de démonstration."))), 500
     finally:
         if cleanup:
             try:
@@ -202,13 +239,14 @@ def _render_prediction(path: str, display_name: str, cleanup: bool = True):
 @app.route("/api/predict", methods=["POST"])
 def api_predict():
     """JSON endpoint mirroring /predict, for programmatic / future integrations."""
+    predictor = get_predictor()
     file = request.files.get("mri")
-    if file is None or file.filename == "" or not _allowed(file.filename):
-        return {"error": "Missing or unsupported MRI file."}, 400
+    if file is None or file.filename == "" or not _allowed(file.filename, predictor.name):
+        return {"error": "Missing or unsupported MRI file.",
+                "accepted": sorted(_allowed_extensions(predictor.name))}, 400
     _, ext = os.path.splitext(file.filename)
     safe_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex}{ext.lower()}")
     file.save(safe_path)
-    predictor = get_predictor()
     try:
         result = predictor.predict(safe_path)
         result["overlay_data_uri"] = _overlay_data_uri(safe_path, result)

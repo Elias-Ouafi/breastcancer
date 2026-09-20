@@ -247,7 +247,7 @@ et les rapports de validation croisée.
 | **Catalogue** | `catalog/` | Tables, disque, manifestes et scores joints dans DuckDB ; couches et tests dbt. |
 | **Publication** | `objectstore/` | Tables, manifestes et tables mart en Parquet synchronisés vers un bucket S3 (MinIO en local) ; idempotent, sans suppression. |
 | **Entraînement / évaluation** | `imaging/` | Découpages par patient, validation croisée, IC bootstrap par patient, seuil hors pli. |
-| **Service** | `app/`, `Dockerfile` | Flask HTML + API JSON ; image sans JVM ni ITK, lecture seule, non-root, boucle locale uniquement. |
+| **Service** | `app/`, `Dockerfile`, `run_demo.py` | Flask HTML + API JSON ; image sans JVM ni ITK, lecture seule, non-root, boucle locale uniquement ; préflight qui analyse un cas réel et vérifie le port avant de servir. |
 
 ### Prérequis et installation
 
@@ -255,12 +255,19 @@ et les rapports de validation croisée.
 - Accès TCIA via `tcia_utils` / `nbia` : les collections publiques ne demandent pas de clé.
 
 ```bash
-pip install -r requirements.txt       # installe le projet (pyproject.toml)
+pip install -r requirements-demo.txt  # la démo seule : torch, Flask, numpy, Pillow
+pip install -r requirements.txt       # tout le projet (pyproject.toml)
 pip install -e ".[dev]"               # + pytest, ruff
 pip install -e ".[orchestration]"     # + Prefect, pour pipelines/
 pip install -e ".[catalog]"           # + dbt-duckdb, pour construire le catalogue
 pip install -e ".[storage]"           # + boto3, pour publier vers un stockage objet S3
 ```
+
+**Pourquoi deux fichiers.** `requirements.txt` installe le pipeline entier ; la démo
+n'en touche que quatre paquets. L'écart est mesuré au §4.17 : 68 paquets / 355 Mo
+contre 17 / 153 Mo sur Windows. `requirements-demo.txt` n'installe pas le projet
+lui-même — la démo se lance depuis le clone, comme dans l'image Docker, qui lit ce
+même fichier.
 
 ### Pipeline DCE-MRI orchestré (Prefect)
 
@@ -655,15 +662,33 @@ exécuté**. Le code a été vérifié de deux façons (§4.15) :
 
 ```bash
 git clone https://github.com/Elias-Ouafi/breastcancer && cd breastcancer
-pip install -r requirements.txt
-python run_demo.py              # puis ouvrir http://127.0.0.1:5000
-docker compose up --build       # alternative avec Docker seul
+pip install -r requirements-demo.txt
+python run_demo.py --open       # préflight, puis le navigateur sur http://127.0.0.1:5000
+docker compose up --build       # alternative avec Docker seul (image jamais construite ici)
 ```
 
 Rien d'autre à télécharger : le modèle (`models/dce_mri_p2_negfix/unet_best.pt`) et les
 trois cas de démo sont versionnés. Le serveur écoute uniquement sur `127.0.0.1`.
 
-**La veille**, `python run_demo.py --check` vérifie les prérequis sans occuper de port.
+**Le préflight analyse un vrai cas** (~0,5 s ici, GPU chaud) avant d'ouvrir le port. Il
+ne se contente pas de vérifier que les fichiers existent : un checkpoint tronqué par un
+clone partiel, un PyTorch qui ne démarre pas, un `.npz` dont les clés ont bougé passent
+tous un contrôle d'existence et meurent au premier clic — le seul moment où ils ne
+doivent pas.
+
+| Commande | Ce qu'elle fait |
+|---|---|
+| `python run_demo.py` | Préflight complet (fichiers + une analyse réelle + port libre), puis sert |
+| `python run_demo.py --open` | Idem, et ouvre le navigateur une seconde après |
+| `python run_demo.py --check` | Même contrôle, sans occuper de port — **à faire la veille** |
+| `python run_demo.py --fast-check` | Inventaire des fichiers seulement, sans charger le modèle |
+| `python run_demo.py --port 5001` | Autre port |
+
+**Le port est vérifié avant de démarrer.** Sous Windows, une deuxième instance se liait
+sans erreur à un port que werkzeug tenait déjà (SO_REUSEADDR) : elle affichait
+« Running on http://127.0.0.1:5000 » pendant que le système continuait de router vers le
+premier processus. Le lanceur interroge maintenant le port en s'y **connectant**, et
+refuse de démarrer en nommant le port et l'alternative (§4.17).
 
 ### Déroulé conseillé
 
@@ -721,9 +746,11 @@ renforce la crédibilité.
 | Symptôme | Correctif |
 |---|---|
 | `run_demo.py` refuse de démarrer | Il nomme le prérequis manquant ; suivre la ligne `->` affichée |
-| Port déjà utilisé | `python run_demo.py --port 5001` |
+| « Le port N est déjà utilisé » | Une démo y tourne sans doute déjà : ouvrir l'URL affichée, ou `python run_demo.py --port 5001` |
+| « Le modèle n'a pas pu analyser … » | Le fichier existe mais le calcul échoue : `git status`, puis restaurer le checkpoint et les cas |
 | Moteur affiché = `mock` | Le lanceur a été contourné : relancer via `run_demo.py` |
-| Aucune coupe annotée | Le fichier n'est pas un `.npz` prétraité : utiliser un cas de `data/curated_data/demo_cases/` |
+| « Format non pris en charge » sur un DICOM | Attendu : ce modèle lit un `.npz` prétraité (une soustraction exige deux séries). Passer par `TransformData.preprocess_dce_mri_exams`, ou cliquer un cas de démonstration |
+| Le préflight est lent au premier lancement | Premier import de PyTorch, cache froid : 17 s mesurées une fois, 2,6 s ensuite |
 
 **Filet de sécurité** : garder une capture d'écran d'un résultat réussi.
 
@@ -741,6 +768,14 @@ annotée — les deux écrivent le même volume, et un test l'épingle (§4.16).
 
 Un troisième backend `unet` (DBT) a été **supprimé le 2026-09-15** : son checkpoint avait
 été écrasé par un smoke test (§4.1) et jamais reconstruit.
+
+**Formats acceptés, par backend.** Le formulaire n'offre que ce que le moteur servi
+sait lire : `.npz` sous `dce_mri`, la liste large (`.dcm`, `.nii`, images) sous `mock`,
+qui ne regarde aucun pixel. Le texte sous la zone de dépôt, l'attribut `accept` et le
+contrôle serveur sont **rendus depuis le même ensemble**, et un test l'épingle. Avant
+le 2026-09-20 la zone annonçait « .npz, DICOM, NIfTI ou image » sous `dce_mri` : un
+DICOM déposé renvoyait un 500 avec un message en anglais **et le chemin temporaire du
+serveur affiché sur la page** (§4.17).
 
 **Points d'entrée** : `GET /` (formulaire + boutons des cas de démo),
 `GET /comment-ca-marche`, `POST /predict` (page HTML, champ `mri`), `POST /demo/<n>`,
@@ -843,6 +878,12 @@ git les **suit** (pas seulement qu'ils existent) ; `run_demo.py --check` ; image
 étroite (PyTorch CPU, Flask, NumPy, Pillow), `read_only`, non-root, port publié sur
 `127.0.0.1` ; coupe imposée signalée par `slice_preselected`. **Coût** : ~46 Mo de
 fichiers binaires versionnés ; les cas dérivés de Duke sont sous CC BY-NC 4.0.
+
+**Étendu le 2026-09-20** (§4.17) : « reproductible » se vérifie en exécutant, pas en
+listant. Le préflight **analyse un cas réel** avant d'ouvrir le port, la démo a sa
+propre liste de dépendances (quatre paquets, lue aussi par le `Dockerfile`), le port
+est interrogé avant d'être annoncé, et un test fait le clic de démo avec le vrai
+checkpoint.
 
 ### ADR 0009 — Un catalogue de métadonnées DuckDB (2026-09-16)
 
@@ -1402,6 +1443,83 @@ corrigé.
 
 ---
 
+### 4.17 La démo mesurée comme un parcours, pas comme un fichier (2026-09-20)
+
+**Question posée** : la démo se lance-t-elle le plus facilement possible sur une
+machine qui n'est pas celle-ci ? Le parcours entier a été parcouru et chronométré,
+pas relu.
+
+**Ce qui marchait déjà** : `python run_demo.py --check` passe, les trois cas sont
+suivis par git, le clic « Cas 1 » rend un résultat (891 ms au premier appel, 132 ms
+ensuite, GPU), « Comment ça marche » s'affiche, et la suite est verte — **288 tests
+passés en 79 s**, exactement le nombre du badge. Quatre défauts sont apparus quand
+même, tous invisibles tant qu'on ne pousse pas le parcours hors du chemin heureux.
+
+**1. L'installation pèse bien plus que ce que la démo utilise.** Mesure par
+`pip install --dry-run --report`, puis une requête `HEAD` sur chaque roue résolue :
+
+| Ce qu'on installe | Windows | Linux x86_64 (roues PyPI) |
+|---|---|---|
+| `requirements.txt` | 68 paquets, **355 Mo** | 67 paquets, **1,01 Go** |
+| Ce que la démo importe | 17 paquets, **153 Mo** | 17 paquets, **0,80 Go** |
+
+Le chemin de la démo est `run_demo` → `app.server` → `app.predictor` → `inference` →
+`imaging.unet` : il ne touche que `torch`, `Flask`, `numpy` et `Pillow`. Tout le reste
+— `tcia-utils` et ses 77 Mo d'`idc-index-data`, `python-gdcm`, `pyarrow`, `duckdb`,
+`matplotlib`, `pandas`, `openpyxl`, `s5cmd`, IPython — sert la collecte et le
+catalogue, que la démo ne parcourt jamais. **Correctif** : `requirements-demo.txt`,
+que le `Dockerfile` lit désormais au lieu de répéter la liste, et un test qui échoue
+si les deux divergent ou si un cinquième paquet s'y glisse.
+
+**2. Le préflight ne prouvait rien du modèle.** Il vérifiait l'existence du
+checkpoint et des cas. Un checkpoint tronqué, un PyTorch cassé, un `.npz` aux clés
+déplacées passent tous ce contrôle et tombent au premier clic — c'est-à-dire en
+public. Le coût de la preuve était pourtant dérisoire : `load_unet` 1,58 s,
+`predict_dce_mri` sur un cas 0,37 s. **Correctif** : `--check` charge le modèle et
+analyse le premier cas (2,6 s de bout en bout ici), `--fast-check` garde l'ancien
+comportement, et le `HEALTHCHECK` de l'image bascule dessus — charger le U-Net toutes
+les 30 s dans une fenêtre de 10 s sur un conteneur sans GPU n'aurait pas tenu.
+
+**3. Un port occupé ne produisait aucune erreur, sous Windows.** Mesuré : un second
+`run_demo.py --port 5057` lancé pendant qu'un premier servait affiche son bandeau
+habituel, « Running on http://127.0.0.1:5057 », et `Get-NetTCPConnection` montre que
+le système route toujours vers le premier processus (PID inchangé). L'opérateur croit
+avoir relancé la démo et regarde des pages servies par l'autre instance. La table
+« Si ça ne marche pas » affirmait le contraire en creux, en proposant `--port 5001`
+comme si une erreur s'affichait. **Correctif** : le lanceur interroge le port en s'y
+**connectant** — pas en s'y liant, puisque c'est précisément la liaison qui ment — et
+refuse de démarrer en nommant le port et l'URL à ouvrir.
+
+**4. L'interface invitait des formats que le modèle servi ne sait pas lire.** La zone
+de dépôt annonçait « .npz, DICOM, NIfTI ou image », l'attribut `accept` listait sept
+extensions, et le serveur les acceptait toutes. Sous `dce_mri` une seule est
+scorable. Mesuré en déposant les autres :
+
+| Fichier déposé | Avant | Après |
+|---|---|---|
+| `examen.dcm` | HTTP 500, « Unsupported volume file '…\Temp\mri_app_uploads\3bbcb11c….dcm': expected .npz. » | Refus immédiat côté navigateur, en français, sans aller-retour |
+| `junk.npz` | HTTP 500, « Cannot load file containing pickled data when allow_pickle=False » | HTTP 500, message nommant le fichier envoyé, pas le chemin serveur |
+| `photo.png` | HTTP 500 + chemin temporaire | Refusé, formats acceptés nommés |
+
+Le chemin temporaire du serveur était **affiché sur la page**. **Correctif** : un seul
+ensemble d'extensions, dérivé du backend, rendu à la fois dans le texte, dans
+`accept`, dans le contrôle serveur et dans la validation JavaScript (l'attribut
+`accept` ne filtre que le sélecteur de fichiers, pas un glisser-déposer) ; et le
+message d'erreur nomme le fichier envoyé.
+
+**Ce que la mesure n'a pas pu couvrir** : Docker n'est pas installé sur cette machine,
+donc `docker compose up --build` reste **non vérifié** — l'image n'est construite ni
+ici ni en CI (elle est au P2 de la feuille de route). Le README le dit maintenant à
+l'endroit où il propose la commande.
+
+**Tests** : 12 ajoutés (`tests/test_demo_smoke.py`, `tests/test_demo_install.py`),
+**300 au total**, dont le premier qui fasse réellement le clic de la démo —
+`POST /demo/1` sur le backend `dce_mri`, avec assertion sur la coupe imposée et sur
+la présence de l'image annotée. Jusqu'ici aucun test n'exécutait le modèle sur un cas
+de démonstration ; la CI installe PyTorch CPU, donc celui-ci y tourne.
+
+---
+
 ## Prochaines pistes pour l'étape 1
 
 Revue de littérature du 2026-09-14, **largement réfutée l'après-midi même** (§4.8 à
@@ -1442,6 +1560,7 @@ Applications 2023.
 | 2026-09-14 | Étape 2 retirée ; warm start, score relatif, mesures sans modèle (négatives) ; split test téléchargé |
 | 2026-09-15 | Point de fonctionnement publié ; code mort retiré ; paquet réparé ; écarts doc ↔ code corrigés |
 | 2026-09-19 | Chemin « nouvelle IRM » : `preprocess_dce_mri_exams`, `dce_subtraction` en définition unique, défaut `crop` aligné sur le corpus, code hérité IRM retiré (−105 lignes, 3 dépendances lourdes en moins), 20 tests (§4.16) |
+| 2026-09-20 | Parcours de démo mesuré de bout en bout : installation dédiée (68 paquets → 17, 355 Mo → 153 Mo sur Windows), préflight qui analyse un vrai cas, port occupé détecté, formats de l'interface alignés sur le backend servi, 12 tests dont le premier clic de démo (§4.17) |
 | 2026-09-16 | **P0 portfolio** : README réorienté data engineering, décisions d'architecture, licence MIT, citations TCIA, GIF de démo, documentation unique en français. **P1** : catalogue DuckDB, migration dbt, flow Prefect DBT, délai sur les requêtes TCIA, trois défauts corrigés (§4.14) |
 
 ### Feuille de route « portfolio data engineering »
@@ -1496,6 +1615,7 @@ tests se recompte, il ne s'estime pas — et le badge se recompte avec le texte.
 | 2026-09-16 | « 222 tests » en local contre 211 en CI, noté « non expliqué » ; « 152 normaux, non investigué » | Expliqués (§4.14) : 12 tests d'orchestration sans Prefect + 1 test Windows ; 2 normaux hors tirage |
 | 2026-09-19 | « La couche brute DCE-MRI n'est pas sur cette machine », écrit dans §4.16, l'ADR 0013 et la PR #31 | **Faux** : 60 Go et 840 séries étaient dans `tcia/duke_mri/`, que le balayage sautait faute de `.dcm` à sa racine. Corrigé, et le chemin DICOM → `.npz` est désormais vérifié bit à bit sur données réelles (§4.16) |
 | 2026-09-19 | Badge README « 254 tests » contre 267 dans le texte ; `crop=True` par défaut alors que le corpus servi est en pleine trame ; message d'erreur d'`imaging/dataset.py` renvoyant à une fonction cassée ; `SimpleITK`/`itk`/`itkwidgets` déclarés mais importés nulle part | Corrigés (§4.16), badge recompté à 287 |
+| 2026-09-20 | « Port déjà utilisé → `--port 5001` » laissait croire qu'une erreur s'affichait : sous Windows le second lanceur affichait son bandeau de succès ; zone de dépôt annonçant DICOM/NIfTI sous un backend qui ne lit que `.npz` ; préflight qui ne chargeait jamais le modèle ; badge « 288 tests » | Corrigés (§4.17), badge recompté à 300 |
 | — | `models/dce_mri_p2_negfix/` nomme une expérience | Ouvert (le renommer casserait la démo) |
 
 ---
@@ -1542,8 +1662,9 @@ cliniques.
 ```bash
 pip install -e ".[dev]"
 ruff check .
-pytest                 # 288 tests, sans GPU ni jeu de données
-                       # (243 collectés sans les extras orchestration/storage)
+pytest                 # 300 tests, sans GPU ni jeu de données
+                       # (236 collectés en retirant les 4 fichiers qui exigent
+                       #  Prefect, dbt-duckdb ou boto3 ; mesuré le 2026-09-20)
 ```
 
 La [CI](.github/workflows/ci.yml) a deux jobs à chaque push et pull request : `check`
