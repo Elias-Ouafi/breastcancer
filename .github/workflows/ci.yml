@@ -30,11 +30,19 @@ jobs:
       # means adding it here too. duckdb and dbt-duckdb build the metadata catalogue
       # (tests/test_catalog.py runs the real dbt project on miniature tables); boto3 and
       # moto test the object-storage sync against an in-memory S3.
+      #
+      # pillow joined on 2026-09-20, and its absence was invisible until something
+      # asserted on it. `inference.render_overlay_png` imports PIL, and
+      # `app.server._overlay_data_uri` swallows the failure on purpose so a result
+      # page still renders without its image -- so every CI run had been exercising
+      # the text-only fallback of the demo, never the annotated slice the demo is
+      # for. tests/test_demo_smoke.py asserts the data URI is there; that is what
+      # found it.
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install numpy pandas pydicom flask duckdb dbt-duckdb boto3 "moto[s3]" pytest ruff
+          pip install numpy pandas pydicom pillow flask duckdb dbt-duckdb boto3 "moto[s3]" pytest ruff
 
       - name: Lint
         run: ruff check .

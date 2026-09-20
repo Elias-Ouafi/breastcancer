@@ -22,13 +22,17 @@ RUN apt-get update \
 WORKDIR /app
 
 # CPU-only torch, from the index that serves it. The default wheel carries bundled
-# CUDA libraries (~2.5 GB) that cannot be used here: the container is not given a GPU.
+# CUDA libraries that cannot be used here: the container is not given a GPU. Done
+# before the requirements file so the resolution below finds torch already
+# satisfied and never reaches for the PyPI wheel.
 RUN pip install --no-cache-dir "torch>=2.2" --index-url https://download.pytorch.org/whl/cpu
 
-# The demo's actual dependency surface: Flask serves it, numpy and Pillow render the
-# slices. Installed before the source is copied so editing a template does not
-# reinstall PyTorch.
-RUN pip install --no-cache-dir "Flask>=3.0" "numpy>=1.26,<2" "Pillow>=10.2,<11"
+# The demo's actual dependency surface -- Flask serves it, numpy and Pillow render
+# the slices -- read from the same file a host install uses, so the image and a
+# clone cannot drift apart (a test pins that they do not). Installed before the
+# source is copied so editing a template does not reinstall PyTorch.
+COPY requirements-demo.txt ./
+RUN pip install --no-cache-dir -r requirements-demo.txt
 
 # Source last: it changes on every commit, the layers above almost never do.
 COPY config.py logging_setup.py inference.py run_demo.py validation.py lineage.py ./
@@ -48,8 +52,13 @@ EXPOSE 5000
 # Fails fast and loudly if a COPY above ever stops matching where the code looks --
 # a missing checkpoint should mark the container unhealthy, not surface as a stack
 # trace on the first click.
+#
+# --fast-check, not --check: the full preflight loads the U-Net and scores a case,
+# which is the right thing to do once at startup and the wrong thing to do every
+# 30 seconds inside a 10-second timeout on a CPU-only container. The container's
+# own CMD runs the full check when it starts.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD python run_demo.py --check || exit 1
+    CMD python run_demo.py --fast-check || exit 1
 
 # run_demo.py preflights the checkpoint and the demo cases, then starts Flask. Inside
 # a container app.server.bind_host() returns 0.0.0.0 -- the container's own isolated
