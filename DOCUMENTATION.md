@@ -1535,8 +1535,16 @@ résolvait encore, via le *finder* de l'installation éditable du dépôt prése
 venv. Un `COPY` manquant aurait donc pu passer la mesure sur cette machine et casser
 en conteneur. D'où le test qui contrôle l'**origine** de chaque module du projet
 (`__file__` sous le miroir) — c'est lui qui est devenu rouge. Un second garde-fou
-vérifie que le blocage a bien mordu : sans lui, un jour où il ne bloquerait plus rien,
-les trois autres tests seraient verts en ne mesurant que la machine.
+vérifie que le mécanisme **sait** refuser : sans lui, un jour où il laisserait tout
+passer, les trois autres tests seraient verts en ne mesurant que la machine.
+
+Sa première version affirmait la mauvaise propriété — « a-t-il refusé quelque
+chose ? » — et **est passée au rouge en CI** : là-bas `tqdm`, `cffi`, `defusedxml` et
+`colorama` ne sont pas installés du tout, donc ne rien refuser y est la bonne réponse.
+Ce qui se mesure est la capacité à refuser, en présentant au garde un paquet toujours
+présent (pytest, qui fait tourner le fichier) et jamais dans l'image. Une mutation qui
+neutralise le garde rend ce test rouge, comme retirer un `COPY` rend rouges les
+deux autres.
 
 **Ce qui reste hors de portée sans daemon** : le build lui-même — image de base,
 `apt-get`, torch depuis l'index CPU, chemins des `COPY` côté daemon, `chown` non-root

@@ -167,6 +167,16 @@ for name in json.loads(os.environ["PROJECT_MODULES"]):
     module = sys.modules.get(name)
     origins[name] = getattr(module, "__file__", None)
 
+# Le garde-fou sait-il encore refuser ? Ce qu'il a refuse au-dessus ne le dit pas :
+# un environnement deja proche de l'image n'a rien a refuser, et zero refus y est la
+# bonne reponse. On lui presente donc un paquet certainement present -- pytest, qui
+# fait tourner ce fichier -- et certainement absent de l'image.
+try:
+    guarded("pytest")
+    canari_refuse = False
+except ImportError:
+    canari_refuse = True
+
 keep = ("best_slice", "n_slices", "slice_preselected", "backend")
 print("<<<RAPPORT>>>" + json.dumps({
     "file_problems": file_problems,
@@ -178,6 +188,7 @@ print("<<<RAPPORT>>>" + json.dumps({
     "home": home,
     "how": how,
     "bloques": sorted(set(BLOQUES)),
+    "canari_refuse": canari_refuse,
     "origins": origins,
 }))
 '''
@@ -242,14 +253,19 @@ def test_the_demo_click_works_with_only_the_declared_packages(image_report):
     assert 0 <= result["best_slice"] < result["n_slices"]
 
 
-def test_the_guard_actually_refused_something(image_report):
+def test_the_guard_can_still_refuse(image_report):
     """Sans quoi les trois tests ci-dessus deviennent des tautologies vertes.
 
-    S'il ne bloque plus rien, ils tournent avec tout l'environnement disponible et ne
-    mesurent plus l'image : ils mesurent la machine.
+    Ce n'est **pas** « a-t-il refusé quelque chose ». Une première version l'affirmait
+    et a échoué en CI : là-bas `tqdm`, `cffi`, `defusedxml` et `colorama` ne sont pas
+    installés du tout, donc ne rien refuser est la bonne réponse — l'environnement est
+    déjà proche de l'image. La propriété qui compte est que le mécanisme **sache**
+    refuser, et on la mesure en lui présentant un paquet toujours présent (pytest fait
+    tourner ce fichier) et jamais dans l'image.
     """
-    assert image_report["bloques"], (
-        "aucun import n'a été refusé : le garde-fou ne protège plus rien"
+    assert image_report["canari_refuse"] is True, (
+        "le garde-fou a laissé passer pytest : il ne protège plus rien, et les autres "
+        "tests de ce fichier mesurent la machine au lieu de l'image"
     )
 
 
