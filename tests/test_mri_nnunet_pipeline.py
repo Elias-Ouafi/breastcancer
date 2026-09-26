@@ -271,6 +271,16 @@ def test_two_separate_breasts_are_both_kept_and_a_small_island_is_not():
     assert (sitk.GetArrayFromImage(largest_only) > 0)[right].sum() == 0
 
 
+def test_the_contrast_reads_raw_enhancement_not_the_difference_of_normalised_channels():
+    """A uniform +50 after contrast is +50 raw; two channels z-scored on their own would read ~0."""
+    pre, _, _ = _blob_volume(bias=False)
+    images = {"pre": _image(pre), "post2": _image(pre + 50.0)}
+    pair = [{"name": "pre", "phase": 0}, {"name": "post2", "phase": 2}]
+    enhancement = pipeline.raw_enhancement(images, {}, images["pre"], pair)
+    core = (slice(10, 30), slice(10, 46), slice(10, 46))
+    assert np.allclose(enhancement[core], 50.0, atol=1e-2)
+
+
 def test_rigid_registration_recovers_a_known_shift():
     cfg = copy.deepcopy(settings_module.load()["registration"])
     cfg.update(shrink_factors=[2, 1], smoothing_sigmas=[1, 0], iterations=80)
@@ -373,6 +383,12 @@ def test_a_whole_case_is_normalised_inside_its_mask_and_the_label_lands_on_the_l
     # the label sits on the lesion: the post-contrast channel is brighter than the pre there
     pre, post = (sitk.GetArrayFromImage(sitk.ReadImage(p)) for p in outputs[:2])
     assert (post - pre)[label > 0].mean() > (post - pre)[organ & (label == 0)].mean() + 0.5
+
+    # the box sits on an enhancing lesion, so the raw-enhancement contrast is well above the
+    # warning threshold and no "loose box" anomaly is raised
+    line = [json.loads(x) for x in open(os.path.join(out, "log", "cases.jsonl"))][-1]
+    assert line["summary"]["contrast"] > 3 * settings["pseudo_mask"]["contrast_warn_below"]
+    assert not any("loose" in a for a in line["anomalies"])
 
 
 def test_the_processing_order_is_the_documented_one(tmp_path, settings):
