@@ -256,6 +256,11 @@ def process_case(pid, settings, out_dir, spacing_mm, force=False):
     case_log = registry.CaseLog(out_dir, pid, "process")
 
     def excluded(reason, detail=""):
+        # A case built by an earlier run and excluded by this one must not keep its old
+        # outputs: held_cases (hence the export, the QC and the bronze purge) reads the files.
+        for path in outputs + [marker]:
+            if os.path.exists(path):
+                os.remove(path)
         registry.exclude(out_dir, pid, "process", reason, detail)
         case_log.close("excluded", reason=reason, detail=str(detail)[:300])
         log.warning("[nnunet] %s excluded at processing: %s %s", pid, reason, detail)
@@ -281,10 +286,14 @@ def process_case(pid, settings, out_dir, spacing_mm, force=False):
 
     # 2. Organ mask, on the corrected reference.
     with case_log.timed("body_mask") as details:
-        mask_native, info = sitk_io.body_mask(ref_image, settings["body_mask"])
-        details.update(info)
+        mask_native, mask_info = sitk_io.body_mask(ref_image, settings["body_mask"])
+        details.update(mask_info)
+    info = mask_info
     if info["voxels"] == 0:
-        return excluded("empty_body_mask", "Otsu + morphology left nothing")
+        return excluded("empty_body_mask", "threshold + morphology left nothing")
+    if info["fraction_of_fov"] < settings["body_mask"]["warn_fraction_below"]:
+        case_log.anomaly(f"organ mask covers only {info['fraction_of_fov']:.1%} of the field of view "
+                         f"(< {settings['body_mask']['warn_fraction_below']:.0%}): check it on the QC report")
 
     # 3. Rigid co-registration of every other channel to the reference.
     transforms = {}
@@ -341,10 +350,28 @@ def process_case(pid, settings, out_dir, spacing_mm, force=False):
         volumes_c = {name: v[window] for name, v in volumes.items()}
         cropped_grid = sitk_io.crop_image(grid, window)
         retained = float(pseudo_c.sum()) / full_pseudo
-        details.update(shape=list(organ_c.shape), lesion_retained=round(retained, 4))
+        # The channels are 0 outside the organ mask (step 6), so a lesion voxel outside it is
+        # erased from the images, not merely cropped. What matters is *what* is erased: tissue
+        # means the mask cut the lesion (35 % of Breast_MRI_017's under Otsu); air means the
+        # published box runs past the skin (19 % of _094's under a correct mask), and erasing air
+        # loses nothing. Tissue is what lies above the Li air/tissue level of the reference.
+        outside = (pseudo > 0) & (organ == 0)
+        reference_array = sitk_io.to_array(resampled[reference["name"]])
+        erased_tissue = float((outside & (reference_array > mask_info["tissue_threshold"])).sum()) / full_pseudo
+        in_air = float(outside.sum()) / full_pseudo - erased_tissue
+        details.update(shape=list(organ_c.shape), lesion_retained=round(retained, 4),
+                       lesion_in_organ_mask=round(1.0 - float(outside.sum()) / full_pseudo, 4),
+                       lesion_tissue_erased=round(erased_tissue, 4), lesion_in_air=round(in_air, 4))
+    limit = settings["body_mask"]["max_lesion_tissue_erased"]
+    if erased_tissue > limit:
+        return excluded("lesion_outside_organ_mask",
+                        f"the organ mask cuts the lesion: {erased_tissue:.1%} of the pseudo-mask is tissue "
+                        f"outside it (> {limit:.0%}), which the zero outside the mask would erase")
     if retained < 0.95:
         return excluded("lesion_outside_organ_mask",
                         f"only {retained:.0%} of the pseudo-mask lies inside the cropped organ box")
+    if in_air > settings["pseudo_mask"]["warn_in_air_above"]:
+        case_log.anomaly(f"{in_air:.0%} of the pseudo-mask lies in the air: the box runs past the skin")
 
     # Report on the boxes: the ratio a pseudo-mask must have, and whether the corners look loose.
     ratio = steps.box_volume_ratio(box_c.sum(), pseudo_c.sum())
@@ -370,6 +397,9 @@ def process_case(pid, settings, out_dir, spacing_mm, force=False):
     summary = {
         "shape": list(organ_c.shape), "spacing_mm": [round(s, 4) for s in spacing_xyz],
         "lesion_voxels": int(pseudo_c.sum()), "lesion_volume_mm3": round(int(pseudo_c.sum()) * voxel_mm3, 1),
+        "organ_mask_fraction_of_fov": round(mask_info["fraction_of_fov"], 4),
+        "lesion_tissue_erased": round(erased_tissue, 4),
+        "lesion_in_air": round(in_air, 4),
         "box_to_pseudo_ratio": round(ratio, 3), "contrast": None if np.isnan(contrast) else round(contrast, 3),
         "smallest_lesion_axis_voxels": round(float((np.asarray(ellipsoids[0]["semi_axes"]) * 2
                                                     / np.array(spacing_xyz)).min()), 2),

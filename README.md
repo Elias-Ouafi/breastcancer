@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml/badge.svg)](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
-![Tests : 209](https://img.shields.io/badge/tests-209-brightgreen)
+![Tests : 215](https://img.shields.io/badge/tests-215-brightgreen)
 [![Licence : MIT](https://img.shields.io/badge/licence-MIT-lightgrey)](LICENSE)
 
 > **Research Use Only — Not for diagnostic use.** Outil de recherche, pas un dispositif
@@ -45,7 +45,7 @@ la projection d'intensité maximale.*
 |---|---|
 | **Pipeline de données** (collecte, transformation, validation, lignage) | Opérationnel : 189 patients, 186 volumes dans le corpus de la démo (un par patient), reconstruits depuis le bronze **valeur par valeur identiques** à l'ancien |
 | **Médaillon et purge du bronze** | Opérationnels : le brut n'est supprimé que si chaque corpus qui le lit le détient, et la fonction de suppression **refuse plutôt que de parier**. Exécutée : DBT, puis IRM (822 séries, 63,8 Go) après copie native relue identique |
-| **Corpus nnU-Net** (`mri_nnunet/`) | Construit : **185 cas** exportés au format `nnUNet_raw`, 4 écartés avec leur raison, rapport de QC écrit ; 46 tests. Le QC a relevé deux défauts du masque de l'organe, à corriger avant l'entraînement |
+| **Corpus nnU-Net** (`mri_nnunet/`) | Construit : **186 cas** exportés au format `nnUNet_raw`, 3 écartés avec leur raison (phase manquante), rapport de QC écrit ; 52 tests. Le masque de l'organe, qui effaçait une partie de la lésion sur 4 cas, est corrigé et vérifié sur tout le corpus |
 | **Orchestration** (Prefect) | Opérationnelle : un flow `download → preprocess → purge → train → evaluate`, chaque étape saute ce qui est fait |
 | **Localisation de lésion** (modèle de la démo) | Fonctionne **quand on lui montre la bonne coupe** : lésion trouvée dans 88 % des cas [IC 82–93 %] sur 28 patients de test. Le choix automatique de la coupe reste faible : 43 % de top-1 |
 | **Nouvelle IRM** (examen jamais annoté) | Opérationnel : `preprocess_dce_mri_exams` prépare un examen sans annotation. Vérifié sur **DICOM brut réel** : le volume produit est **identique bit à bit** à celui du corpus d'entraînement, puis servi par l'app en 3,9 s |
@@ -59,9 +59,8 @@ ce qui distingue un cancer est la **forme** de la lésion, pas sa luminosité. L
 données ont été retirés le 2026-09-20 ; le dernier état qui les contient est le commit `1a364d4`, et
 les mesures restent résumées dans [DOCUMENTATION.md](DOCUMENTATION.md) (§4.4 à §4.15).
 
-**Prochaine étape** : corriger le masque de l'organe et l'indice de contraste relevés par le QC,
-reconstruire le corpus nnU-Net, puis entraîner nnU-Net en 5 plis et mesurer la sensibilité
-lésionnelle en FROC. Duke est une cohorte de cancers : aucune
+**Prochaine étape** : remplacer l'indice de contraste relevé par le QC, puis entraîner nnU-Net en
+5 plis et mesurer la sensibilité lésionnelle en FROC. Duke est une cohorte de cancers : aucune
 spécificité n'y est mesurable, et rien n'est à comparer au programme national de dépistage.
 
 ## Architecture
@@ -166,6 +165,10 @@ python -m pipelines.dce_mri --keep-bronze  # garde les DICOM après le prétrait
 - **Un examen neuf préparé exactement comme le corpus d'entraînement** : les deux chemins de
   prétraitement partagent une seule définition de la soustraction, et sur du DICOM brut réel le volume
   obtenu est identique **bit à bit** à celui du corpus.
+- **Une garde qui mesure ce qu'elle protège.** Le masque de l'organe mettait à 0 une partie de la
+  lésion sur 4 cas, sans alerte. Une première garde (« la lésion est dans le masque ») écartait aussi
+  un cas sain dont la boîte publiée dépasse la peau. La garde retenue compte le **tissu** de lésion
+  effacé, pas l'air : 4,9 à 98 % sur les cas défectueux, 0,2 % au plus après correction.
 - **Des tests qui savent échouer** : les gardes de dépendances et de purge sont mises en défaut par
   des défauts injectés, et les tests dont l'échec passait inaperçu ont été corrigés.
 - **Jamais d'échec silencieux** : un cas illisible, incomplet ou incohérent laisse une ligne

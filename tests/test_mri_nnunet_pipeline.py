@@ -222,6 +222,55 @@ def test_the_body_mask_keeps_the_organ_and_drops_a_stray_blob():
     assert info["voxels"] == int(array.sum())
 
 
+def _air_tissue_and_bright_tail(shape=(40, 56, 56)):
+    """Mostly air, a dim body, and a small very bright region inside it.
+
+    The histogram shape of Breast_MRI_017 and _118: Otsu splits the body into dim and bright
+    and keeps the bright ~4 %, instead of splitting body from air.
+    """
+    rng = np.random.default_rng(1)
+    z, y, x = np.indices(shape).astype(np.float32)
+    body = (((z - 20) / 15) ** 2 + ((y - 28) / 20) ** 2 + ((x - 28) / 20) ** 2) <= 1
+    bright = body & ((((z - 20) / 5) ** 2 + ((y - 34) / 7) ** 2 + ((x - 28) / 7) ** 2) <= 1)
+    array = np.where(body, 100.0, 8.0) + np.where(bright, 1500.0, 0.0) + rng.normal(0, 4, shape)
+    return array.astype(np.float32), body
+
+
+def test_otsu_keeps_only_a_bright_tail_and_the_configured_threshold_keeps_the_body():
+    array, body = _air_tissue_and_bright_tail()
+    config = settings_module.load()["body_mask"]
+
+    otsu, _ = sitk_io.body_mask(_image(array), dict(config, threshold="otsu"))
+    otsu = sitk.GetArrayFromImage(otsu) > 0
+    assert (otsu & body).sum() / body.sum() < 0.5, "the fixture no longer reproduces the Otsu defect"
+
+    mask, info = sitk_io.body_mask(_image(array), config)
+    mask = sitk.GetArrayFromImage(mask) > 0
+    assert (mask & body).sum() / body.sum() > 0.95
+    assert (mask & ~body).sum() / body.sum() < 0.10, "the mask spilled into the air"
+    assert info["threshold_method"] == config["threshold"]
+
+
+def test_two_separate_breasts_are_both_kept_and_a_small_island_is_not():
+    shape = (30, 40, 80)
+    z, y, x = np.indices(shape).astype(np.float32)
+    left = (((z - 15) / 10) ** 2 + ((y - 20) / 12) ** 2 + ((x - 20) / 14) ** 2) <= 1
+    right = (((z - 15) / 10) ** 2 + ((y - 20) / 11) ** 2 + ((x - 60) / 13) ** 2) <= 1   # a bit smaller
+    array = np.where(left | right, 300.0, 8.0) + np.random.default_rng(2).normal(0, 4, shape)
+    array[2:5, 2:5, 38:41] = 300.0                                  # a stray island between them
+    config = settings_module.load()["body_mask"]
+
+    mask, info = sitk_io.body_mask(_image(array.astype(np.float32)), config)
+    mask = sitk.GetArrayFromImage(mask) > 0
+    assert (mask & left).sum() / left.sum() > 0.95
+    assert (mask & right).sum() / right.sum() > 0.95, "the smaller breast was dropped"
+    assert not mask[2:5, 2:5, 38:41].any()
+    assert info["components_kept"] == 2
+
+    largest_only, _ = sitk_io.body_mask(_image(array.astype(np.float32)), dict(config, keep_components_above=1.0))
+    assert (sitk.GetArrayFromImage(largest_only) > 0)[right].sum() == 0
+
+
 def test_rigid_registration_recovers_a_known_shift():
     cfg = copy.deepcopy(settings_module.load()["registration"])
     cfg.update(shrink_factors=[2, 1], smoothing_sigmas=[1, 0], iterations=80)
@@ -279,16 +328,20 @@ def test_labels_resampled_by_nearest_neighbour_stay_binary():
 
 # --------------------------------------------------------------------------- a whole case
 
-def _native_case(tmp_path, settings, patient="P1"):
-    """A native corpus with one synthetic case: two phases as NIfTI, and its box.json."""
+def _native_case(tmp_path, settings, patient="P1", box_center=None, volumes=None):
+    """A native corpus with one synthetic case: two phases as NIfTI, and its box.json.
+
+    ``box_center`` (z, y, x voxels) moves the box away from the lesion; by default it sits on it.
+    ``volumes`` replaces the default ``(pre, post, lesion_center)``.
+    """
     out = str(tmp_path / "silver")
     native = os.path.join(out, "native", patient)
-    pre, post, lesion_center = _blob_volume()
+    pre, post, lesion_center = volumes or _blob_volume()
     spacing = (1.5, 1.5, 1.5)
     for phase, array in ((0, pre), (2, post)):
         sitk_io.write_nifti(_image(array, spacing), os.path.join(native, f"{patient}_ph{phase}.nii.gz"))
     reference = _image(pre, spacing)
-    cz, cy, cx = lesion_center
+    cz, cy, cx = box_center or lesion_center
     ellipsoid = steps.box_to_ellipsoid((int(cx) - 5, int(cx) + 5), (int(cy) - 5, int(cy) + 5),
                                        list(range(int(cz) - 5, int(cz) + 5)), *sitk_io.geometry(reference))
     with open(os.path.join(native, "box.json"), "w") as handle:
@@ -355,6 +408,60 @@ def test_a_lesion_the_organ_crop_would_cut_off_excludes_the_case(tmp_path, setti
     assert registry.read_csv(os.path.join(out, "exclusions.csv"))[0]["reason"] == "empty_pseudo_mask"
 
 
+def _case_log(out):
+    return [json.loads(x) for x in open(os.path.join(out, "log", "cases.jsonl"))][-1]
+
+
+def test_a_box_past_the_skin_is_kept_and_flagged_since_only_air_is_erased(tmp_path, settings):
+    """Part of the ellipsoid in the air, under a correct mask: nothing of the lesion is lost.
+
+    The box sits on a corner of the organ's bounding box, outside the ellipsoidal organ -- the
+    shape of Breast_MRI_094, whose published box runs 19 % into the air below the breast. A
+    guard on "lesion inside the mask" excluded it wrongly; the guard is on erased *tissue*.
+    """
+    out, _ = _native_case(tmp_path, settings, box_center=(20, 28 + 18, 28 + 18))
+
+    assert pipeline.process_case("P1", settings, out, spacing_mm=2.0) == "ok"
+    line = _case_log(out)
+    crop = next(s for s in line["steps"] if s["step"] == "crop")
+    assert crop["lesion_in_organ_mask"] < 0.9, "the fixture must put part of the box in the air"
+    assert crop["lesion_tissue_erased"] <= settings["body_mask"]["max_lesion_tissue_erased"]
+    assert any("in the air" in a for a in line["anomalies"])
+
+
+def _lesion_in_dim_tissue_under_a_bright_tail():
+    """The Otsu-defect histogram, with the lesion in the dim tissue Otsu leaves out."""
+    pre, body = _air_tissue_and_bright_tail()
+    z, y, x = np.indices(pre.shape).astype(np.float32)
+    center = (20, 20, 20)                                       # in the body, away from the bright region
+    lesion = ((z - center[0]) ** 2 + (y - center[1]) ** 2 + (x - center[2]) ** 2) <= 4.5 ** 2
+    assert body[lesion].all()
+    post = pre + np.where(lesion, 220.0, 0.0) + np.where(body, 15.0, 0.0)
+    return pre, post.astype(np.float32), center
+
+
+def test_a_mask_that_cuts_lesion_tissue_excludes_the_case(tmp_path, settings):
+    """Under the old Otsu mask the lesion lies in tissue outside the mask, which step 6 zeroes.
+
+    The guard measures tissue against Li's air/tissue level, not the mask's own threshold, so
+    it catches the Otsu defect (35 % of Breast_MRI_017's lesion erased) even when Otsu builds
+    the mask. The configured threshold (Li) keeps the same case.
+    """
+    volumes = _lesion_in_dim_tissue_under_a_bright_tail()
+    otsu = copy.deepcopy(settings)
+    otsu["body_mask"]["threshold"] = "otsu"
+    out, _ = _native_case(tmp_path / "otsu", otsu, volumes=volumes)
+
+    assert pipeline.process_case("P1", otsu, out, spacing_mm=2.0) == "excluded"
+    row = registry.read_csv(os.path.join(out, "exclusions.csv"))[0]
+    assert row["reason"] == "lesion_outside_organ_mask" and "tissue" in row["detail"]
+
+    out, _ = _native_case(tmp_path / "li", settings, volumes=volumes)
+    assert pipeline.process_case("P1", settings, out, spacing_mm=2.0) == "ok"
+    crop = next(s for s in _case_log(out)["steps"] if s["step"] == "crop")
+    assert crop["lesion_tissue_erased"] == 0.0
+
+
 def test_held_cases_are_the_ones_whose_files_are_all_there(tmp_path, settings):
     out, _ = _native_case(tmp_path, settings)
     assert pipeline.held_cases(out, settings) == set()
@@ -381,3 +488,45 @@ def test_the_export_is_a_valid_nnunet_v2_dataset(tmp_path, settings):
     grids = [sitk.ReadImage(os.path.join(folder, "imagesTr", f"P1_000{i}.nii.gz")) for i in (0, 1)]
     grids.append(sitk.ReadImage(os.path.join(folder, "labelsTr", "P1.nii.gz")))
     assert len({(g.GetSize(), g.GetSpacing(), g.GetOrigin()) for g in grids}) == 1
+
+
+def test_a_case_excluded_on_a_rebuild_loses_its_old_outputs_and_leaves_the_export(tmp_path, settings):
+    """Built once, excluded by a later run with stricter settings: nothing of it may remain held.
+
+    Before this, the old files stayed in cases/, so held_cases -- and with it the export, the QC
+    and the bronze purge -- still counted a case the current parameters reject.
+    """
+    out, _ = _native_case(tmp_path, settings, patient="Breast_MRI_901")
+    raw = str(tmp_path / "nnUNet_raw")
+    assert pipeline.process_case("Breast_MRI_901", settings, out, spacing_mm=2.0) == "ok"
+    folder, _ = export.export(out, raw, settings)
+    assert pipeline.held_cases(out, settings) == {"Breast_MRI_901"}
+
+    stricter = copy.deepcopy(settings)
+    stricter["body_mask"]["max_lesion_tissue_erased"] = -1.0            # impossible to meet
+    assert pipeline.process_case("Breast_MRI_901", stricter, out, spacing_mm=2.0) == "excluded"
+
+    assert pipeline.held_cases(out, stricter) == set()
+    assert not any(os.path.exists(p) for p in pipeline._outputs(stricter, out, "Breast_MRI_901"))
+    _, cases = export.export(out, raw, stricter)
+    assert cases == []
+    assert os.listdir(os.path.join(folder, "imagesTr")) == [] == os.listdir(os.path.join(folder, "labelsTr"))
+    assert json.load(open(os.path.join(folder, "dataset.json")))["numTraining"] == 0
+
+
+def test_the_qc_report_holds_only_the_cases_it_sampled(tmp_path, settings):
+    """A figure left by an earlier draw must not sit in the new report as if it were sampled."""
+    pytest.importorskip("matplotlib", reason="matplotlib not installed")
+    from mri_nnunet import qc
+
+    out, _ = _native_case(tmp_path, settings)
+    assert pipeline.process_case("P1", settings, out, spacing_mm=2.0) == "ok"
+    report = tmp_path / "qc"
+    report.mkdir()
+    (report / "Breast_MRI_080.png").write_bytes(b"stale")
+
+    summary = qc.run(out, str(report), settings, n=10)
+
+    assert summary["sampled"] == ["P1"]
+    assert sorted(os.listdir(report)) == ["P1.png", "aggregate.json", "aggregate.png"]
+

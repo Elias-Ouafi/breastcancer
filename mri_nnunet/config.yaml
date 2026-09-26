@@ -37,11 +37,27 @@ n4:
   use_foreground_mask: true
 
 # --- 2. Body / organ mask -----------------------------------------------------------------
+# Threshold, closing, opening, the large components, holes filled. The threshold has to split
+# body from air. Otsu split the *tissue* instead on some cases (mostly air plus a bright tail):
+# 1.6 % of the field kept on Breast_MRI_017, the lesion-free breast kept on _118, part of the
+# lesion cut on _042 and _170. Li lands between air and tissue on the 29 real cases compared;
+# Huang too, but it spills into the air noise on some of them (DOCUMENTATION.md §4.20).
 body_mask:
-  method: otsu_morpho         # Otsu, closing, opening, largest component, holes filled
-  otsu_bins: 128
+  threshold: li               # otsu | huang | li
+  histogram_bins: 128
   closing_radius_mm: 4.0
   opening_radius_mm: 2.0
+  # Keep every component at least this fraction of the largest one, so two breasts the
+  # threshold separates both survive (1.0 = the largest only).
+  keep_components_above: 0.2
+  # The channels are 0 outside the mask, so lesion *tissue* outside it is erased: above this
+  # fraction of the pseudo-mask, the case is excluded. Tissue, not any voxel: a box that runs
+  # past the skin leaves part of its ellipsoid in the air under a correct mask (19 % on
+  # Breast_MRI_094), and zeroing air erases nothing. Measured: the Otsu defects erased 4.9 to
+  # 98 % of the lesion as tissue, the correct masks 0 % (DOCUMENTATION.md §4.20).
+  max_lesion_tissue_erased: 0.02
+  # A mask this small is logged as an anomaly (the defect on _017 covered 1.6 %).
+  warn_fraction_below: 0.08
 
 # --- 3. Rigid co-registration of every channel to the reference ---------------------------
 # Same-session acquisitions on the same grid: the identity is already very good, and a rigid
@@ -104,6 +120,9 @@ pseudo_mask:
   contrast_warn_below: 1.0
   # The ellipsoid must weigh about pi/6 of its box; a discretised small lesion drifts from it.
   ratio_tolerance: 0.35
+  # A pseudo-mask with more than this fraction in the air sits on a box past the skin: logged,
+  # never used to drop a case (the air part is zeroed and erases nothing).
+  warn_in_air_above: 0.10
 
 # --- Export -----------------------------------------------------------------------------------
 export:
