@@ -268,9 +268,11 @@ comparé pixel à pixel. Le *traitement* n'a plus besoin du bronze et s'exécute
 physique (ils suivent l'anatomie à travers la réorientation, le recalage et le rééchantillonnage) et
 rastérisés sur la grille finale, jamais interpolés. Le rapport volume de la boîte / volume du
 pseudo-masque est rapporté par cas : 1,66 à 2,19 sur les 186 cas (médiane 1,91), pour 6/π = 1,91 attendu. Un
-**contraste de rehaussement** (le pseudo-masque contre le reste de l'organe, en écarts-types)
-signale une boîte lâche ou mal placée ; son seuil est une hypothèse, jamais utilisée pour écarter un cas.
-À l'échelle, cet indice **ne discrimine pas** : il alerte sur 122 cas sur 186 (§4.19, §4.20).
+**contraste de rehaussement** signale une boîte lâche ou mal placée : le rehaussement **brut**
+(post − pré sur les images natives, sans N4 ni z-score) dans le pseudo-masque, comparé à un **anneau
+de 10 mm** autour de la boîte, en écarts-types de cet anneau. Son seuil (0,5 σ) est calibré sur un
+témoin négatif, la même boîte reflétée dans l'autre sein (§4.21) ; il signale un cas à relire, il ne
+l'écarte jamais.
 
 **L'espacement suit les petites lésions**, pas la médiane du jeu de données : il est choisi pour que
 le plus petit axe de 90 % des lésions garde au moins 8 voxels (`spacing.py`), borné entre 0,5 et 1,5 mm.
@@ -625,10 +627,54 @@ images les plus bruitées (`_136`, `_150`) : sans effet sur la lésion, mais il 
 statistiques de normalisation. N4 s'appuie toujours sur un avant-plan d'Otsu (il ne sert qu'à ajuster
 le champ de biais) : non modifié, non mesuré.
 
-**Inchangé.** L'indice de contraste ne discrimine toujours pas : 122 alertes sur 186.
+**Inchangé.** L'indice de contraste ne discrimine toujours pas : 122 alertes sur 186. *Remplacé au
+§4.21.*
 
 **Prochain test.** Remplacer l'indice de contraste par le rehaussement post − pré brut, puis entraîner
 nnU-Net (environnement séparé à décider).
+
+### 4.21 Indice de contraste remplacé et calibré (2026-09-26)
+
+**Conclusion.**
+- **Le diagnostic du §4.19 était à moitié faux.** L'indice ne manquait pas de pouvoir de séparation,
+  il était mal **étalonné**. Mesuré sur les 186 cas contre un témoin négatif (la même boîte reflétée
+  de gauche à droite autour du centre de l'organe, donc dans l'autre sein), l'ancien indice classe la
+  vraie boîte au-dessus de son reflet dans 95 % des cas (AUC 0,922) ; mais sa médiane sur les vraies
+  boîtes est 0,75 σ, si bien qu'un seuil de 1,0 σ en signalait 65 %.
+- **Deux causes, mesurées séparément** sur huit variantes (enhancement × référence × statistique) :
+  - la différence de deux canaux **normalisés chacun de son côté** (et corrigés par N4 chacun de son
+    côté) tasse l'échelle : sur le rehaussement brut post − pré, l'AUC passe de 0,922 à 0,977 ;
+  - la **référence** « tout l'organe hors de la boîte » englobe le cœur et la paroi, qui se rehaussent
+    fortement : un anneau de 10 mm autour de la boîte la remplace, AUC 0,989.
+- **L'indice retenu** : rehaussement brut, moyenne dans le pseudo-masque contre moyenne et écart-type
+  de l'anneau. Vraies boîtes : médiane 2,08 σ ; boîtes reflétées : 0,06 σ.
+- **Seuil calibré, plus supposé** : 0,5 σ, le 95ᵉ centile des boîtes reflétées (0,48). Il signale
+  environ 3 % des vraies boîtes au lieu de 65 %.
+- **Ce que l'alerte signale, regardé à l'œil** sur les soustractions : un mélange attendu d'un signal
+  de relecture. De vrais doutes (`Breast_MRI_096` : la masse visible est au-dessus de la boîte ; `_056` :
+  valeur négative, région ambiguë près de la paroi) et de fausses alertes (`_030` : petite lésion dans
+  une grande boîte ; `_065` : lésion qui ne se rehausse qu'en anneau).
+- **Le pipeline reproduit l'évaluation** : sur les 33 cas reconstruits, corrélation 0,993 avec la
+  valeur de l'évaluation, le pipeline étant un peu plus haut (médiane + 0,06 ; il utilise la boîte
+  exacte et le recalage, l'évaluation la boîte englobante de l'ellipsoïde). Aucun de ces 33 n'est
+  signalé ; `_002` (0,49 dans l'évaluation) et `_030` (0,46) passent juste au-dessus.
+- **Tests** : 217. Les deux choix sont épinglés par un test qui échoue quand on les défait (le
+  rehaussement lu sur les canaux normalisés, la référence étendue à tout l'organe).
+
+**Corpus partiellement reconstruit.** Le changement de paramètres invalide l'empreinte de chaque cas.
+La reconstruction a tourné à ~5 min par cas au lieu de 45 s (toutes les étapes, y compris celles
+inchangées ; ni la mémoire, ni le mode d'alimentation, ni un bridage du processus ne l'expliquent) :
+arrêtée à 33 cas sur 186. Le corpus reste cohérent (chaque cas est entier, ancien ou nouveau), mais
+les 153 autres portent encore l'ancien indice dans leur `case.json`, et l'export et le QC datent du
+§4.20. Les images ne changent pas : seul l'indice est recalculé. À relancer :
+`python -m mri_nnunet build`, puis `export` et `qc`.
+
+**Non vérifié.** Le reflet n'est qu'un témoin imparfait (une lésion bilatérale, ou un reflet qui tombe
+sur un tissu qui se rehausse, le fait paraître positif) ; aucune boîte n'a été relue par un
+radiologue. Les chiffres de l'évaluation sont calculés sans recalage, sur la boîte englobante du
+pseudo-masque (script non versionné, dans le répertoire de travail de la session).
+
+**Prochain test.** Terminer la reconstruction, relire les cas signalés, puis entraîner nnU-Net.
 
 ---
 
@@ -640,7 +686,7 @@ nnU-Net (environnement séparé à décider).
 |---|---|---|
 | 1 | Construire les 186 cas nnU-Net, lire le QC, exporter `nnUNet_raw` | **Fait** : 185 cas, 4 écartés, export et QC écrits (§4.19) |
 | 1 bis | Corriger le masque de l'organe et reconstruire | **Fait** : seuil de Li, garde sur le tissu effacé, 186 cas (§4.20) |
-| 1 ter | Remplacer l'indice de contraste par le rehaussement post − pré brut | À faire (122 alertes sur 186, §4.20) |
+| 1 ter | Remplacer l'indice de contraste par le rehaussement post − pré brut | **Fait** (code) : AUC 0,989 contre un témoin reflété, seuil calibré à 0,5 σ (§4.21) ; reconstruction à terminer (33 cas sur 186) |
 | 2 | Métrique principale : composantes connexes 3D, FROC à 0,5 / 1 / 2 / 4 faux positifs par examen, sensibilité par taille de lésion | À faire : aujourd'hui sensibilité et faux positifs à un seul seuil, par coupe (§4.3) |
 | 3 | Entraîner nnU-Net v2 en 5 plis, 3 graines, intervalles de confiance | À faire (`nnunetv2` est dans l'extra, non installé ici) |
 | 4 | Valider les canaux : pré + post2 est une hypothèse ; comparer à la soustraction seule et aux quatre phases | À faire |
@@ -668,6 +714,7 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 | 2026-09-20 | Parcours de démo mesuré de bout en bout : installation dédiée (68 paquets → 17), préflight qui analyse un vrai cas, port occupé détecté, formats de l'interface alignés (§4.17) |
 | 2026-09-20 | Médaillon bronze → silver → gold, bronze purgé une fois en silver, `pyproject.toml` seul fichier de dépendances, corpus nnU-Net avec son module, code et données DBT retirés (§4.18) |
 | 2026-09-21 → 09-22 | Corpus nnU-Net construit : 185 cas, export `Dataset501_DukeDCEBreast`, rapport de QC ; deux défauts du masque de l'organe relevés (§4.19) |
+| 2026-09-26 | Indice de contraste remplacé : rehaussement brut contre un anneau de 10 mm, seuil calibré sur des boîtes reflétées (§4.21) |
 | 2026-09-26 | Masque de l'organe corrigé (seuil de Li, garde sur le tissu de lésion effacé), corpus nnU-Net reconstruit : 186 cas, `_118` récupéré (§4.20) |
 | 2026-09-26 | Audit de la démo : les trois cas, l'API et les erreurs vérifiés dans l'app ; deux chiffres faux et l'encadré DBT retirés des pages (« Écarts doc ↔ code ») |
 | 2026-09-16 | **P0 portfolio** : README réorienté data engineering, licence MIT, citations TCIA, GIF de démo, documentation unique en français |
@@ -690,7 +737,8 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 |---|---|
 | Bronze IRM résiduel | 12 dossiers (0,6 Gio) sans copie en silver : 7 séries des patients 106, 120 et 203, et 5 séries non dynamiques ; à supprimer sur demande |
 | Canaux nnU-Net | pré + post2 est une hypothèse, à comparer (piste 4) |
-| Seuil de contraste | 1,0 σ alerte sur 122 cas sur 186 : l'indice lui-même est à remplacer (§4.19, §4.20) |
+| Reconstruction du corpus | Arrêtée à 33 cas sur 186 (machine ~5× plus lente, cause non établie) : relancer `python -m mri_nnunet build`, puis `export` et `qc` (§4.21) |
+| Cas signalés par le contraste | ~3 % des boîtes, à relire (`_096` et `_056` en tête, §4.21) |
 | Environnement nnU-Net | `nnunetv2` non installé ; l'installer dans l'environnement principal changerait `torch` et `numpy` : environnement séparé à décider |
 | Test bit à bit sur DICOM réel | Toujours ignoré depuis la purge IRM : aucun patient n'a encore ses deux phases en bronze. La garantie du §4.16 n'est plus exercée par la suite |
 | Site des acquisitions | Inconnu dans Duke : impossible de stratifier par site |
@@ -731,6 +779,7 @@ tests se recompte, il ne s'estime pas — et le badge se recompte avec le texte.
 | 2026-09-20 | Une fonction nommée `extract_dicom_mri_images` téléchargeait en réalité la collection BCS-DBT, et non de l'IRM | Supprimée avec le code DBT |
 | 2026-09-26 | Page « Comment ça marche » : « Entraînement : 186 patients » pour 130 (186 est le corpus, découpé 130 / 28 / 28) ; page de résultat : « 0/186 sur les patients de test » alors qu'il n'y en a que 28 (le 0/186 porte sur tout le corpus, §4.2) ; encadré « Et y a-t-il un cancer ? » présentant le classifieur DBT comme « servi par un autre modèle » six jours après son retrait ; README et doc annonçant le corpus nnU-Net « à construire » alors que 185 cas l'étaient ; « ~30 s par patient » pour 55 s mesurées ; ligne ci-dessus citant `data/silver/…` pour `data/preprocessed_data/…` | Corrigés ; encadré retiré et son absence épinglée par un test ; badge recompté à 209 |
 | 2026-09-26 | §4.19 annonçait deux défauts du masque de l'organe (`_017`, `_118`) : `_042` et `_170` perdaient aussi 14 % et 4,9 % de leur lésion, en tissu mis à 0, sans alerte | Mesuré sur tout le corpus et corrigé (§4.20) ; badge recompté à 215 |
+| 2026-09-26 | §4.19 : « l'indice de contraste ne discrimine pas » ; il sépare en fait la vraie boîte de son reflet (AUC 0,922), c'est son échelle qui était tassée. Et la corrélation « 0,60 » avec le rehaussement brut, non reproductible | Mesuré sur 186 cas contre un témoin négatif et remplacé (§4.21) ; badge recompté à 217 |
 
 ---
 
@@ -776,7 +825,7 @@ cliniques.
 ```bash
 pip install -e ".[all]"   # la CI, elle, n'installe que .[dev,data]
 ruff check .
-pytest                    # 215 tests, sans GPU ni jeu de données
+pytest                    # 217 tests, sans GPU ni jeu de données
 ```
 
 La [CI](.github/workflows/ci.yml) a deux jobs à chaque push et pull request : `check` (ruff + pytest,

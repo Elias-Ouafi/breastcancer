@@ -240,6 +240,20 @@ def _outputs(settings, out_dir, pid):
     return files
 
 
+def raw_enhancement(images, transforms, grid, pair):
+    """Raw ``second - first`` of the channels in ``pair``, on ``grid``: what the contrast index reads.
+
+    From the native images -- no N4 and no z-score, which each rescale a phase on its own and
+    compressed the index on the real corpus (DOCUMENTATION.md §4.21) -- registered like the
+    channels, linearly interpolated.
+    """
+    from . import sitk_io
+
+    first, second = (sitk_io.to_array(sitk_io.resample(images[c["name"]], grid, transforms.get(c["name"]), 1))
+                     for c in pair)
+    return second - first
+
+
 def process_case(pid, settings, out_dir, spacing_mm, force=False):
     """Native NIfTI -> the case nnU-Net trains on. Returns ``"ok"``, ``"skipped"`` or ``"excluded"``."""
     from . import sitk_io
@@ -378,14 +392,16 @@ def process_case(pid, settings, out_dir, spacing_mm, force=False):
     expected = 1.0 / steps.INSCRIBED_ELLIPSOID_RATIO
     contrast = float("nan")
     if len(channels) >= 2:
-        first, second = (volumes_c[c["name"]] for c in channels[:2])
-        contrast = steps.enhancement_contrast(second - first, pseudo_c, box_c, organ_c)
+        enhancement = raw_enhancement(images, transforms, grid, channels[:2])[window]
+        ring_mm = settings["pseudo_mask"]["contrast_ring_mm"]
+        ring_voxels = [max(1, int(round(ring_mm / s))) for s in reversed(spacing_xyz)]   # z, y, x
+        contrast = steps.enhancement_contrast(enhancement, pseudo_c, box_c, organ_c, ring_voxels)
     if abs(ratio / expected - 1.0) > settings["pseudo_mask"]["ratio_tolerance"]:
         case_log.anomaly(f"box/pseudo-mask volume ratio {ratio:.2f} is far from 6/pi = {expected:.2f} "
                          "(very small box, or clipped by the volume)")
     if not np.isnan(contrast) and contrast < settings["pseudo_mask"]["contrast_warn_below"]:
         case_log.anomaly(f"loose or misplaced box? the pseudo-mask stands out by only {contrast:.2f} sd "
-                         f"from the organ (< {settings['pseudo_mask']['contrast_warn_below']})")
+                         f"from the tissue around its box (< {settings['pseudo_mask']['contrast_warn_below']})")
 
     # Outputs.
     for i, c in enumerate(channels):

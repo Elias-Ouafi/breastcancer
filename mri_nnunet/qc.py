@@ -135,7 +135,7 @@ def run(silver_dir, out_dir, settings, n=10, seed=None):
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
     for ax, key, title in zip(axes, ("lesion_volume_mm3", "box_to_pseudo_ratio", "contrast"),
                               ("lesion volume (mm3)", "box / pseudo-mask volume",
-                               "pseudo-mask contrast (sd above the organ)")):
+                               "pseudo-mask contrast (sd above the ring around the box)")):
         values = np.array([r[key] for r in rows if r.get(key) is not None], float)
         ax.hist(values[~np.isnan(values)], bins=30, color="tab:blue")
         ax.set_title(title)
