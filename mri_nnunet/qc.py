@@ -57,6 +57,9 @@ def aggregate(silver_dir, cases):
         "lesion_volume_mm3": describe(column("lesion_volume_mm3")),
         "smallest_lesion_axis_voxels": describe(column("smallest_lesion_axis_voxels")),
         "box_to_pseudo_ratio": describe(column("box_to_pseudo_ratio")),
+        "organ_mask_fraction_of_fov": describe(column("organ_mask_fraction_of_fov")),
+        "lesion_tissue_erased": describe(column("lesion_tissue_erased")),
+        "lesion_in_air": describe(column("lesion_in_air")),
         "contrast": describe(column("contrast")),
         "registration_translation_mm": describe(np.array([v.get("translation_mm", np.nan) for v in registrations], float)),
         "registration_rotation_deg": describe(np.array([v.get("rotation_deg", np.nan) for v in registrations], float)),
@@ -83,6 +86,11 @@ def run(silver_dir, out_dir, settings, n=10, seed=None):
     os.makedirs(out_dir, exist_ok=True)
     chosen = _sample(cases, n, seed)
     channels = settings["channels"]
+    # A rebuild that changes the set of built cases changes the draw: a figure of a case no
+    # longer sampled would otherwise sit beside the new ones and read as part of this report.
+    for name in os.listdir(out_dir):
+        if name.endswith(".png") and name != "aggregate.png" and name[:-4] not in chosen:
+            os.remove(os.path.join(out_dir, name))
 
     for pid in chosen:
         native, case_dir = pipeline._paths(silver_dir, pid)

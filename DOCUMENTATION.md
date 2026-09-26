@@ -77,7 +77,7 @@ et le champ magnétique du scanner sont la seule variable d'acquisition disponib
 ### Stockage en médaillon : bronze → silver → gold
 
 ```
-data/                                    41,7 Gio  ignoré par git, sauf les trois cas de démo
+data/                                    43,5 Gio  ignoré par git, sauf les trois cas de démo
 ├── bronze/tcia/                          0,6 Gio  zone de transit : la source telle que publiée, jamais
 │   │                                              réécrite, supprimée une fois la série en silver
 │   ├── duke_mri/                                  12 dossiers restants : 7 séries de 3 patients sans
@@ -85,17 +85,17 @@ data/                                    41,7 Gio  ignoré par git, sauf les tro
 │   └── Annotation_Boxes.xlsx                      les boîtes de lésion (jamais purgées : minuscules)
 ├── silver/
 │   ├── dce_mri_p2/                       5,0 Gio  corpus de la démo : un .npz par patient, un canal
-│   └── dce_mri_nnunet/                  30,4 Gio  corpus nnU-Net (mri_nnunet/)
+│   └── dce_mri_nnunet/                  32,2 Gio  corpus nnU-Net (mri_nnunet/)
 │       ├── native/                      26,1 Gio  NIfTI sans perte, RAS, toutes les phases : 186
 │       │                                          patients, ~144 Mio chacun
-│       ├── cases/                        4,3 Gio  185 cas traités : canaux normalisés, pseudo-masque,
+│       ├── cases/                        6,1 Gio  186 cas traités : canaux normalisés, pseudo-masque,
 │       │                                          masque de l'organe, case.json
 │       ├── qc/                                    rapport de QC : 10 cas tirés (graine 42) + agrégat
 │       ├── registry.csv · exclusions.csv          ce qu'il contient, ce qu'il a écarté et pourquoi
 │       └── log/cases.jsonl                        étapes, paramètres, durées et anomalies de chaque cas
 └── gold/                                 5,8 Gio  dérivé de silver et reconstructible
     ├── slice_bank_p2/                    5,7 Gio  banque de coupes (memmap)
-    ├── nnunet_raw/                      (4,3 Gio) Dataset501_DukeDCEBreast : 185 cas, en liens physiques
+    ├── nnunet_raw/                      (6,1 Gio) Dataset501_DukeDCEBreast : 186 cas, en liens physiques
     │                                              vers cases/, donc sans espace disque en plus
     └── demo_cases/                      13,7 Mio  les trois cas de démo, seuls fichiers versionnés
 models/                                  70,9 Mio  checkpoints + les métriques qui les justifient
@@ -250,7 +250,13 @@ NIfTI en géométrie native, réorienté RAS (vérifié avec `nibabel`), **toute
 comparé pixel à pixel. Le *traitement* n'a plus besoin du bronze et s'exécute dans l'ordre imposé :
 
 1. **N4** (correction de biais), avant que quoi que ce soit ne regarde les intensités ;
-2. **masque de l'organe** : Otsu, morphologie, plus grande composante, trous comblés ;
+2. **masque de l'organe** : seuil de Li (entropie croisée minimale), morphologie, composantes d'au
+   moins 20 % de la plus grande, trous comblés. Otsu, utilisé jusqu'au 2026-09-26, séparait parfois
+   le tissu sombre du tissu brillant au lieu du corps et de l'air (§4.20). Les canaux valent 0 hors du
+   masque : un cas dont plus de 2 % de la lésion est du **tissu** hors du masque est écarté, puisque ce
+   tissu serait effacé. La part de la lésion dans l'**air** (une boîte publiée qui dépasse la peau)
+   n'efface rien : au-delà de 10 %, elle est seulement signalée, comme un masque sous 8 % du champ.
+   Le niveau air/tissu de cette garde est celui de Li, quel que soit le seuil qui construit le masque ;
 3. **recalage rigide** de chaque canal sur la référence (voir ci-dessous) ;
 4. **rééchantillonnage** : B-spline d'ordre 3 pour les images, le recalage repris dans la même
    interpolation ; un axe plus de deux fois plus épais que le plan garde son espacement natif ;
@@ -261,10 +267,10 @@ comparé pixel à pixel. Le *traitement* n'a plus besoin du bronze et s'exécute
 **Les pseudo-masques** sont des ellipsoïdes inscrits dans les boîtes, calculés dans l'espace
 physique (ils suivent l'anatomie à travers la réorientation, le recalage et le rééchantillonnage) et
 rastérisés sur la grille finale, jamais interpolés. Le rapport volume de la boîte / volume du
-pseudo-masque est rapporté par cas : 1,66 à 2,19 sur les 185 cas (médiane 1,91), pour 6/π = 1,91 attendu. Un
+pseudo-masque est rapporté par cas : 1,66 à 2,19 sur les 186 cas (médiane 1,91), pour 6/π = 1,91 attendu. Un
 **contraste de rehaussement** (le pseudo-masque contre le reste de l'organe, en écarts-types)
 signale une boîte lâche ou mal placée ; son seuil est une hypothèse, jamais utilisée pour écarter un cas.
-À l'échelle, cet indice **ne discrimine pas** : il alerte sur 118 cas sur 185 (§4.19).
+À l'échelle, cet indice **ne discrimine pas** : il alerte sur 122 cas sur 186 (§4.19, §4.20).
 
 **L'espacement suit les petites lésions**, pas la médiane du jeu de données : il est choisi pour que
 le plus petit axe de 90 % des lésions garde au moins 8 voxels (`spacing.py`), borné entre 0,5 et 1,5 mm.
@@ -578,7 +584,51 @@ visuellement que sur les 10 cas du QC.
 composante quand les deux seins sont séparés), remplacer l'indice de contraste par le rehaussement
 post − pré brut, reconstruire (~6 h), puis entraîner nnU-Net. `nnunetv2` n'est pas installé : dans
 l'environnement principal il ferait changer de version `torch` et `numpy`, d'où un environnement
-séparé à décider.
+séparé à décider. *Masque corrigé et corpus reconstruit : voir §4.20.*
+
+### 4.20 Masque de l'organe corrigé, corpus reconstruit (2026-09-26)
+
+**Conclusion.**
+- **La cause** : le seuil d'Otsu doit séparer le corps de l'air ; sur un volume fait surtout d'air
+  avec une queue d'intensités brillantes (graisse, glande rehaussée), il sépare à la place le tissu
+  sombre du tissu brillant, et ne garde que ce dernier. Sur `Breast_MRI_118`, les deux seins en
+  sortaient séparés et « la plus grande composante » était celle sans lésion.
+- **Plus de cas touchés que les deux vus au §4.19.** Les canaux valent 0 hors du masque : une lésion
+  hors du masque est **effacée**, pas seulement rognée. La part de la lésion effacée alors qu'elle
+  était du tissu : 98 % sur `_118`, 35 % sur `_017`, 14 % sur `_042`, 4,9 % sur `_170`. Les deux
+  derniers passaient sans alerte : l'ancienne garde regardait la boîte de recadrage, pas le masque.
+- **Choix du seuil, sur 29 cas réels** (les cas extrêmes, les 12 masques les plus petits, les 4 plus
+  grands, 8 tirés au hasard), chaque masque regardé sur la coupe de la lésion. Otsu échoue sur 5 d'entre
+  eux. Triangle rate `_017` ; Otsu sur le logarithme déborde dans l'air ; Huang suit le corps mais
+  déborde dans le bruit de l'air sur plusieurs cas, et échoue sur un volume synthétique où Li réussit.
+  **Li** (entropie croisée minimale) suit le contour du corps et garde la lésion partout : c'est lui.
+- **La garde mesure le tissu effacé, pas la lésion hors du masque.** Une première version (« au moins
+  90 % de la lésion dans le masque ») a écarté à tort `Breast_MRI_094` : son masque est correct, c'est
+  la boîte publiée qui dépasse la peau, avec 19 % de l'ellipsoïde dans l'air. Effacer de l'air ne perd
+  rien. La garde compte donc la part de la lésion hors du masque **au-dessus du niveau air/tissu de
+  Li**, calculé quel que soit le seuil qui construit le masque (sinon elle hériterait de son erreur) :
+  exclusion au-delà de 2 %, anomalie quand plus de 10 % de la boîte est dans l'air. Les défauts d'Otsu
+  effaçaient de 4,9 à 98 % de tissu ; les masques de Li, 0 % sur ces mêmes cas.
+- **Corpus reconstruit** : **186 cas**, seules les 3 exclusions pour phase manquante restent ;
+  `Breast_MRI_118` est récupéré. Tissu de lésion effacé : 0,2 % au plus. Masque : de 25 à 63 % du
+  champ, médiane 43 % (contre 1,6 à 49 %, médiane 31 %). Une seule boîte dans l'air (`_094`, 19 %).
+  Export : 186 cas, 372 canaux ; recalages refusés : 7 (contre 10) ; médiane 45 s par cas.
+- **Deux défauts du pipeline, trouvés en chemin.** Un cas construit puis écarté par une passe suivante
+  gardait ses anciens fichiers, que `held_cases` (donc l'export, le QC et la purge du bronze) comptait
+  encore ; l'export ne retirait pas les cas disparus, et le QC laissait la figure d'un cas qui n'était
+  plus tiré. Les trois sont corrigés et épinglés par un test qui échoue sans le correctif.
+- **Tests** : 215 (6 nouveaux). Chaque garde est mise en défaut par une mutation.
+
+**Non vérifié.** Le masque n'est inspecté qu'en 2D, sur une coupe par cas, pour 29 cas ; les 10 figures
+du QC le montrent dans les trois plans. Le fond reste inclus par morceaux autour de la peau sur les
+images les plus bruitées (`_136`, `_150`) : sans effet sur la lésion, mais il entre dans les
+statistiques de normalisation. N4 s'appuie toujours sur un avant-plan d'Otsu (il ne sert qu'à ajuster
+le champ de biais) : non modifié, non mesuré.
+
+**Inchangé.** L'indice de contraste ne discrimine toujours pas : 122 alertes sur 186.
+
+**Prochain test.** Remplacer l'indice de contraste par le rehaussement post − pré brut, puis entraîner
+nnU-Net (environnement séparé à décider).
 
 ---
 
@@ -589,7 +639,8 @@ séparé à décider.
 | # | Piste | État |
 |---|---|---|
 | 1 | Construire les 186 cas nnU-Net, lire le QC, exporter `nnUNet_raw` | **Fait** : 185 cas, 4 écartés, export et QC écrits (§4.19) |
-| 1 bis | Corriger le masque de l'organe (`_017`, `_118`) et l'indice de contraste, puis reconstruire | À faire avant l'entraînement (§4.19) |
+| 1 bis | Corriger le masque de l'organe et reconstruire | **Fait** : seuil de Li, garde sur le tissu effacé, 186 cas (§4.20) |
+| 1 ter | Remplacer l'indice de contraste par le rehaussement post − pré brut | À faire (122 alertes sur 186, §4.20) |
 | 2 | Métrique principale : composantes connexes 3D, FROC à 0,5 / 1 / 2 / 4 faux positifs par examen, sensibilité par taille de lésion | À faire : aujourd'hui sensibilité et faux positifs à un seul seuil, par coupe (§4.3) |
 | 3 | Entraîner nnU-Net v2 en 5 plis, 3 graines, intervalles de confiance | À faire (`nnunetv2` est dans l'extra, non installé ici) |
 | 4 | Valider les canaux : pré + post2 est une hypothèse ; comparer à la soustraction seule et aux quatre phases | À faire |
@@ -617,6 +668,7 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 | 2026-09-20 | Parcours de démo mesuré de bout en bout : installation dédiée (68 paquets → 17), préflight qui analyse un vrai cas, port occupé détecté, formats de l'interface alignés (§4.17) |
 | 2026-09-20 | Médaillon bronze → silver → gold, bronze purgé une fois en silver, `pyproject.toml` seul fichier de dépendances, corpus nnU-Net avec son module, code et données DBT retirés (§4.18) |
 | 2026-09-21 → 09-22 | Corpus nnU-Net construit : 185 cas, export `Dataset501_DukeDCEBreast`, rapport de QC ; deux défauts du masque de l'organe relevés (§4.19) |
+| 2026-09-26 | Masque de l'organe corrigé (seuil de Li, garde sur le tissu de lésion effacé), corpus nnU-Net reconstruit : 186 cas, `_118` récupéré (§4.20) |
 | 2026-09-26 | Audit de la démo : les trois cas, l'API et les erreurs vérifiés dans l'app ; deux chiffres faux et l'encadré DBT retirés des pages (« Écarts doc ↔ code ») |
 | 2026-09-16 | **P0 portfolio** : README réorienté data engineering, licence MIT, citations TCIA, GIF de démo, documentation unique en français |
 
@@ -628,7 +680,7 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 | P1 | Délai maximal sur les requêtes TCIA, échecs de téléchargement détectés | **Fait** |
 | P1 | Tests d'orchestration exécutés en CI | **Fait** (job `orchestration`) |
 | P1 | Médaillon et purge du bronze | **Fait**, exécuté (DBT puis IRM) |
-| P1 | Corpus nnU-Net : ingestion, traitement, export, QC | **Fait**, construit (185 cas) ; masque de l'organe à corriger (§4.19) |
+| P1 | Corpus nnU-Net : ingestion, traitement, export, QC | **Fait**, construit (186 cas) avec le masque corrigé (§4.20) |
 | P2 | Structure `src/`, découpage de `TransformData.py`, build Docker en CI, registre de modèles | À faire |
 | — | Entraînement nnU-Net et FROC | À faire (« Prochaines pistes ») |
 
@@ -638,8 +690,7 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 |---|---|
 | Bronze IRM résiduel | 12 dossiers (0,6 Gio) sans copie en silver : 7 séries des patients 106, 120 et 203, et 5 séries non dynamiques ; à supprimer sur demande |
 | Canaux nnU-Net | pré + post2 est une hypothèse, à comparer (piste 4) |
-| Seuil de contraste | 1,0 σ alerte sur 118 cas sur 185 : l'indice lui-même est à remplacer (§4.19) |
-| Masque de l'organe | 1,6 % du champ sur `Breast_MRI_017` sans aucune alerte ; lésion hors masque sur `_118` (§4.19) |
+| Seuil de contraste | 1,0 σ alerte sur 122 cas sur 186 : l'indice lui-même est à remplacer (§4.19, §4.20) |
 | Environnement nnU-Net | `nnunetv2` non installé ; l'installer dans l'environnement principal changerait `torch` et `numpy` : environnement séparé à décider |
 | Test bit à bit sur DICOM réel | Toujours ignoré depuis la purge IRM : aucun patient n'a encore ses deux phases en bronze. La garantie du §4.16 n'est plus exercée par la suite |
 | Site des acquisitions | Inconnu dans Duke : impossible de stratifier par site |
@@ -679,6 +730,7 @@ tests se recompte, il ne s'estime pas — et le badge se recompte avec le texte.
 | — | `models/dce_mri_p2_negfix/` nomme une expérience | Ouvert (le renommer casserait la démo) ; son `eval_report.json` cite encore `data/preprocessed_data/dce_mri_p2` (le chemin d'avant le médaillon), mesure historique laissée telle quelle |
 | 2026-09-20 | Une fonction nommée `extract_dicom_mri_images` téléchargeait en réalité la collection BCS-DBT, et non de l'IRM | Supprimée avec le code DBT |
 | 2026-09-26 | Page « Comment ça marche » : « Entraînement : 186 patients » pour 130 (186 est le corpus, découpé 130 / 28 / 28) ; page de résultat : « 0/186 sur les patients de test » alors qu'il n'y en a que 28 (le 0/186 porte sur tout le corpus, §4.2) ; encadré « Et y a-t-il un cancer ? » présentant le classifieur DBT comme « servi par un autre modèle » six jours après son retrait ; README et doc annonçant le corpus nnU-Net « à construire » alors que 185 cas l'étaient ; « ~30 s par patient » pour 55 s mesurées ; ligne ci-dessus citant `data/silver/…` pour `data/preprocessed_data/…` | Corrigés ; encadré retiré et son absence épinglée par un test ; badge recompté à 209 |
+| 2026-09-26 | §4.19 annonçait deux défauts du masque de l'organe (`_017`, `_118`) : `_042` et `_170` perdaient aussi 14 % et 4,9 % de leur lésion, en tissu mis à 0, sans alerte | Mesuré sur tout le corpus et corrigé (§4.20) ; badge recompté à 215 |
 
 ---
 
@@ -724,7 +776,7 @@ cliniques.
 ```bash
 pip install -e ".[all]"   # la CI, elle, n'installe que .[dev,data]
 ruff check .
-pytest                    # 209 tests, sans GPU ni jeu de données
+pytest                    # 215 tests, sans GPU ni jeu de données
 ```
 
 La [CI](.github/workflows/ci.yml) a deux jobs à chaque push et pull request : `check` (ruff + pytest,

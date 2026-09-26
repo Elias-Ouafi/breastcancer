@@ -58,6 +58,15 @@ def export(silver_dir, raw_dir, settings):
     images, labels = os.path.join(folder, "imagesTr"), os.path.join(folder, "labelsTr")
     os.makedirs(images, exist_ok=True)
     os.makedirs(labels, exist_ok=True)
+    # The export is redone after every rebuild: a case no longer held must leave it too, or
+    # the folder holds more cases than dataset.json declares.
+    held = set(cases)
+    suffix = ".nii.gz"
+    for directory, case_of in ((images, lambda stem: stem.rsplit("_", 1)[0]),   # <case>_0000
+                               (labels, lambda stem: stem)):                     # <case>
+        for name in os.listdir(directory):
+            if not name.endswith(suffix) or case_of(name[:-len(suffix)]) not in held:
+                os.remove(os.path.join(directory, name))
     for pid in cases:
         outputs = pipeline._outputs(settings, silver_dir, pid)
         for i, path in enumerate(outputs[:len(settings["channels"])]):

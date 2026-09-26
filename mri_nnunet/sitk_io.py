@@ -145,10 +145,33 @@ def n4_correct(image, cfg):
     return corrected, {"shrink_factor": shrink[0], "iterations": list(cfg["iterations"])}
 
 
+_THRESHOLDS = {
+    "otsu": sitk.OtsuThresholdImageFilter,
+    "huang": sitk.HuangThresholdImageFilter,
+    "li": sitk.LiThresholdImageFilter,
+}
+
+
 def body_mask(image, cfg):
-    """Otsu + morphology + largest component + holes filled; ``(uint8 mask, info)``."""
+    """Threshold + morphology + the large components + holes filled; ``(uint8 mask, info)``.
+
+    The threshold must separate the body from the air. Otsu does not always: on a volume that
+    is mostly air with a bright tail (fat, enhancing gland) it splits the *tissue* into dim and
+    bright and keeps only the bright part -- measured on Breast_MRI_017, 1.6 % of the field of
+    view kept, and on _118, the two breasts cut apart and the lesion-free one kept. Li's
+    minimum cross-entropy threshold lands between air and tissue on every case checked; Huang
+    does too but spills into the air noise on some (DOCUMENTATION.md §4.20).
+
+    Every component at least ``keep_components_above`` times the size of the largest is kept,
+    so two breasts that the threshold separates both survive; small islands still go.
+    """
     f32 = sitk.Cast(image, sitk.sitkFloat32)
-    mask = sitk.OtsuThreshold(f32, 0, 1, int(cfg["otsu_bins"]))
+    method = cfg.get("threshold", "otsu")
+    thresholder = _THRESHOLDS[method]()
+    thresholder.SetInsideValue(0)       # below the threshold -> 0, above -> 1
+    thresholder.SetOutsideValue(1)
+    thresholder.SetNumberOfHistogramBins(int(cfg["histogram_bins"]))
+    mask = thresholder.Execute(f32)
     spacing = image.GetSpacing()
 
     def radius(mm):
@@ -158,9 +181,29 @@ def body_mask(image, cfg):
     mask = sitk.BinaryFillhole(mask)
     mask = sitk.BinaryMorphologicalOpening(mask, radius(cfg["opening_radius_mm"]), sitk.sitkBall)
     components = sitk.RelabelComponent(sitk.ConnectedComponent(mask), sortByObjectSize=True)
-    mask = sitk.BinaryFillhole(sitk.Cast(components == 1, sitk.sitkUInt8))
+    labels = sitk.GetArrayViewFromImage(components)
+    sizes = np.bincount(labels.ravel())[1:]
+    kept = 0
+    if sizes.size:
+        kept = int((sizes >= float(cfg.get("keep_components_above", 1.0)) * sizes[0]).sum())
+    # Relabelled by decreasing size, so the kept components are labels 1..kept.
+    mask = sitk.BinaryFillhole(sitk.Cast(sitk.BinaryThreshold(components, 1, max(kept, 1)) if kept
+                                         else components * 0, sitk.sitkUInt8))
     voxels = int(sitk.GetArrayViewFromImage(mask).sum())
-    return mask, {"voxels": voxels, "fraction_of_fov": voxels / float(np.prod(image.GetSize()))}
+    # The air/tissue level the lesion guard measures against (pipeline.process_case). Always
+    # Li's, whatever builds the mask, so the guard does not inherit the mask's own mistake: an
+    # Otsu threshold set too high would call the tissue it cut "air".
+    if method == "li":
+        tissue = float(thresholder.GetThreshold())
+    else:
+        li = sitk.LiThresholdImageFilter()
+        li.SetNumberOfHistogramBins(int(cfg["histogram_bins"]))
+        li.Execute(f32)
+        tissue = float(li.GetThreshold())
+    return mask, {"threshold_method": method, "threshold": round(float(thresholder.GetThreshold()), 3),
+                  "tissue_threshold": round(tissue, 3),
+                  "components_kept": kept, "voxels": voxels,
+                  "fraction_of_fov": voxels / float(np.prod(image.GetSize()))}
 
 
 def register_rigid(fixed, moving, fixed_mask, cfg, seed):
