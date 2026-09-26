@@ -77,7 +77,7 @@ et le champ magnétique du scanner sont la seule variable d'acquisition disponib
 ### Stockage en médaillon : bronze → silver → gold
 
 ```
-data/                                    37,4 Gio  ignoré par git, sauf les trois cas de démo
+data/                                    41,7 Gio  ignoré par git, sauf les trois cas de démo
 ├── bronze/tcia/                          0,6 Gio  zone de transit : la source telle que publiée, jamais
 │   │                                              réécrite, supprimée une fois la série en silver
 │   ├── duke_mri/                                  12 dossiers restants : 7 séries de 3 patients sans
@@ -85,24 +85,27 @@ data/                                    37,4 Gio  ignoré par git, sauf les tro
 │   └── Annotation_Boxes.xlsx                      les boîtes de lésion (jamais purgées : minuscules)
 ├── silver/
 │   ├── dce_mri_p2/                       5,0 Gio  corpus de la démo : un .npz par patient, un canal
-│   └── dce_mri_nnunet/                  26,1 Gio  corpus nnU-Net (mri_nnunet/)
+│   └── dce_mri_nnunet/                  30,4 Gio  corpus nnU-Net (mri_nnunet/)
 │       ├── native/                      26,1 Gio  NIfTI sans perte, RAS, toutes les phases : 186
 │       │                                          patients, ~144 Mio chacun
-│       ├── cases/                                 les cas traités : canaux normalisés, pseudo-masque,
-│       │                                          masque (à construire)
+│       ├── cases/                        4,3 Gio  185 cas traités : canaux normalisés, pseudo-masque,
+│       │                                          masque de l'organe, case.json
+│       ├── qc/                                    rapport de QC : 10 cas tirés (graine 42) + agrégat
 │       ├── registry.csv · exclusions.csv          ce qu'il contient, ce qu'il a écarté et pourquoi
 │       └── log/cases.jsonl                        étapes, paramètres, durées et anomalies de chaque cas
 └── gold/                                 5,8 Gio  dérivé de silver et reconstructible
     ├── slice_bank_p2/                    5,7 Gio  banque de coupes (memmap)
-    ├── nnunet_raw/                                l'export nnUNet_raw (à générer : `python -m mri_nnunet export`)
+    ├── nnunet_raw/                      (4,3 Gio) Dataset501_DukeDCEBreast : 185 cas, en liens physiques
+    │                                              vers cases/, donc sans espace disque en plus
     └── demo_cases/                      13,7 Mio  les trois cas de démo, seuls fichiers versionnés
 models/                                  70,9 Mio  checkpoints + les métriques qui les justifient
 reports/                                  6,2 Kio  rapports JSON
 docs/img/                                 0,6 Mio  images de la documentation
 ```
 
-Tailles mesurées le 2026-09-20 avec `du -sb`, en unités binaires (1 Gio = 2³⁰ octets, comme `du -h`),
-**après les purges**.
+Tailles mesurées le 2026-09-26 avec `du -sb`, en unités binaires (1 Gio = 2³⁰ octets, comme `du -h`),
+**après les purges et la construction du corpus nnU-Net**. `du` compte une seule fois un fichier en
+liens physiques : le total ne compte pas l'export `nnunet_raw` en double.
 
 **Le bronze est une zone de transit, pas une archive.** Dès qu'une série est en silver
 **dans tous les corpus qui la lisent**, son dossier DICOM est supprimé : la donnée n'est plus
@@ -235,8 +238,8 @@ export `nnUNet_raw`. Tous les paramètres sont dans `mri_nnunet/config.yaml`, au
 
 ```bash
 pip install -e ".[data,nnunet]"
-python -m mri_nnunet build --ingest-only     # DICOM -> NIfTI natif sans perte (~12 s par patient)
-python -m mri_nnunet build                   # + traitement complet (~30 s par patient)
+python -m mri_nnunet build --ingest-only     # DICOM -> NIfTI natif sans perte (médiane 15 s par patient)
+python -m mri_nnunet build                   # + traitement complet (médiane 55 s par patient, §4.19)
 python -m mri_nnunet spacing                 # distribution des boîtes et espacement choisi
 python -m mri_nnunet export                  # data/gold/nnunet_raw/Dataset501_DukeDCEBreast
 python -m mri_nnunet qc --n 10               # histogrammes avant/après, coupes avec overlay, statistiques
@@ -258,9 +261,10 @@ comparé pixel à pixel. Le *traitement* n'a plus besoin du bronze et s'exécute
 **Les pseudo-masques** sont des ellipsoïdes inscrits dans les boîtes, calculés dans l'espace
 physique (ils suivent l'anatomie à travers la réorientation, le recalage et le rééchantillonnage) et
 rastérisés sur la grille finale, jamais interpolés. Le rapport volume de la boîte / volume du
-pseudo-masque est rapporté par cas : 1,86 à 2,10 sur 6 cas réels, pour 6/π = 1,91 attendu. Un
+pseudo-masque est rapporté par cas : 1,66 à 2,19 sur les 185 cas (médiane 1,91), pour 6/π = 1,91 attendu. Un
 **contraste de rehaussement** (le pseudo-masque contre le reste de l'organe, en écarts-types)
 signale une boîte lâche ou mal placée ; son seuil est une hypothèse, jamais utilisée pour écarter un cas.
+À l'échelle, cet indice **ne discrimine pas** : il alerte sur 118 cas sur 185 (§4.19).
 
 **L'espacement suit les petites lésions**, pas la médiane du jeu de données : il est choisi pour que
 le plus petit axe de 90 % des lésions garde au moins 8 voxels (`spacing.py`), borné entre 0,5 et 1,5 mm.
@@ -532,7 +536,49 @@ la construction complète des 186 patients et le rapport de QC sur 10 cas n'ont 
 exécutés à l'échelle ; ni Docker ni la CI n'ont tourné.
 
 **Prochain test.** Construire les 186 cas, lire le rapport de QC, puis entraîner nnU-Net en 5 plis et
-mesurer la sensibilité lésionnelle en FROC (« Prochaines pistes »).
+mesurer la sensibilité lésionnelle en FROC (« Prochaines pistes »). *Fait pour la construction et le
+QC : voir §4.19.*
+
+### 4.19 Construction complète du corpus nnU-Net (2026-09-21 → 09-22)
+
+**Conclusion.**
+- **185 cas construits, 4 écartés avec leur raison** dans `exclusions.csv` : `Breast_MRI_106`, `_120`
+  et `_203` (phase manquante, à l'ingestion) et `Breast_MRI_118` (lésion hors du masque de l'organe,
+  au traitement). Export `Dataset501_DukeDCEBreast` écrit : 185 cas, 2 canaux (pré, post2), 185
+  pseudo-masques, en liens physiques vers silver. Rapport de QC sur 10 cas tirés avec la graine 42,
+  plus un agrégat sur les 185 (`data/silver/dce_mri_nnunet/qc/`).
+- **Coût réel : médiane 55 s par cas** (quartiles 41 et 122 s), pas les ~30 s annoncées sur 6 cas ;
+  le recalage domine. Trois durées aberrantes (`_039`, `_161`, `_202` : 3,4 à 10,9 h) tombent dans des
+  étapes qui prennent quelques secondes ailleurs (N4, masque, recalage) : c'est la mise en veille de la
+  machine, pas du calcul. L'ingestion : médiane 15 s par patient.
+- **Le recalage gardé fonctionne à l'échelle** : accepté 175 fois, refusé 10 fois (aucun gain de
+  corrélation, identité conservée et journalisée). Translation médiane 0,39 mm, maximum 5,6 mm.
+- **Le masque de l'organe a deux défauts**, que rien n'arrête aujourd'hui :
+  - `Breast_MRI_017` : le masque couvre **1,6 % du champ** (médiane du corpus : 31 %). La lésion y
+    tombe par chance, donc le cas passe **sans aucune alerte** ; ses canaux sont normalisés sur une
+    région fausse.
+  - `Breast_MRI_118` : le masque (« plus grande composante ») ne contient **aucune partie** de la
+    lésion. Le cas est écarté, ce qui est correct, mais c'est le masque qui est en cause, pas la boîte.
+- **L'indice de contraste ne discrimine pas** : médiane 0,79 σ, et son seuil de 1,0 σ alerte sur
+  **118 cas sur 185**. Avec les 3 cas dont la seule anomalie est un recalage refusé, 121 cas sont
+  signalés. Une alerte sur deux tiers du corpus n'est plus une alerte.
+- **Répartition des scanners** (seule variable d'acquisition disponible) : 8 modèles, de 9 à 55 cas ;
+  Siemens Avanto 1,5 T est le plus fréquent (55).
+- **Pseudo-masques** : volume médian 8,1 cm³ (de 0,17 à 477 cm³) ; le plus petit axe garde au moins
+  7 voxels pour 95 % des lésions (minimum 4,8), cohérent avec l'espacement de 1,25 mm choisi pour que
+  90 % en gardent 8.
+
+**Non vérifié.** Une vérification ponctuelle du 2026-09-22 (script non versionné) confirmait l'ordre
+`InstanceNumber` sur 156 cas sur 161 (rehaussement post − pré brut dans la boîte : médiane 1,67 σ,
+contre 0,11 σ avec l'ordre inversé) et trouvait l'indice du pipeline peu corrélé à cette mesure brute
+(0,60) : ces deux chiffres ne sont reproductibles par aucun code du dépôt. Le masque n'a été inspecté
+visuellement que sur les 10 cas du QC.
+
+**Prochain test.** Corriger le masque de l'organe (garde sur la fraction du champ, et plus d'une
+composante quand les deux seins sont séparés), remplacer l'indice de contraste par le rehaussement
+post − pré brut, reconstruire (~6 h), puis entraîner nnU-Net. `nnunetv2` n'est pas installé : dans
+l'environnement principal il ferait changer de version `torch` et `numpy`, d'où un environnement
+séparé à décider.
 
 ---
 
@@ -542,7 +588,8 @@ mesurer la sensibilité lésionnelle en FROC (« Prochaines pistes »).
 
 | # | Piste | État |
 |---|---|---|
-| 1 | Construire les 186 cas nnU-Net, lire le QC, exporter `nnUNet_raw` | **En cours** : ingestion faite (186 patients), traitement complet à lancer |
+| 1 | Construire les 186 cas nnU-Net, lire le QC, exporter `nnUNet_raw` | **Fait** : 185 cas, 4 écartés, export et QC écrits (§4.19) |
+| 1 bis | Corriger le masque de l'organe (`_017`, `_118`) et l'indice de contraste, puis reconstruire | À faire avant l'entraînement (§4.19) |
 | 2 | Métrique principale : composantes connexes 3D, FROC à 0,5 / 1 / 2 / 4 faux positifs par examen, sensibilité par taille de lésion | À faire : aujourd'hui sensibilité et faux positifs à un seul seuil, par coupe (§4.3) |
 | 3 | Entraîner nnU-Net v2 en 5 plis, 3 graines, intervalles de confiance | À faire (`nnunetv2` est dans l'extra, non installé ici) |
 | 4 | Valider les canaux : pré + post2 est une hypothèse ; comparer à la soustraction seule et aux quatre phases | À faire |
@@ -569,6 +616,8 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 | 2026-09-19 | Chemin « nouvelle IRM » : `preprocess_dce_mri_exams`, `dce_subtraction` en définition unique, défaut `crop` aligné sur le corpus, code hérité IRM retiré (§4.16) |
 | 2026-09-20 | Parcours de démo mesuré de bout en bout : installation dédiée (68 paquets → 17), préflight qui analyse un vrai cas, port occupé détecté, formats de l'interface alignés (§4.17) |
 | 2026-09-20 | Médaillon bronze → silver → gold, bronze purgé une fois en silver, `pyproject.toml` seul fichier de dépendances, corpus nnU-Net avec son module, code et données DBT retirés (§4.18) |
+| 2026-09-21 → 09-22 | Corpus nnU-Net construit : 185 cas, export `Dataset501_DukeDCEBreast`, rapport de QC ; deux défauts du masque de l'organe relevés (§4.19) |
+| 2026-09-26 | Audit de la démo : les trois cas, l'API et les erreurs vérifiés dans l'app ; deux chiffres faux et l'encadré DBT retirés des pages (« Écarts doc ↔ code ») |
 | 2026-09-16 | **P0 portfolio** : README réorienté data engineering, licence MIT, citations TCIA, GIF de démo, documentation unique en français |
 
 ### Feuille de route
@@ -579,7 +628,7 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 | P1 | Délai maximal sur les requêtes TCIA, échecs de téléchargement détectés | **Fait** |
 | P1 | Tests d'orchestration exécutés en CI | **Fait** (job `orchestration`) |
 | P1 | Médaillon et purge du bronze | **Fait**, exécuté (DBT puis IRM) |
-| P1 | Corpus nnU-Net : ingestion, traitement, export, QC | **Fait** (code) ; construction complète à lancer |
+| P1 | Corpus nnU-Net : ingestion, traitement, export, QC | **Fait**, construit (185 cas) ; masque de l'organe à corriger (§4.19) |
 | P2 | Structure `src/`, découpage de `TransformData.py`, build Docker en CI, registre de modèles | À faire |
 | — | Entraînement nnU-Net et FROC | À faire (« Prochaines pistes ») |
 
@@ -589,11 +638,13 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 |---|---|
 | Bronze IRM résiduel | 12 dossiers (0,6 Gio) sans copie en silver : 7 séries des patients 106, 120 et 203, et 5 séries non dynamiques ; à supprimer sur demande |
 | Canaux nnU-Net | pré + post2 est une hypothèse, à comparer (piste 4) |
-| Seuil de contraste | 1,0 σ est une hypothèse (mesuré de 0,9 à 4,3 σ sur 8 cas) |
+| Seuil de contraste | 1,0 σ alerte sur 118 cas sur 185 : l'indice lui-même est à remplacer (§4.19) |
+| Masque de l'organe | 1,6 % du champ sur `Breast_MRI_017` sans aucune alerte ; lésion hors masque sur `_118` (§4.19) |
+| Environnement nnU-Net | `nnunetv2` non installé ; l'installer dans l'environnement principal changerait `torch` et `numpy` : environnement séparé à décider |
+| Test bit à bit sur DICOM réel | Toujours ignoré depuis la purge IRM : aucun patient n'a encore ses deux phases en bronze. La garantie du §4.16 n'est plus exercée par la suite |
 | Site des acquisitions | Inconnu dans Duke : impossible de stratifier par site |
 | Trois patients sans phase pré ou post2 | `Breast_MRI_106`, `_120`, `_203` : sautés par les deux corpus ; leurs séries restent en bronze |
 | 840 dossiers annoncés, 834 mesurés | Cause de l'écart non établie |
-| Encadré « limites connues » de l'app | Il cite le résultat du classifieur d'examen DBT (§4.11), dont le code est retiré : à réécrire ou à garder comme trace, à décider |
 | Bug NaN fp16 | Divergence repoussée à l'époque 15, non résolue ; checkpoint servi antérieur (§4.2) |
 | IC du top-1 à 43 % | Aucun code ni artefact versionné ne produit l'intervalle cité |
 | Erreur `cudaErrorIllegalAddress` | Observée une fois sur `/demo/1`, non reproduite |
@@ -625,8 +676,9 @@ tests se recompte, il ne s'estime pas — et le badge se recompte avec le texte.
 | 2026-09-19 | Badge README « 254 tests » contre 267 dans le texte ; `crop=True` par défaut alors que le corpus servi est en pleine trame ; message d'erreur d'`imaging/dataset.py` renvoyant à une fonction cassée ; `SimpleITK`/`itk`/`itkwidgets` déclarés mais importés nulle part | Corrigés (§4.16), badge recompté à 287 |
 | 2026-09-20 | « Port déjà utilisé → `--port 5001` » laissait croire qu'une erreur s'affichait : sous Windows le second lanceur affichait son bandeau de succès ; zone de dépôt annonçant DICOM/NIfTI sous un backend qui ne lit que `.npz` ; préflight qui ne chargeait jamais le modèle ; badge « 288 tests » | Corrigés (§4.17), badge recompté à 300 |
 | 2026-09-20 | « 138 Go » (binaire) et « 82,6 Go de DBT » (décimal) additionnés dans le même paragraphe ; « 1 047 séries » (15 téléchargées depuis) ; « écart jamais expliqué » entre 186 volumes et 840 séries | Mesurés à nouveau, unité précisée, écart expliqué ; 840 dossiers IRM annoncés, 834 mesurés, cause non établie |
-| — | `models/dce_mri_p2_negfix/` nomme une expérience | Ouvert (le renommer casserait la démo) ; son `eval_report.json` cite encore `data/silver/dce_mri_p2`, mesure historique laissée telle quelle |
+| — | `models/dce_mri_p2_negfix/` nomme une expérience | Ouvert (le renommer casserait la démo) ; son `eval_report.json` cite encore `data/preprocessed_data/dce_mri_p2` (le chemin d'avant le médaillon), mesure historique laissée telle quelle |
 | 2026-09-20 | Une fonction nommée `extract_dicom_mri_images` téléchargeait en réalité la collection BCS-DBT, et non de l'IRM | Supprimée avec le code DBT |
+| 2026-09-26 | Page « Comment ça marche » : « Entraînement : 186 patients » pour 130 (186 est le corpus, découpé 130 / 28 / 28) ; page de résultat : « 0/186 sur les patients de test » alors qu'il n'y en a que 28 (le 0/186 porte sur tout le corpus, §4.2) ; encadré « Et y a-t-il un cancer ? » présentant le classifieur DBT comme « servi par un autre modèle » six jours après son retrait ; README et doc annonçant le corpus nnU-Net « à construire » alors que 185 cas l'étaient ; « ~30 s par patient » pour 55 s mesurées ; ligne ci-dessus citant `data/silver/…` pour `data/preprocessed_data/…` | Corrigés ; encadré retiré et son absence épinglée par un test ; badge recompté à 209 |
 
 ---
 
@@ -672,7 +724,7 @@ cliniques.
 ```bash
 pip install -e ".[all]"   # la CI, elle, n'installe que .[dev,data]
 ruff check .
-pytest                    # 210 tests, sans GPU ni jeu de données
+pytest                    # 209 tests, sans GPU ni jeu de données
 ```
 
 La [CI](.github/workflows/ci.yml) a deux jobs à chaque push et pull request : `check` (ruff + pytest,

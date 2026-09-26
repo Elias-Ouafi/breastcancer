@@ -73,7 +73,7 @@
     {% endfor %}
   </svg>
 
-  {# Une phrase par étape. Le détail chiffré (7,7 M de paramètres, 186 patients,
+  {# Une phrase par étape. Le détail chiffré (7,7 M de paramètres, 130 patients d'entraînement,
      5 ms/coupe) vivait ici en pleine page ; il est maintenant dans le dépliant,
      où il reste accessible sans faire écran au propos. #}
   <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-3);">
@@ -109,7 +109,7 @@
       <tr><td class="text-muted">Modalité</td><td>DCE-MRI (Duke-Breast-Cancer-MRI)</td></tr>
       <tr><td class="text-muted">Phase utilisée</td><td>2ᵉ post-injection moins pré-injection</td></tr>
       <tr><td class="text-muted">Architecture</td><td>U-Net 2D, 7,7 M de paramètres</td></tr>
-      <tr><td class="text-muted">Entraînement</td><td>186 patients</td></tr>
+      <tr><td class="text-muted">Entraînement</td><td>130 patients (28 en validation, 28 en test)</td></tr>
       <tr><td class="text-muted">Seuil de détection</td><td>0,5</td></tr>
       <tr><td class="text-muted">Calcul</td><td>~5 ms par coupe</td></tr>
     </table>

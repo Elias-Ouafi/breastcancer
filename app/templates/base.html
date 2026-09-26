@@ -403,29 +403,6 @@
             </details>
             {% endblock %}
 
-            {# La décision « cancer ou pas » est un AUTRE modèle, mesuré sur un autre
-               corpus. Ses chiffres sont nommés comme tels et jamais fondus dans les
-               pastilles ci-dessus : emprunter les métriques d'un modèle pour décrire
-               ce qu'un autre vient de répondre est la faute déjà corrigée une fois
-               (DOCUMENTATION.md, P0 du 2026-09-12, /biopsie). #}
-            {% block limits_decision %}
-            <details>
-              <summary>Et « y a-t-il un cancer ? »</summary>
-              <p>Cet écran <strong>localise</strong> une lésion. Il ne dit pas si l'examen
-                porte un cancer — c'est une autre question, servie par un autre modèle,
-                mesuré à part sur le seul corpus à deux classes du projet
-                (<strong>272 patients, 56 cancers</strong>).</p>
-              <p>Ce modèle <strong>ne fonctionne pas</strong>, et c'est écrit ici plutôt
-                que caché : au seuil visé, sa valeur prédictive positive (20,4 %) égale la
-                prévalence du corpus (20,6 %). Autrement dit, apprendre qu'il a répondu
-                « cancer » ne change pas la probabilité qu'il y en ait un. Sa spécificité
-                (20,4 %) est sous ce que donnerait le hasard à la même sensibilité
-                (21,4 %).</p>
-              <p>Il n'y a donc <strong>aucun point de fonctionnement publiable</strong> pour
-                la détection, et rien sur cet écran n'en tient lieu. Le détail chiffré est
-                dans <code>DOCUMENTATION.md</code> (§4.11).</p>
-            </details>
-            {% endblock %}
           </div>
 
           {% block how_link %}
