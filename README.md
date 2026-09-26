@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml/badge.svg)](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
-![Tests : 210](https://img.shields.io/badge/tests-210-brightgreen)
+![Tests : 209](https://img.shields.io/badge/tests-209-brightgreen)
 [![Licence : MIT](https://img.shields.io/badge/licence-MIT-lightgrey)](LICENSE)
 
 > **Research Use Only — Not for diagnostic use.** Outil de recherche, pas un dispositif
@@ -45,7 +45,7 @@ la projection d'intensité maximale.*
 |---|---|
 | **Pipeline de données** (collecte, transformation, validation, lignage) | Opérationnel : 189 patients, 186 volumes dans le corpus de la démo (un par patient), reconstruits depuis le bronze **valeur par valeur identiques** à l'ancien |
 | **Médaillon et purge du bronze** | Opérationnels : le brut n'est supprimé que si chaque corpus qui le lit le détient, et la fonction de suppression **refuse plutôt que de parier**. Exécutée : DBT, puis IRM (822 séries, 63,8 Go) après copie native relue identique |
-| **Corpus nnU-Net** (`mri_nnunet/`) | Code et 46 tests ; validé sur 6 cas réels de bout en bout ; la construction des 186 cas n'est pas encore faite |
+| **Corpus nnU-Net** (`mri_nnunet/`) | Construit : **185 cas** exportés au format `nnUNet_raw`, 4 écartés avec leur raison, rapport de QC écrit ; 46 tests. Le QC a relevé deux défauts du masque de l'organe, à corriger avant l'entraînement |
 | **Orchestration** (Prefect) | Opérationnelle : un flow `download → preprocess → purge → train → evaluate`, chaque étape saute ce qui est fait |
 | **Localisation de lésion** (modèle de la démo) | Fonctionne **quand on lui montre la bonne coupe** : lésion trouvée dans 88 % des cas [IC 82–93 %] sur 28 patients de test. Le choix automatique de la coupe reste faible : 43 % de top-1 |
 | **Nouvelle IRM** (examen jamais annoté) | Opérationnel : `preprocess_dce_mri_exams` prépare un examen sans annotation. Vérifié sur **DICOM brut réel** : le volume produit est **identique bit à bit** à celui du corpus d'entraînement, puis servi par l'app en 3,9 s |
@@ -59,8 +59,9 @@ ce qui distingue un cancer est la **forme** de la lésion, pas sa luminosité. L
 données ont été retirés le 2026-09-20 ; le dernier état qui les contient est le commit `1a364d4`, et
 les mesures restent résumées dans [DOCUMENTATION.md](DOCUMENTATION.md) (§4.4 à §4.15).
 
-**Prochaine étape** : construire les 186 cas nnU-Net, lire le rapport de QC, puis entraîner nnU-Net
-en 5 plis et mesurer la sensibilité lésionnelle en FROC. Duke est une cohorte de cancers : aucune
+**Prochaine étape** : corriger le masque de l'organe et l'indice de contraste relevés par le QC,
+reconstruire le corpus nnU-Net, puis entraîner nnU-Net en 5 plis et mesurer la sensibilité
+lésionnelle en FROC. Duke est une cohorte de cancers : aucune
 spécificité n'y est mesurable, et rien n'est à comparer au programme national de dépistage.
 
 ## Architecture

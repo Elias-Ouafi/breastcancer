@@ -75,37 +75,22 @@ def test_the_imaging_pages_keep_them():
     assert "Dice" in body and "0,53" in body
 
 
-def test_the_page_says_the_detection_question_has_no_operating_point():
-    """The screen localises; it does not decide whether there is a cancer.
+def test_no_page_cites_the_removed_dbt_model():
+    """The exam-level DBT classifier was deleted on 2026-09-20; no screen may cite it.
 
-    Saying nothing about the second question let the first one's numbers stand in for
-    it -- a reader sees "Sensibilité 88 %" on a cancer-detection tool and reads it as
-    the detection rate. The panel now names the gap and the model that owns it.
+    A panel kept describing it as "servie par un autre modèle" after its code was gone,
+    so a reader met figures (272 patients, VPP 20,4 %) for a model the app cannot run.
     """
-    body = render_result()
-    assert "y a-t-il un cancer" in body
-    assert "aucun point de fonctionnement publiable" in body.lower()
+    pages = [render_result(), render("how.html", backend="dce_mri")]
+    for body in pages:
+        assert "y a-t-il un cancer" not in body
+        assert "272 patients" not in body
+        assert "20,4" not in body
 
 
-def test_the_detection_numbers_are_attributed_to_their_own_corpus():
-    """A number in this panel must say which model and which corpus it came from.
-
-    The exam-level figures are measured on 272 patients / 56 cancers; the Dice pills
-    above them on 28 DCE-MRI test patients. Printing the first set without its corpus
-    beside it is how they get read as the second's.
-    """
-    body = render_result()
-    assert "272 patients" in body and "56 cancers" in body
-    assert "20,4 %" in body and "20,6 %" in body
-
-
-def test_the_page_does_not_promote_the_broken_head_into_a_headline_pill():
-    """The exam-level numbers stay in prose, behind a disclosure.
-
-    Adding a "Spécificité 20,4 %" pill next to "Dice 0,53" would put two models'
-    metrics on one row, which is exactly what was removed from /biopsie once already.
-    """
+def test_the_metrics_row_holds_only_the_imaging_model():
+    """Only the DCE-MRI localisation figures sit in the headline pills."""
     body = render_result()
     metrics_row = body.split('<div class="metrics">')[1].split("</div>")[0]
-    assert "20,4" not in metrics_row
+    assert "Dice" in metrics_row
     assert "Spécificité" not in metrics_row
