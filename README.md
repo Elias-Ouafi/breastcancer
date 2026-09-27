@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml/badge.svg)](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
-![Tests : 215](https://img.shields.io/badge/tests-215-brightgreen)
+![Tests : 217](https://img.shields.io/badge/tests-217-brightgreen)
 [![Licence : MIT](https://img.shields.io/badge/licence-MIT-lightgrey)](LICENSE)
 
 > **Research Use Only — Not for diagnostic use.** Outil de recherche, pas un dispositif
@@ -45,7 +45,7 @@ la projection d'intensité maximale.*
 |---|---|
 | **Pipeline de données** (collecte, transformation, validation, lignage) | Opérationnel : 189 patients, 186 volumes dans le corpus de la démo (un par patient), reconstruits depuis le bronze **valeur par valeur identiques** à l'ancien |
 | **Médaillon et purge du bronze** | Opérationnels : le brut n'est supprimé que si chaque corpus qui le lit le détient, et la fonction de suppression **refuse plutôt que de parier**. Exécutée : DBT, puis IRM (822 séries, 63,8 Go) après copie native relue identique |
-| **Corpus nnU-Net** (`mri_nnunet/`) | Construit : **186 cas** exportés au format `nnUNet_raw`, 3 écartés avec leur raison (phase manquante), rapport de QC écrit ; 52 tests. Le masque de l'organe, qui effaçait une partie de la lésion sur 4 cas, est corrigé et vérifié sur tout le corpus |
+| **Corpus nnU-Net** (`mri_nnunet/`) | Construit : **186 cas** exportés au format `nnUNet_raw`, 3 écartés avec leur raison (phase manquante), rapport de QC écrit ; 55 tests. Le masque de l'organe, qui effaçait une partie de la lésion sur 4 cas, est corrigé ; l'indice qui signale une boîte douteuse est calibré sur un témoin négatif (reconstruction à terminer) |
 | **Orchestration** (Prefect) | Opérationnelle : un flow `download → preprocess → purge → train → evaluate`, chaque étape saute ce qui est fait |
 | **Localisation de lésion** (modèle de la démo) | Fonctionne **quand on lui montre la bonne coupe** : lésion trouvée dans 88 % des cas [IC 82–93 %] sur 28 patients de test. Le choix automatique de la coupe reste faible : 43 % de top-1 |
 | **Nouvelle IRM** (examen jamais annoté) | Opérationnel : `preprocess_dce_mri_exams` prépare un examen sans annotation. Vérifié sur **DICOM brut réel** : le volume produit est **identique bit à bit** à celui du corpus d'entraînement, puis servi par l'app en 3,9 s |
@@ -59,8 +59,9 @@ ce qui distingue un cancer est la **forme** de la lésion, pas sa luminosité. L
 données ont été retirés le 2026-09-20 ; le dernier état qui les contient est le commit `1a364d4`, et
 les mesures restent résumées dans [DOCUMENTATION.md](DOCUMENTATION.md) (§4.4 à §4.15).
 
-**Prochaine étape** : remplacer l'indice de contraste relevé par le QC, puis entraîner nnU-Net en
-5 plis et mesurer la sensibilité lésionnelle en FROC. Duke est une cohorte de cancers : aucune
+**Prochaine étape** : terminer la reconstruction du corpus nnU-Net avec le nouvel indice de contraste,
+relire les boîtes qu'il signale, puis entraîner nnU-Net en 5 plis et mesurer la sensibilité
+lésionnelle en FROC. Duke est une cohorte de cancers : aucune
 spécificité n'y est mesurable, et rien n'est à comparer au programme national de dépistage.
 
 ## Architecture

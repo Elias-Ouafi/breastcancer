@@ -108,22 +108,41 @@ def box_volume_ratio(box_voxels, pseudo_voxels):
     return float(box_voxels) / float(pseudo_voxels) if pseudo_voxels else float("inf")
 
 
-def enhancement_contrast(enhancement, pseudo, box, organ):
-    """How far the pseudo-mask stands out from the rest of the organ, in standard deviations.
+def ring_around(box, ring_voxels):
+    """The shell of ``ring_voxels`` (z, y, x) around the bounding box of ``box``, box excluded."""
+    ring = np.zeros(box.shape, dtype=bool)
+    if not box.any():
+        return ring
+    lo = [int(np.where(box.any(axis=tuple(a for a in range(3) if a != k)))[0][0]) for k in range(3)]
+    hi = [int(np.where(box.any(axis=tuple(a for a in range(3) if a != k)))[0][-1]) + 1 for k in range(3)]
+    window = tuple(slice(max(0, lo[k] - int(ring_voxels[k])), hi[k] + int(ring_voxels[k])) for k in range(3))
+    ring[window] = True
+    ring &= box == 0
+    return ring
 
-    ``(mean inside the pseudo-mask - mean of the organ outside the box) / std of that same
-    organ`` on an enhancement volume (post minus pre, z-scored). A lesion enhances, so a box that
-    sits on it gives a clearly positive value; a box that is far too large, or misplaced, gives
-    an ellipsoid full of ordinary tissue and a value near zero. It replaces a first index that
-    compared the box's corners with its centre: the corners of a box drawn around an ellipsoidal
-    lesion are empty *by geometry*, so that index read zero on a perfect box and told nothing.
 
-    A warning signal about the annotation, not a measurement of it: the threshold that reads it
-    (``pseudo_mask.contrast_warn_below``) is a parameter that nothing calibrates. ``nan`` when
-    there is no inside or no reference.
+def enhancement_contrast(enhancement, pseudo, box, organ, ring_voxels):
+    """How far the pseudo-mask stands out from the tissue around its box, in standard deviations.
+
+    ``(mean inside the pseudo-mask - mean of the ring) / std of the ring`` on an enhancement
+    volume, the ring being the organ within ``ring_voxels`` of the box (box excluded). A lesion
+    enhances more than what surrounds it, so a box on it scores clearly positive; a misplaced or
+    far too large box scores near zero.
+
+    Two choices, both measured on the 186 built cases against the same box mirrored into the
+    other breast (DOCUMENTATION.md §4.21):
+
+    * the **enhancement is raw** post minus pre, not the difference of two channels z-scored
+      separately: that difference compresses the scale (median 0.75 sd on the true boxes) and
+      put 65 % of them under a 1.0 sd threshold;
+    * the **reference is local**, not the whole organ: the organ holds the heart and the chest
+      wall, which enhance strongly and inflate the reference's spread.
+
+    A warning signal about the annotation, not a measurement of it: ``nan`` when there is no
+    inside or too small a ring.
     """
-    inside = enhancement[pseudo > 0]
-    reference = enhancement[(organ > 0) & (box == 0)]
+    inside = enhancement[(pseudo > 0) & (organ > 0)]
+    reference = enhancement[ring_around(box, ring_voxels) & (organ > 0)]
     if inside.size == 0 or reference.size < 2:
         return float("nan")
     return float((inside.mean() - reference.mean()) / (reference.std() + 1e-8))

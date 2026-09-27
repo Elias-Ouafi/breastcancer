@@ -2,8 +2,8 @@
 # steps: change a value and the cases whose parameters changed are the only ones redone
 # (each case records the hash of the sections it depends on).
 #
-# Two of these values rest on an assumption nobody has checked against a radiologist and
-# are marked ASSUMPTION: the channels and the contrast threshold.
+# One of these values rests on an assumption nobody has checked against a radiologist and is
+# marked ASSUMPTION: the channels. (The contrast threshold was the other; it is now calibrated.)
 
 seed: 42
 
@@ -113,11 +113,13 @@ pseudo_mask:
   # order in this collection (measured on real series: InstanceNumber 144 -> 1 along z).
   # "position" would read them as ranks along z instead; check with the QC report first.
   slice_basis: instance_number
-  # ASSUMPTION: a pseudo-mask that stands out from the rest of the organ by less than this many
-  # standard deviations of enhancement (see steps.enhancement_contrast) sits on a loose or
-  # misplaced box. Measured on 8 real cases the contrast ran 0.9 to 4.3 sd; 1.0 is where the
-  # weakest begin. Reported, never used to drop a case.
-  contrast_warn_below: 1.0
+  # A pseudo-mask that stands out from the tissue around its box by less than this many standard
+  # deviations of raw enhancement (post - pre; see steps.enhancement_contrast) may sit on a loose
+  # or misplaced box. Calibrated on a negative control: the same box mirrored into the other
+  # breast stays under 0.5 sd in 95 % of the 186 cases, while 3 % of the true boxes fall under it
+  # (DOCUMENTATION.md §4.21). Reported for review, never used to drop a case.
+  contrast_warn_below: 0.5
+  contrast_ring_mm: 10.0          # width of the reference shell around the box
   # The ellipsoid must weigh about pi/6 of its box; a discretised small lesion drifts from it.
   ratio_tolerance: 0.35
   # A pseudo-mask with more than this fraction in the air sits on a box past the skin: logged,

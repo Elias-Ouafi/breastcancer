@@ -312,11 +312,12 @@ def resample(image, grid, transform=None, order=3):
     Order 3 can overshoot below zero near sharp edges; the percentile clip that follows takes
     the overshoot with the rest of the tails.
     """
-    if order != 3:
-        raise ValueError("only B-spline order 3 is configured for images")
+    interpolators = {1: sitk.sitkLinear, 3: sitk.sitkBSpline}   # linear: the contrast index only
+    if order not in interpolators:
+        raise ValueError(f"interpolation order {order} is not configured (1 or 3)")
     return sitk.Resample(sitk.Cast(image, sitk.sitkFloat32), grid,
                          transform if transform is not None else sitk.Transform(3, sitk.sitkIdentity),
-                         sitk.sitkBSpline, 0.0, sitk.sitkFloat32)
+                         interpolators[order], 0.0, sitk.sitkFloat32)
 
 
 def resample_labels(mask, grid, transform=None):

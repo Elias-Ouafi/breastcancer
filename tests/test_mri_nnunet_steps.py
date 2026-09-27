@@ -117,24 +117,46 @@ def _contrast_case():
     return noise, pseudo, box, organ
 
 
+RING = (3, 3, 3)
+
+
 def test_a_box_on_an_enhancing_lesion_stands_out_and_a_box_on_tissue_does_not():
     noise, pseudo, box, organ = _contrast_case()
     on_lesion = noise + 5.0 * pseudo                     # the lesion enhances by 5 sd
-    assert steps.enhancement_contrast(on_lesion, pseudo, box, organ) > 4.0
-    assert abs(steps.enhancement_contrast(noise, pseudo, box, organ)) < 0.5
+    assert steps.enhancement_contrast(on_lesion, pseudo, box, organ, RING) > 4.0
+    assert abs(steps.enhancement_contrast(noise, pseudo, box, organ, RING)) < 0.5
 
 
 def test_the_contrast_does_not_read_an_empty_corner_as_a_loose_box():
-    """The index this replaces read 0 on a perfect box: the corners of a box are empty by geometry."""
+    """An older index read 0 on a perfect box: the corners of a box are empty by geometry."""
     noise, pseudo, box, organ = _contrast_case()
     perfect = noise + 5.0 * pseudo                       # bright exactly in the ellipsoid, dark corners
-    assert steps.enhancement_contrast(perfect, pseudo, box, organ) > 4.0
+    assert steps.enhancement_contrast(perfect, pseudo, box, organ, RING) > 4.0
+
+
+def test_the_reference_is_the_tissue_around_the_box_not_a_distant_enhancing_organ():
+    """The heart enhances strongly; as part of the reference it swamped the lesion (§4.21)."""
+    noise, pseudo, box, organ = _contrast_case()
+    volume = noise + 5.0 * pseudo
+    volume[:, :, :3] += 40.0                             # a bright organ, far from the box
+    assert steps.enhancement_contrast(volume, pseudo, box, organ, RING) > 4.0
+    whole_organ = (volume[pseudo > 0].mean() - volume[(organ > 0) & (box == 0)].mean())         / volume[(organ > 0) & (box == 0)].std()
+    assert whole_organ < 1.0, "the fixture must reproduce the dilution the ring avoids"
+
+
+def test_the_ring_surrounds_the_box_and_excludes_it():
+    box = np.zeros((10, 12, 12), np.uint8)
+    box[4:6, 5:7, 5:7] = 1
+    ring = steps.ring_around(box, (1, 2, 2))
+    assert not ring[box > 0].any()
+    assert ring.sum() == 4 * 6 * 6 - box.sum()
+    assert not steps.ring_around(np.zeros_like(box), (1, 1, 1)).any()
 
 
 def test_the_contrast_is_nan_without_a_pseudo_mask_or_without_a_reference():
     noise, pseudo, box, organ = _contrast_case()
-    assert math.isnan(steps.enhancement_contrast(noise, np.zeros_like(pseudo), box, organ))
-    assert math.isnan(steps.enhancement_contrast(noise, pseudo, box, np.zeros_like(organ)))
+    assert math.isnan(steps.enhancement_contrast(noise, np.zeros_like(pseudo), box, organ, RING))
+    assert math.isnan(steps.enhancement_contrast(noise, pseudo, box, np.zeros_like(organ), RING))
 
 
 # ------------------------------------------------------------------- normalisation
