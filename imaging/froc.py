@@ -395,8 +395,12 @@ def _pairs(prediction_dir, label_dir):
 def run(args):
     records, sizes = [], []
     for case_id, prediction_path, label_path in _pairs(args.predictions, args.labels):
-        probability, spacing = _read_volume(prediction_path)
-        label_volume, _ = _read_volume(label_path)
+        probability, prediction_spacing = _read_volume(prediction_path)
+        label_volume, label_spacing = _read_volume(label_path)
+        # The label carries the geometry: a prediction saved as .npz (nnU-Net's
+        # --save_probabilities) has none, and taking its missing spacing left every lesion
+        # volume as nan, so the whole by-size breakdown collapsed into one "unknown" band.
+        spacing = prediction_spacing if prediction_spacing is not None else label_spacing
         reference = lesions(label_volume, spacing=spacing)
         record = case_record(probability, label_volume, args.detection_threshold,
                              args.min_voxels, spacing, args.criterion, case_id)

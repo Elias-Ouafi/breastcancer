@@ -329,3 +329,32 @@ def test_an_nnunet_prediction_folder_gives_one_pair_per_case(tmp_path):
     assert [case for case, _, _ in pairs] == ["Breast_MRI_007", "Breast_MRI_042"]
     assert all(prediction.endswith(".npz") for _, prediction, _ in pairs)   # scores, not labels
     assert all(label.endswith(".nii.gz") for _, _, label in pairs)
+
+
+def test_lesion_sizes_come_from_the_label_when_the_prediction_has_no_geometry(tmp_path, monkeypatch):
+    """An .npz prediction carries no spacing; the label does, and it is the same grid.
+
+    Reading the missing one left every lesion volume as nan and collapsed the by-size
+    breakdown into a single "unknown" band -- the split the FROC is meant to report.
+    """
+    predictions, labels = tmp_path / "pred", tmp_path / "lab"
+    predictions.mkdir()
+    labels.mkdir()
+    probability, label = make_case([(10, 10, 10)], [(10, 10, 10)], [0.9], shape=(24, 24, 24), half=2)
+    np.savez(predictions / "P1.npz", probabilities=np.stack([1 - probability, probability]))
+    np.save(labels / "P1.npy", label)
+
+    real_read = froc._read_volume
+
+    def read(path):                      # the label's reader is the one with a spacing
+        volume, spacing = real_read(path)
+        return volume, (2.0, 1.0, 1.0) if str(path).endswith(".npy") else spacing
+
+    monkeypatch.setattr(froc, "_read_volume", read)
+    args = froc.build_arg_parser().parse_args(
+        ["--predictions", str(predictions), "--labels", str(labels),
+         "--output", str(tmp_path / "froc.json"), "--min-voxels", "1", "--bootstrap", "50"])
+    report = froc.run(args)
+
+    assert "unknown" not in report["by_lesion_size"]
+    assert sum(b["n_lesions"] for b in report["by_lesion_size"].values()) == 1
