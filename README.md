@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml/badge.svg)](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
-![Tests : 217](https://img.shields.io/badge/tests-217-brightgreen)
+![Tests : 267](https://img.shields.io/badge/tests-267-brightgreen)
 [![Licence : MIT](https://img.shields.io/badge/licence-MIT-lightgrey)](LICENSE)
 
 > **Research Use Only — Not for diagnostic use.** Outil de recherche, pas un dispositif
