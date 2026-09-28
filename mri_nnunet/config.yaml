@@ -126,6 +126,16 @@ pseudo_mask:
   # never used to drop a case (the air part is zeroed and erases nothing).
   warn_in_air_above: 0.10
 
+# --- Splits: the test set and the cross-validation folds ----------------------------------------
+# Decided before any training and written to splits.json (mri_nnunet/splits.py). The test patients
+# are exported to imagesTs, so nnU-Net -- which fits its post-processing on the cross-validation --
+# cannot see them. The folds are stratified by scanner, the only acquisition variable Duke
+# publishes (no site, date anonymised to 1990-01-01).
+splits:
+  test_frac: 0.15             # ~28 of 186 patients, the size of the split the demo model reports on
+  n_folds: 5
+  seed: 42
+
 # --- Export -----------------------------------------------------------------------------------
 export:
   dataset_id: 501

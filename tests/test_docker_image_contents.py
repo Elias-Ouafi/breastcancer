@@ -109,12 +109,23 @@ def _declared_modules():
 
 # Exécuté *dans* le miroir, avec les paquets hors image refusés à l'import.
 PROBE = '''
-import builtins, importlib.util, json, os, sys, sysconfig
+import builtins, importlib.util, json, os, site, sys, sysconfig
 
 AUTORISES = set(json.loads(os.environ["IMAGE_PACKAGES"]))
 BLOQUES = []
 _real_import = builtins.__import__
-_roots = {os.path.normcase(sysconfig.get_paths()[k]) for k in ("purelib", "platlib")}
+# Tous les dossiers ou des paquets tiers peuvent etre installes, pas seulement les deux
+# que sysconfig annonce : sur le Python du Microsoft Store, pip installe dans le site
+# *utilisateur*, que purelib et platlib ne nomment pas. Le garde-fou ne reconnaissait
+# alors aucun paquet comme tiers, ne bloquait rien, et les tests de ce fichier
+# mesuraient la machine au lieu de l'image (le canari plus bas est ce qui l'a dit).
+_candidats = [sysconfig.get_paths()[k] for k in ("purelib", "platlib")]
+_candidats += list(site.getsitepackages()) + [site.getusersitepackages()]
+# Uniquement les dossiers de paquets : getsitepackages() renvoie aussi le prefixe de
+# l'installation, et le prendre pour racine ferait passer la bibliotheque standard
+# elle-meme (__future__, json...) pour un paquet tiers a refuser.
+_roots = {os.path.normcase(p) for p in _candidats
+          if os.path.basename(p.rstrip(os.sep)) in ("site-packages", "dist-packages")}
 
 
 def _is_third_party(top):
