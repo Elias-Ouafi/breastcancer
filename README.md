@@ -8,21 +8,35 @@
 > **Research Use Only — Not for diagnostic use.** Outil de recherche, pas un dispositif
 > médical, non validé cliniquement.
 
+## L'essentiel
+
+- **Un chiffre de détection qui tient debout** : 92,6 % des lésions trouvées [IC 81,5–100] à
+  2 faux positifs par examen, sur 27 patients tenus à l'écart — avec le seuil de réussite écrit avant
+  la mesure et le hasard mesuré à 0,33 %. Il lève le goulot diagnostiqué par le projet lui-même : le
+  modèle 2D ne choisissait la bonne coupe que 43 % du temps, le passage en 3D supprime ce choix.
+- **Une chaîne de données complète et prouvée** : de l'archive DICOM à l'application web — médaillon
+  bronze → silver → gold avec purge du brut qui n'efface qu'après relecture identique (63,8 Go),
+  validation à l'écriture, lignage, orchestration, CI, Docker, 273 tests. La reconstruction depuis le
+  brut est identique valeur par valeur, et un examen neuf donne un volume identique **bit à bit** au
+  corpus d'entraînement.
+- **Une méthode qui attrape ses propres défauts** : la piste initiale a été abandonnée sur mesures
+  négatives, publiées telles quelles (AUC 0,457, soit le hasard). Et à chaque étape, ce sont les gardes
+  du projet qui ont révélé les erreurs — un masque qui effaçait la lésion, un manifeste annonçant
+  249 anomalies pour 13 réelles, un garde-fou de test qui ne bloquait plus rien, un lecteur qui aurait
+  mesuré le fond au lieu de la tumeur.
+
 ## Les résultats en clair
 
-*Se lit sans connaissance du domaine.*
+*Les trois points ci-dessus, sans vocabulaire de spécialiste.*
 
 Une IRM mammaire n'est pas une image : c'est une pile de 150 à 200 coupes, comme les tranches d'un
 pain. La tumeur n'apparaît que sur quelques-unes, et un radiologue les parcourt une à une. **Un
 programme peut-il montrer directement la bonne zone ?**
 
 **Sur 27 examens jamais vus, il a montré la bonne zone dans 25 cas (93 %)**, en signalant au passage
-2 zones à tort par examen.
-
-**Pourquoi ce chiffre est crédible** : les 27 examens étaient mis de côté **avant** l'entraînement,
-dans un dossier séparé ; le seuil de réussite (70 %) était écrit **avant** la mesure ; et le hasard a
-été mesuré — désigner un point au hasard tombe sur la tumeur 3 fois sur 1 000, contre 930 pour le
-programme.
+2 zones à tort par examen. Ces 27 examens étaient mis de côté **avant** l'entraînement : le programme
+ne les avait jamais vus, ni pour apprendre, ni pour se régler. Et désigner un point au hasard dans
+l'examen tombe sur la tumeur 3 fois sur 1 000, contre 930 pour le programme.
 
 **Ce que le programme ne fait pas :**
 
@@ -35,9 +49,8 @@ programme.
   lésion non annotée, si le programme la trouve, lui est comptée comme une erreur.
 - Il n'a **jamais été testé en conditions cliniques**.
 
-**Une piste a été abandonnée** : répondre à « y a-t-il un cancer ? » sur mammographie 3D ne faisait
-pas mieux que le hasard. Les mesures négatives sont publiées plutôt qu'effacées
-([DOCUMENTATION.md](DOCUMENTATION.md), §4.4 à §4.15).
+La piste abandonnée citée plus haut visait « y a-t-il un cancer ? » sur mammographie 3D : le détail
+des mesures est dans [DOCUMENTATION.md](DOCUMENTATION.md), §4.4 à §4.15.
 
 ![Démo : ouverture d'un cas IRM, zone repérée, balayage des coupes, vue MIP](docs/img/demo.gif)
 
@@ -120,16 +133,11 @@ GitHub Actions
 
 ## Ce qui tient le projet
 
-- **Prouver avant de supprimer.** Le brut n'est effacé qu'après relecture identique de sa copie, et la
-  fonction de suppression **refuse plutôt que de parier** : sept mutations sur huit sont attrapées par
-  les tests, la huitième est équivalente.
 - **Mesurer plutôt que supposer.** L'ordre des coupes des boîtes, le recalage, le seuil qui signale une
   boîte douteuse : chacun a été tranché par une mesure contre un témoin, et deux l'ont été **contre**
   l'intuition de départ.
-- **Des gardes qui mesurent ce qu'elles protègent.** Le masque de l'organe effaçait une partie de la
-  lésion sur 4 cas sans alerte ; la garde retenue compte le tissu effacé, pas l'air.
-- **Des tests qui savent échouer** : les gardes sont mises en défaut par des défauts injectés, et les
-  tests dont l'échec passait inaperçu ont été corrigés.
+- **Des tests qui savent échouer.** Les gardes sont mises en défaut par des défauts injectés — sept
+  mutations sur huit attrapées pour la purge du brut, la huitième étant équivalente.
 - **Jamais d'échec silencieux** : un cas illisible ou incohérent laisse une ligne motivée dans
   `exclusions.csv`, et chaque cas ses étapes, paramètres et durées dans un journal.
 
