@@ -754,10 +754,28 @@ qu'elles font dire aux chiffres.
   et en n'en retenant que les dossiers `site-packages` — la première version prenait le préfixe de
   l'installation pour racine et refusait `__future__`.
 
-**Non vérifié.** Aucun FROC n'a été calculé : il n'y a pas encore de modèle. Le découpage n'a pas
-encore été écrit sur le corpus, la reconstruction du §4.21 n'étant pas terminée.
+**Reconstruction terminée, et le manifeste qui racontait l'histoire au lieu du corpus.** Les 153 cas
+restants ont été retraités (médiane 121 s), soit **186 cas et aucune exclusion au traitement** ;
+seuls les trois patients sans phase restent écartés à l'ingestion. Le manifeste annonçait alors
+**249 avertissements** pour un corpus qui en porte **13** : `write_manifest` agrégeait *toutes* les
+lignes de `log/cases.jsonl`, qui est un journal en ajout seul, donc les anomalies de chaque passe
+passée — la plupart citant le seuil de 1,0 σ que le §4.21 a remplacé. Le journal garde l'histoire,
+le manifeste dit ce qui est sur le disque : corrigé, avec un test qui échoue quand on le défait.
 
-**Prochain test.** Terminer la reconstruction, écrire `splits.json`, réexporter, puis entraîner.
+Les 13 avertissements réels : 5 boîtes signalées par le contraste (2,7 %, comme l'étalonnage du
+§4.21 l'annonçait : `_056`, `_065`, `_096`, `_156`, `_169`), 7 recalages refusés faute de gain, et
+`_094`, dont la boîte dépasse la peau. Contraste médian **2,21 σ** (p05 0,73), contre 0,79 avec
+l'ancien indice.
+
+**Le découpage et l'export, exécutés.** 27 patients en test, plis de 30 à 33, chaque scanner réparti
+(par exemple Skyra 3T : 13 patients → 2 en test, puis 2/2/2/2/3). L'export écrit 159 cas dans
+`imagesTr`, 27 dans `imagesTs` et le `splits_final.json` ; vérifié : aucun patient des deux côtés, et
+aucun cas des plis absent de `imagesTr`.
+
+**Non vérifié.** Aucun FROC n'a été calculé : il n'y a pas encore de modèle. L'export n'a pas été
+relu par `nnUNetv2_plan_and_preprocess`, faute d'environnement nnU-Net (point ouvert).
+
+**Prochain test.** Relire les 5 boîtes signalées, puis entraîner nnU-Net sur ces plis.
 
 ---
 
@@ -769,12 +787,12 @@ encore été écrit sur le corpus, la reconstruction du §4.21 n'étant pas term
 |---|---|---|
 | 1 | Construire les 186 cas nnU-Net, lire le QC, exporter `nnUNet_raw` | **Fait** : 185 cas, 4 écartés, export et QC écrits (§4.19) |
 | 1 bis | Corriger le masque de l'organe et reconstruire | **Fait** : seuil de Li, garde sur le tissu effacé, 186 cas (§4.20) |
-| 1 ter | Remplacer l'indice de contraste par le rehaussement post − pré brut | **Fait** (code) : AUC 0,989 contre un témoin reflété, seuil calibré à 0,5 σ (§4.21) ; reconstruction à terminer (33 cas sur 186) |
+| 1 ter | Remplacer l'indice de contraste par le rehaussement post − pré brut | **Fait** : AUC 0,989 contre un témoin reflété, seuil calibré à 0,5 σ (§4.21) ; corpus reconstruit, 186 cas, 5 boîtes signalées (§4.22) |
 | 2 | Métrique principale : composantes connexes 3D, FROC à 0,5 / 1 / 2 / 4 faux positifs par examen, sensibilité par taille de lésion | **Fait** (code) : `imaging/froc.py`, 28 tests, étiquetage 3D vérifié contre `scipy` ; aucune mesure tant qu'aucun modèle n'est entraîné |
 | 3 | Entraîner nnU-Net v2 en 5 plis, 3 graines, intervalles de confiance | À faire (`nnunetv2` est dans l'extra, non installé ici) |
 | 4 | Valider les canaux : pré + post2 est une hypothèse ; comparer à la soustraction seule et aux quatre phases | À faire |
 | 5 | Augmentations IRM (TorchIO), mirroring gauche-droite à valider comme anatomiquement licite | À faire |
-| 6 | Stratification du découpage : le fabricant du scanner est la seule variable disponible ; contrôle de biais scanner | **Fait** (code) : `mri_nnunet/splits.py`, jeu de test dans `imagesTs` et 5 plis stratifiés, 22 tests ; à exécuter une fois la reconstruction finie |
+| 6 | Stratification du découpage : le fabricant du scanner est la seule variable disponible ; contrôle de biais scanner | **Fait** : `mri_nnunet/splits.py`, 27 patients en test, 5 plis stratifiés écrits et exportés (§4.22) |
 | 7 | Sortie « 5 coupes candidates » du classifieur de coupe (16/28 patients en top-5) | À mesurer (§4.3) |
 | 8 | Entraînement en fp32 de bout en bout pour la divergence NaN résiduelle | À faire (§4.2) |
 | 9 | Mesurer le top-1 du choix de coupe sur des IRM neuves non annotées | À faire (§4.16) |
@@ -811,7 +829,7 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 | P1 | Tests d'orchestration exécutés en CI | **Fait** (job `orchestration`) |
 | P1 | Médaillon et purge du bronze | **Fait**, exécuté (DBT puis IRM) |
 | P1 | Corpus nnU-Net : ingestion, traitement, export, QC | **Fait**, construit (186 cas) avec le masque corrigé (§4.20) |
-| P1 | Découpage : jeu de test à l'écart, 5 plis stratifiés par scanner | **Fait** (code, §4.22) ; `splits.json` à écrire après la reconstruction |
+| P1 | Découpage : jeu de test à l'écart, 5 plis stratifiés par scanner | **Fait**, exécuté : 27 en test, 159 en entraînement (§4.22) |
 | P1 | FROC : composantes 3D, sensibilité par faux positifs, IC par patient | **Fait** (code, §4.22) ; aucune mesure avant un modèle entraîné |
 | P2 | Structure `src/`, découpage de `TransformData.py`, build Docker en CI, registre de modèles | À faire |
 | — | Entraînement nnU-Net | À faire (« Prochaines pistes ») |
@@ -822,8 +840,8 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 |---|---|
 | Bronze IRM résiduel | 12 dossiers (0,6 Gio) sans copie en silver : 7 séries des patients 106, 120 et 203, et 5 séries non dynamiques ; à supprimer sur demande |
 | Canaux nnU-Net | pré + post2 est une hypothèse, à comparer (piste 4) |
-| Reconstruction du corpus | Arrêtée à 33 cas sur 186 (machine ~5× plus lente, cause non établie) : relancer `python -m mri_nnunet build`, puis `export` et `qc` (§4.21) |
-| Cas signalés par le contraste | ~3 % des boîtes, à relire (`_096` et `_056` en tête, §4.21) |
+| Cas 094 | Boîte publiée qui dépasse la peau : 19 % du pseudo-masque est dans l'air ; conservé et signalé (§4.20) |
+| Cas signalés par le contraste | 5 boîtes sur 186 à relire : `_056`, `_065`, `_096`, `_156`, `_169` (§4.22) |
 | Environnement nnU-Net | `nnunetv2` non installé ; l'installer dans l'environnement principal changerait `torch` et `numpy` : environnement séparé à décider |
 | Test bit à bit sur DICOM réel | Toujours ignoré depuis la purge IRM : aucun patient n'a encore ses deux phases en bronze. La garantie du §4.16 n'est plus exercée par la suite |
 | Site des acquisitions | Inconnu dans Duke : impossible de stratifier par site |
@@ -910,7 +928,7 @@ cliniques.
 ```bash
 pip install -e ".[all]"   # la CI, elle, n'installe que .[dev,data]
 ruff check .
-pytest                    # 267 tests, sans GPU ni jeu de données
+pytest                    # 268 tests, sans GPU ni jeu de données
 ```
 
 La [CI](.github/workflows/ci.yml) a deux jobs à chaque push et pull request : `check` (ruff + pytest,
