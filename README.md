@@ -1,4 +1,4 @@
-# Cancer du sein en IRM dynamique — pipeline de données et localisation de lésions
+# Cancer du sein en IRM dynamique — trouver la lésion dans l'examen
 
 [![CI](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml/badge.svg)](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
@@ -10,105 +10,75 @@
 
 ## Les résultats en clair
 
-*Cette section se lit sans connaissance du domaine. Le détail technique commence à la section
-suivante.*
+*Se lit sans connaissance du domaine.*
 
-**Le problème.** Une IRM mammaire, ce n'est pas une image : c'est une pile de 150 à 200 coupes,
-comme les tranches d'un pain. La tumeur n'apparaît que sur quelques-unes. Un radiologue les parcourt
-une à une. La question du projet : **un programme peut-il montrer directement la bonne zone ?**
+Une IRM mammaire n'est pas une image : c'est une pile de 150 à 200 coupes, comme les tranches d'un
+pain. La tumeur n'apparaît que sur quelques-unes, et un radiologue les parcourt une à une. **Un
+programme peut-il montrer directement la bonne zone ?**
 
-**Le résultat.** Sur 27 examens que le programme n'avait jamais vus, il a montré la bonne zone dans
-**25 cas sur 27 (93 %)**, en signalant au passage **2 zones à tort par examen** en moyenne.
+**Sur 27 examens jamais vus, il a montré la bonne zone dans 25 cas (93 %)**, en signalant au passage
+2 zones à tort par examen.
 
-**Pourquoi ce chiffre est crédible**, et pas seulement flatteur :
+**Pourquoi ce chiffre est crédible** : les 27 examens étaient mis de côté **avant** l'entraînement,
+dans un dossier séparé ; le seuil de réussite (70 %) était écrit **avant** la mesure ; et le hasard a
+été mesuré — désigner un point au hasard tombe sur la tumeur 3 fois sur 1 000, contre 930 pour le
+programme.
 
-- Les 27 examens étaient **mis de côté avant l'entraînement**, dans un dossier séparé. Le programme
-  ne les a jamais vus, ni pour apprendre, ni pour se régler.
-- Le seuil de réussite (**70 %**) avait été **écrit avant** de lancer la mesure, pas après.
-- Le hasard a été mesuré : en désignant un point au hasard dans l'examen, on tombe sur la tumeur
-  **3 fois sur 1 000**. Le programme est à 930 sur 1 000.
+**Ce que le programme ne fait pas :**
 
-**Ce que le programme ne fait pas**, et qu'il serait malhonnête de laisser croire :
+- **Il ne dit pas s'il y a un cancer.** Toutes les patientes de la base en avaient un : il répond à
+  « où est la lésion ? », jamais à « y en a-t-il une ? ». Ce n'est **pas du dépistage**.
+- **Il ne dessine pas le contour de la tumeur.** La base ne fournit qu'un rectangle grossier : on
+  vérifie qu'il pointe au bon endroit, pas qu'il en épouse la forme.
+- **27 examens, c'est peu** : la marge d'erreur va de 82 % à 100 %. Le chiffre est solide dans sa
+  direction, imprécis dans sa valeur. Les 2 fausses alarmes sont même **surestimées** — une seconde
+  lésion non annotée, si le programme la trouve, lui est comptée comme une erreur.
+- Il n'a **jamais été testé en conditions cliniques**.
 
-- **Il ne dit pas s'il y a un cancer.** Toutes les patientes de la base en avaient un. Il répond à
-  « où est la lésion ? », jamais à « y a-t-il une lésion ? ». Ce n'est donc **pas un outil de
-  dépistage**.
-- **Il ne dessine pas le contour de la tumeur.** La base ne fournit qu'un rectangle grossier autour
-  de chaque lésion : on peut vérifier que le programme pointe au bon endroit, pas qu'il en épouse la
-  forme.
-- **27 examens, c'est peu.** La marge d'erreur statistique va de 82 % à 100 %. Le chiffre est solide
-  dans sa direction, imprécis dans sa valeur exacte.
-- Il n'a **jamais été testé en conditions cliniques**, et ne doit servir à aucune décision médicale.
-
-**Une piste a été abandonnée en route.** Le projet a d'abord essayé de répondre à « y a-t-il un
-cancer ? » sur un autre type d'examen (la mammographie 3D). Les mesures ont montré que le programme
-ne faisait **pas mieux que le hasard**. La piste a été arrêtée, et les résultats négatifs sont
-publiés tels quels plutôt qu'effacés — [DOCUMENTATION.md](DOCUMENTATION.md), §4.4 à §4.15.
-
-**Essayer en une minute** : `pip install -e .` puis `python run_demo.py --open`. Rien à télécharger,
-trois examens réels sont fournis avec le projet.
-
-## Le projet en quelques lignes
-
-**La question** : sur une IRM mammaire dynamique (DCE-MRI), **où sont les lésions cancéreuses**,
-avec quelle sensibilité et au prix de combien de fausses détections.
-
-**Ce que le projet construit pour y répondre** : une chaîne de données complète, de l'archive
-publique jusqu'à une application web.
-
-1. **Collecter** des examens DICOM publics (The Cancer Imaging Archive, collection
-   Duke-Breast-Cancer-MRI), en téléchargements reprenables et protégés par un délai maximal.
-2. **Transformer** ces examens en jeux de données exploitables, selon deux chemins qui ne se
-   mélangent pas : le corpus du modèle de la démo, et un corpus préparé pour **nnU-Net v2** (N4,
-   masque de l'organe, recalage, rééchantillonnage, normalisation dans le masque, pseudo-masques
-   tirés des boîtes de lésion).
-3. **Contrôler et tracer** chaque fichier produit : validation de schéma à l'écriture, manifeste de
-   lignage (quelle source, quels paramètres, quel commit), journal par cas, exclusions motivées.
-4. **Stocker en médaillon** (bronze → silver → gold) et **supprimer le brut** dès que la donnée est
-   en silver, à condition que sa copie ait été relue identique.
-5. **Entraîner et évaluer** avec une méthodologie stricte : découpage par patient, intervalles de
-   confiance par bootstrap sur les patients.
-6. **Servir** le résultat dans une application web qui se lance depuis un simple clone.
-
-**L'objectif personnel** : contribuer, à mon niveau, au secteur médical, et en faire un projet de
-portfolio de **data engineering**. Chaque chiffre publié ici peut être relié à un fichier, un commit
-et un découpage par patient — y compris les chiffres qui disent qu'une piste ne marche pas.
+**Une piste a été abandonnée** : répondre à « y a-t-il un cancer ? » sur mammographie 3D ne faisait
+pas mieux que le hasard. Les mesures négatives sont publiées plutôt qu'effacées
+([DOCUMENTATION.md](DOCUMENTATION.md), §4.4 à §4.15).
 
 ![Démo : ouverture d'un cas IRM, zone repérée, balayage des coupes, vue MIP](docs/img/demo.gif)
 
-*La démo : un cas en un clic, la zone de rehaussement repérée, le balayage des coupes,
-la projection d'intensité maximale.*
+## Démarrage rapide
+
+Rien à télécharger : le modèle et trois examens réels sont versionnés, et la démo n'a besoin que de
+quatre paquets (`torch`, `Flask`, `numpy`, `Pillow`).
+
+```bash
+pip install -e .
+python run_demo.py --open     # préflight, puis http://127.0.0.1:5000
+```
+
+Le préflight **charge le modèle et analyse un vrai cas** avant d'ouvrir le port, et refuse de démarrer
+si le port est occupé — `--check` fait le même contrôle sans servir, `--fast-check` s'arrête à
+l'inventaire des fichiers. Alternative : `docker compose up --build` (image jamais construite ici ni
+en CI, mais son contenu est vérifié sans daemon, §4.17).
+
+Le reste du projet s'installe par extras (`data`, `collect`, `nnunet`, `orchestration`, `dev`), tous
+déclarés dans le seul `pyproject.toml` :
+
+```bash
+pip install -e ".[all]"
+python -m mri_nnunet build            # DICOM → corpus nnU-Net (puis qc, splits, export)
+python -m pipelines.dce_mri --dry-run # le flow Prefect du corpus de la démo, sans rien exécuter
+```
 
 ## Où en est le projet
 
 | Brique | État |
 |---|---|
-| **Pipeline de données** (collecte, transformation, validation, lignage) | Opérationnel : 189 patients, 186 volumes dans le corpus de la démo (un par patient), reconstruits depuis le bronze **valeur par valeur identiques** à l'ancien |
-| **Médaillon et purge du bronze** | Opérationnels : le brut n'est supprimé que si chaque corpus qui le lit le détient, et la fonction de suppression **refuse plutôt que de parier**. Exécutée : DBT, puis IRM (822 séries, 63,8 Go) après copie native relue identique |
-| **Corpus nnU-Net** (`mri_nnunet/`) | Construit : **186 cas** exportés au format `nnUNet_raw`, validés par `verify_dataset_integrity`, 3 écartés avec leur raison ; rapport de QC écrit. Le masque de l'organe, qui effaçait une partie de la lésion sur 4 cas, est corrigé ; l'indice qui signale une boîte douteuse est calibré sur un témoin négatif : **5 boîtes signalées sur 186** |
-| **Découpage** (`mri_nnunet/splits.py`) | **27 patients tenus à l'écart** dans `imagesTs` — nnU-Net ajuste son post-traitement sur la validation croisée, donc un patient laissé là serait vu par les choix qui le jugent — et 5 plis stratifiés par scanner, la seule variable d'acquisition que Duke publie |
-| **Détection 3D** (nnU-Net, pli 0) | **Lésion trouvée dans 92,6 % des examens [IC 81,5–100] à 2 faux positifs par examen**, sur les 27 patients de test. Le hasard vaut 0,33 %. C'est le premier chiffre de détection de bout en bout du projet (§4.23) |
-| **Orchestration** (Prefect) | Opérationnelle : un flow `download → preprocess → purge → train → evaluate`, chaque étape saute ce qui est fait |
-| **Localisation de lésion** (modèle de la démo, 2D) | Fonctionne **quand on lui montre la bonne coupe** : 88 % [IC 82–93 %] sur 28 patients. Le choix automatique de la coupe reste faible (43 % de top-1) — c'est précisément ce que le modèle 3D ci-dessus supprime |
-| **Nouvelle IRM** (examen jamais annoté) | Opérationnel : `preprocess_dce_mri_exams` prépare un examen sans annotation. Vérifié sur **DICOM brut réel** : le volume produit est **identique bit à bit** à celui du corpus d'entraînement, puis servi par l'app en 3,9 s |
-| **Démo** | Se lance depuis un clone, sans téléchargement de données : 4 dépendances (153 Mo sur Windows) au lieu de 68 paquets, et le lanceur **analyse un cas réel avant d'ouvrir le port** |
-
-**Ce qui a été abandonné, et pourquoi.** Le projet a d'abord visé un point de fonctionnement de
-dépistage sur la **tomosynthèse** (collection BCS-DBT) : dire s'il y a un cancer au niveau de
-l'examen. Les mesures sont négatives : ROC-AUC 0,457 [0,369–0,544] sur 272 patients, soit le hasard,
-et une valeur prédictive positive (20,4 %) égale à la prévalence (20,6 %). Le diagnostic converge :
-ce qui distingue un cancer est la **forme** de la lésion, pas sa luminosité. La piste, son code et ses
-données ont été retirés le 2026-09-20 ; le dernier état qui les contient est le commit `1a364d4`, et
-les mesures restent résumées dans [DOCUMENTATION.md](DOCUMENTATION.md) (§4.4 à §4.15).
+| **Détection 3D** (nnU-Net, pli 0) | **92,6 % des lésions trouvées [IC 81,5–100] à 2 faux positifs par examen**, sur 27 patients tenus à l'écart ; le hasard vaut 0,33 % (§4.23) |
+| **Découpage** | 27 patients dans `imagesTs`, hors de portée de nnU-Net qui ajuste son post-traitement sur la validation croisée ; 5 plis stratifiés par scanner, seule variable d'acquisition que Duke publie |
+| **Corpus nnU-Net** (`mri_nnunet/`) | **186 cas** exportés, validés par `verify_dataset_integrity`, 3 écartés avec leur raison ; QC écrit, 5 boîtes douteuses signalées |
+| **Pipeline de données** | 189 patients collectés, 186 volumes ; médaillon bronze → silver → gold, brut purgé une fois la copie relue identique (822 séries, 63,8 Go) |
+| **Orchestration** (Prefect) | Flow `download → preprocess → purge → train → evaluate`, chaque étape saute ce qui est fait |
+| **Modèle 2D de la démo** | 88 % [82–93] **quand on lui montre la bonne coupe**, 43 % de top-1 pour la choisir seul — c'est ce goulot que le modèle 3D supprime |
+| **Nouvelle IRM** | Un examen jamais annoté est préparé et servi en 3,9 s ; sur DICOM brut réel, le volume obtenu est identique **bit à bit** au corpus d'entraînement |
 
 **Prochaine étape** : entraîner les 4 plis restants pour resserrer l'intervalle, et relire les
-5 boîtes que l'indice de contraste signale.
-
-**Comment lire le 92,6 %.** Duke est une cohorte de cancers : aucune spécificité n'y est mesurable,
-et rien n'est à comparer au programme national de dépistage. Le taux de faux positifs est même
-**pessimiste** — une seconde lésion non annotée, si le modèle la trouve, compte comme une fausse
-alarme. Les cibles étant des ellipsoïdes inscrits dans les boîtes publiées, c'est la **détection**
-qui est mesurée, pas la délimitation. Et 27 patients de test donnent un intervalle large.
+5 boîtes signalées.
 
 ## Architecture
 
@@ -132,7 +102,7 @@ flowchart TB
     LINEAGE[/"lineage.py<br/>manifest.json : commit, paramètres, stats"/]
     SILVER[("silver<br/>dce_mri_p2 · dce_mri_nnunet")]
     GOLD[("gold<br/>banque de coupes · nnUNet_raw · cas de démo")]
-    ML["Entraînement et évaluation — imaging/<br/>U-Net 2D · classifieur de coupe<br/>IC bootstrap par patient"]
+    ML["Entraînement et évaluation<br/>nnU-Net 3D · U-Net 2D · FROC<br/>IC bootstrap par patient"]
     ART[("models/ · reports/<br/>checkpoints + métriques")]
     APP["App Flask + API JSON<br/>Docker, lecture seule, local uniquement"]
 
@@ -145,115 +115,42 @@ flowchart TB
     SILVER --> GOLD --> ML --> ART --> APP
 ```
 
-Le corpus nnU-Net garde une copie **native** de toutes les phases avant que le bronze soit purgé :
-c'est ce qui permet de régler l'espacement ou la normalisation après coup sans télécharger à nouveau.
-
-## Démarrage rapide
-
-La démo ne demande aucun téléchargement de données : le modèle et trois cas sont versionnés. Elle n'a
-besoin que de quatre paquets — `torch`, `Flask`, `numpy`, `Pillow` — et pas du reste du pipeline :
-
-```bash
-pip install -e .              # le socle de pyproject.toml : ces quatre paquets seulement
-python run_demo.py --open     # préflight, puis http://127.0.0.1:5000
-```
-
-`run_demo.py` ne se contente pas de vérifier que les fichiers sont là : il **charge le checkpoint et
-analyse un cas** avant d'ouvrir le port, et refuse de démarrer si le port est occupé. `--check` fait
-le même contrôle sans lancer le serveur, `--fast-check` s'en tient à l'inventaire des fichiers.
-
-Ou avec Docker seul — l'image n'a **jamais été construite** ici ni en CI, mais son contenu est vérifié
-sans daemon : les `COPY` suffisent à faire tourner la démo, et ses quatre paquets aussi (§4.17 de
-[DOCUMENTATION.md](DOCUMENTATION.md)) :
-
-```bash
-docker compose up --build
-```
-
-Pour tout le reste, l'installation complète. Un seul fichier déclare les dépendances,
-`pyproject.toml` : le socle est la démo, chaque autre usage est un extra (`data`, `collect`, `nnunet`,
-`orchestration`, `dev`) et `all` les réunit :
-
-```bash
-pip install -e ".[all]"
-```
-
-Le corpus nnU-Net (nécessite les DICOM téléchargés) :
-
-```bash
-pip install -e ".[data,nnunet]"
-python -m mri_nnunet build --ingest-only   # DICOM -> NIfTI natif sans perte, vérifié
-python -m mri_nnunet build                 # + traitement complet
-python -m mri_nnunet qc --n 10             # histogrammes avant/après, coupes avec overlay, statistiques
-python -m mri_nnunet export                # data/gold/nnunet_raw/Dataset501_DukeDCEBreast
-```
-
-Le flow orchestré du corpus de la démo :
-
-```bash
-pip install -e ".[data,collect,orchestration]"
-python -m pipelines.dce_mri --dry-run      # le plan, sans rien exécuter
-python -m pipelines.dce_mri --keep-bronze  # garde les DICOM après le prétraitement
-```
-
-## Choix techniques marquants
-
-- **Prouver avant de supprimer.** Avant de purger, le silver reconstruit depuis le bronze a été comparé
-  à l'ancien : 186 volumes sur 186 identiques. La purge IRM exige en plus une copie native
-  écrite **puis relue identique** au DICOM.
-- **Une fonction de suppression qui refuse.** Un dossier hors du bronze, un fichier silver tronqué,
-  ou l'absence de tout fichier silver : elle ne supprime pas. Sept mutations sur huit sont attrapées
-  par les tests, la huitième est équivalente.
-- **Mesurer plutôt que supposer.** L'ordre des coupes des boîtes suit `InstanceNumber`, qui décroît
-  le long de z : le rehaussement tombe dans la boîte pour 8 patients sur 8 avec cet ordre, contre
-  nul ou négatif pour 6 sur 8 avec l'ordre spatial. Le recalage par information mutuelle
-  dégradait l'alignement dans 7 cas sur 8 : il est remplacé par la corrélation, avec une garde qui
-  ne l'applique que si elle **améliore** l'alignement.
-- **Un examen neuf préparé exactement comme le corpus d'entraînement** : les deux chemins de
-  prétraitement partagent une seule définition de la soustraction, et sur du DICOM brut réel le volume
-  obtenu est identique **bit à bit** à celui du corpus.
-- **Une garde qui mesure ce qu'elle protège.** Le masque de l'organe mettait à 0 une partie de la
-  lésion sur 4 cas, sans alerte. Une première garde (« la lésion est dans le masque ») écartait aussi
-  un cas sain dont la boîte publiée dépasse la peau. La garde retenue compte le **tissu** de lésion
-  effacé, pas l'air : 4,9 à 98 % sur les cas défectueux, 0,2 % au plus après correction.
-- **Des tests qui savent échouer** : les gardes de dépendances et de purge sont mises en défaut par
-  des défauts injectés, et les tests dont l'échec passait inaperçu ont été corrigés.
-- **Jamais d'échec silencieux** : un cas illisible, incomplet ou incohérent laisse une ligne
-  motivée dans `exclusions.csv` ; chaque cas laisse ses étapes, paramètres et durées dans un journal.
-- **Un seul fichier de dépendances** : `pyproject.toml`, avec un test qui échoue si le code importe un
-  paquet qu'aucun extra ne déclare.
-
-## Stack
-
 Python 3.12 · SimpleITK · nnU-Net v2 · pydicom · NumPy · pandas · PyTorch · Prefect · Flask · Docker ·
 GitHub Actions
+
+## Ce qui tient le projet
+
+- **Prouver avant de supprimer.** Le brut n'est effacé qu'après relecture identique de sa copie, et la
+  fonction de suppression **refuse plutôt que de parier** : sept mutations sur huit sont attrapées par
+  les tests, la huitième est équivalente.
+- **Mesurer plutôt que supposer.** L'ordre des coupes des boîtes, le recalage, le seuil qui signale une
+  boîte douteuse : chacun a été tranché par une mesure contre un témoin, et deux l'ont été **contre**
+  l'intuition de départ.
+- **Des gardes qui mesurent ce qu'elles protègent.** Le masque de l'organe effaçait une partie de la
+  lésion sur 4 cas sans alerte ; la garde retenue compte le tissu effacé, pas l'air.
+- **Des tests qui savent échouer** : les gardes sont mises en défaut par des défauts injectés, et les
+  tests dont l'échec passait inaperçu ont été corrigés.
+- **Jamais d'échec silencieux** : un cas illisible ou incohérent laisse une ligne motivée dans
+  `exclusions.csv`, et chaque cas ses étapes, paramètres et durées dans un journal.
 
 ## Organisation du dépôt
 
 ```
-pyproject.toml      dépendances : socle = les 4 paquets de la démo, plus des extras ; l'image Docker lit le socle
+pyproject.toml      dépendances : socle = les 4 paquets de la démo, plus des extras
 ExtractData.py      collecte TCIA : séries dynamiques et table des boîtes
 TransformData.py    DICOM → volumes de la démo (soustraction), purge du bronze
-mri_nnunet/         corpus nnU-Net : ingestion, traitement, pseudo-masques, export, QC (paramètres en YAML)
+mri_nnunet/         corpus nnU-Net : ingestion, traitement, pseudo-masques, découpage, export, QC
+imaging/            jeux de données, U-Net 2D, classifieur de coupe, métriques, FROC
+inference.py        chargement des modèles et prédiction pour l'app
+app/                application Flask (HTML + API JSON)
 validation.py       contrôles de schéma au point unique d'écriture
 lineage.py          manifest.json par dossier
 config.py           tous les chemins, définis une fois
 pipelines/          flow Prefect du corpus de la démo
-http_timeouts.py    délai maximal sur les requêtes du client TCIA
-imaging/            jeux de données, banque de coupes, U-Net, classifieur de coupe, métriques, évaluation
-inference.py        chargement des modèles et prédiction pour l'app
-app/                application Flask (HTML + API JSON)
 tests/              tests sur données synthétiques, sans GPU ni jeu de données
 models/, reports/   checkpoints de la démo et artefacts de mesure versionnés
-scripts/            régénération des cas de démo et du GIF
-DOCUMENTATION.md    toute la documentation détaillée
+DOCUMENTATION.md    contexte, commandes, journal daté de toutes les mesures, points ouverts
 ```
-
-## Documentation
-
-**[DOCUMENTATION.md](DOCUMENTATION.md)** rassemble tout le reste : contexte, données, commandes de
-chaque étape du pipeline, démo et application, journal daté de toutes les mesures (échecs compris),
-pistes, état d'avancement et points ouverts.
 
 ## Licence et données
 
