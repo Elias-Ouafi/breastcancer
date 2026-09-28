@@ -256,3 +256,57 @@ def test_the_spacing_is_held_inside_its_bounds():
 def test_the_smallest_axis_is_measured_in_millimetres():
     extents = np.array([[11.0, 13.0, 8.0], [40.0, 30.0, 20.0]])
     assert steps.smallest_axis_mm(extents, (1.0, 1.0, 1.1)).tolist() == pytest.approx([8.8, 20.0 * 1.1])
+
+
+# --------------------------------------------------------------- the lineage manifest
+
+def _built_case(root, pid, anomalies_per_run):
+    """A case on disk plus one ``cases.jsonl`` line per past run, the last one being current."""
+    import json
+    import os
+
+    native = os.path.join(root, "native", pid)
+    case_dir = os.path.join(root, "cases", pid)
+    os.makedirs(native, exist_ok=True)
+    os.makedirs(case_dir, exist_ok=True)
+    with open(os.path.join(native, "ingest.json"), "w", encoding="utf-8") as handle:
+        json.dump({"phases": [0, 2], "verified_phases": [0, 2]}, handle)
+    for phase in (0, 2):
+        with open(os.path.join(native, f"{pid}_ph{phase}.nii.gz"), "wb") as handle:
+            handle.write(b"x")
+    for name in (f"{pid}_0000.nii.gz", f"{pid}_0001.nii.gz", f"{pid}_label.nii.gz",
+                 f"{pid}_bodymask.nii.gz"):
+        with open(os.path.join(case_dir, name), "wb") as handle:
+            handle.write(b"x")
+    with open(os.path.join(case_dir, "case.json"), "w", encoding="utf-8") as handle:
+        json.dump({"params_hash": "h", "summary": {"contrast": 2.0}}, handle)
+    os.makedirs(os.path.join(root, "log"), exist_ok=True)
+    with open(os.path.join(root, "log", "cases.jsonl"), "a", encoding="utf-8") as handle:
+        for anomalies in anomalies_per_run:
+            handle.write(json.dumps({"patient_id": pid, "stage": "process", "status": "ok",
+                                     "anomalies": anomalies}) + "\n")
+
+
+def test_the_manifest_reports_the_current_anomalies_not_every_past_run(tmp_path):
+    """A rebuilt case must not carry the warnings of the parameters it was rebuilt away from.
+
+    ``cases.jsonl`` is append-only on purpose -- it is the history -- so every rebuild leaves
+    another line. Collecting them all made the manifest announce 249 warnings on a corpus that
+    holds 5, most of them quoting a threshold the pipeline no longer uses.
+    """
+    from mri_nnunet import pipeline
+
+    settings = {"channels": [{"name": "pre", "phase": 0}, {"name": "post2", "phase": 2}]}
+    _built_case(str(tmp_path), "P1", [["stands out by only 0.20 sd from the organ (< 1.0)"],
+                                      []])
+    _built_case(str(tmp_path), "P2", [["an old one"],
+                                      ["stands out by only 0.19 sd from the tissue around its box (< 0.5)"]])
+
+    import json
+
+    path = pipeline.write_manifest(str(tmp_path), "raw", settings, spacing_mm=1.25)
+    manifest = json.load(open(path, encoding="utf-8"))
+
+    assert manifest["validation_warnings"] == [
+        "P2: stands out by only 0.19 sd from the tissue around its box (< 0.5)"]
+    assert sorted(manifest["cases"]) == ["P1", "P2"]

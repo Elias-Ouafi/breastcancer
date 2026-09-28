@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml/badge.svg)](https://github.com/Elias-Ouafi/breastcancer/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
-![Tests : 217](https://img.shields.io/badge/tests-217-brightgreen)
+![Tests : 273](https://img.shields.io/badge/tests-273-brightgreen)
 [![Licence : MIT](https://img.shields.io/badge/licence-MIT-lightgrey)](LICENSE)
 
 > **Research Use Only — Not for diagnostic use.** Outil de recherche, pas un dispositif
@@ -45,9 +45,11 @@ la projection d'intensité maximale.*
 |---|---|
 | **Pipeline de données** (collecte, transformation, validation, lignage) | Opérationnel : 189 patients, 186 volumes dans le corpus de la démo (un par patient), reconstruits depuis le bronze **valeur par valeur identiques** à l'ancien |
 | **Médaillon et purge du bronze** | Opérationnels : le brut n'est supprimé que si chaque corpus qui le lit le détient, et la fonction de suppression **refuse plutôt que de parier**. Exécutée : DBT, puis IRM (822 séries, 63,8 Go) après copie native relue identique |
-| **Corpus nnU-Net** (`mri_nnunet/`) | Construit : **186 cas** exportés au format `nnUNet_raw`, 3 écartés avec leur raison (phase manquante), rapport de QC écrit ; 55 tests. Le masque de l'organe, qui effaçait une partie de la lésion sur 4 cas, est corrigé ; l'indice qui signale une boîte douteuse est calibré sur un témoin négatif (reconstruction à terminer) |
+| **Corpus nnU-Net** (`mri_nnunet/`) | Construit : **186 cas** exportés au format `nnUNet_raw`, validés par `verify_dataset_integrity`, 3 écartés avec leur raison ; rapport de QC écrit. Le masque de l'organe, qui effaçait une partie de la lésion sur 4 cas, est corrigé ; l'indice qui signale une boîte douteuse est calibré sur un témoin négatif : **5 boîtes signalées sur 186** |
+| **Découpage** (`mri_nnunet/splits.py`) | **27 patients tenus à l'écart** dans `imagesTs` — nnU-Net ajuste son post-traitement sur la validation croisée, donc un patient laissé là serait vu par les choix qui le jugent — et 5 plis stratifiés par scanner, la seule variable d'acquisition que Duke publie |
+| **Détection 3D** (nnU-Net, pli 0) | **Lésion trouvée dans 92,6 % des examens [IC 81,5–100] à 2 faux positifs par examen**, sur les 27 patients de test. Le hasard vaut 0,33 %. C'est le premier chiffre de détection de bout en bout du projet (§4.23) |
 | **Orchestration** (Prefect) | Opérationnelle : un flow `download → preprocess → purge → train → evaluate`, chaque étape saute ce qui est fait |
-| **Localisation de lésion** (modèle de la démo) | Fonctionne **quand on lui montre la bonne coupe** : lésion trouvée dans 88 % des cas [IC 82–93 %] sur 28 patients de test. Le choix automatique de la coupe reste faible : 43 % de top-1 |
+| **Localisation de lésion** (modèle de la démo, 2D) | Fonctionne **quand on lui montre la bonne coupe** : 88 % [IC 82–93 %] sur 28 patients. Le choix automatique de la coupe reste faible (43 % de top-1) — c'est précisément ce que le modèle 3D ci-dessus supprime |
 | **Nouvelle IRM** (examen jamais annoté) | Opérationnel : `preprocess_dce_mri_exams` prépare un examen sans annotation. Vérifié sur **DICOM brut réel** : le volume produit est **identique bit à bit** à celui du corpus d'entraînement, puis servi par l'app en 3,9 s |
 | **Démo** | Se lance depuis un clone, sans téléchargement de données : 4 dépendances (153 Mo sur Windows) au lieu de 68 paquets, et le lanceur **analyse un cas réel avant d'ouvrir le port** |
 
@@ -59,10 +61,14 @@ ce qui distingue un cancer est la **forme** de la lésion, pas sa luminosité. L
 données ont été retirés le 2026-09-20 ; le dernier état qui les contient est le commit `1a364d4`, et
 les mesures restent résumées dans [DOCUMENTATION.md](DOCUMENTATION.md) (§4.4 à §4.15).
 
-**Prochaine étape** : terminer la reconstruction du corpus nnU-Net avec le nouvel indice de contraste,
-relire les boîtes qu'il signale, puis entraîner nnU-Net en 5 plis et mesurer la sensibilité
-lésionnelle en FROC. Duke est une cohorte de cancers : aucune
-spécificité n'y est mesurable, et rien n'est à comparer au programme national de dépistage.
+**Prochaine étape** : entraîner les 4 plis restants pour resserrer l'intervalle, et relire les
+5 boîtes que l'indice de contraste signale.
+
+**Comment lire le 92,6 %.** Duke est une cohorte de cancers : aucune spécificité n'y est mesurable,
+et rien n'est à comparer au programme national de dépistage. Le taux de faux positifs est même
+**pessimiste** — une seconde lésion non annotée, si le modèle la trouve, compte comme une fausse
+alarme. Les cibles étant des ellipsoïdes inscrits dans les boîtes publiées, c'est la **détection**
+qui est mesurée, pas la délimitation. Et 27 patients de test donnent un intervalle large.
 
 ## Architecture
 

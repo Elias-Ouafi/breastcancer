@@ -3,6 +3,7 @@
     python -m mri_nnunet build                    # ingest + process every patient (hours)
     python -m mri_nnunet build --patients Breast_MRI_037 --limit 3   # try it on a few first
     python -m mri_nnunet spacing                  # box distribution and the spacing it implies
+    python -m mri_nnunet splits                   # test set + 5 folds, stratified by scanner
     python -m mri_nnunet export                   # the nnUNet_raw dataset, in gold
     python -m mri_nnunet qc --n 10                # histograms, overlays, aggregate statistics
 
@@ -38,6 +39,8 @@ def build_arg_parser():
 
     sub.add_parser("spacing", help="box-size distribution and the chosen spacing")
 
+    sub.add_parser("splits", help="held-out test set and 5 folds stratified by scanner")
+
     e = sub.add_parser("export", help="write the nnUNet_raw dataset")
     e.add_argument("--nnunet-raw", default=config.NNUNET_RAW_DIR)
 
@@ -63,6 +66,15 @@ def main(argv=None):
         from . import spacing
 
         print(json.dumps(spacing.describe(args.silver_dir, settings), indent=2))
+    elif args.command == "splits":
+        from . import splits
+
+        assignment, path = splits.build(args.silver_dir, settings)
+        print(json.dumps({k: v for k, v in assignment.items() if k not in ("folds", "test", "trainval")},
+                         indent=2))
+        print(f"test: {len(assignment['test'])} patients, "
+              + ", ".join(f"fold {i}: {len(f['val'])}" for i, f in enumerate(assignment["folds"])))
+        print(path)
     elif args.command == "export":
         from . import export
 

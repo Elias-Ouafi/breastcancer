@@ -517,10 +517,17 @@ def write_manifest(out_dir, raw_dir, settings, spacing_mm):
     for pid in sorted(held_cases(out_dir, settings)):
         record = _load_json(os.path.join(cases_dir, pid, "case.json"))
         cases[pid] = {**record["summary"], "case_id": pid}
-    warnings = []
+    # The last processing line of each case, not every line it ever wrote. ``cases.jsonl`` is
+    # an append-only journal: a case rebuilt under new parameters leaves its old anomalies
+    # there for good, and collecting them all described the history instead of the corpus --
+    # 249 warnings where the corpus holds 5, most of them quoting a threshold that no longer
+    # exists. The journal keeps the history; the manifest states what is on disk now.
+    latest = {}
     for line in _read_jsonl(os.path.join(out_dir, "log", "cases.jsonl")):
         if line.get("stage") == "process" and line.get("patient_id") in cases:
-            warnings += [f"{line['patient_id']}: {a}" for a in line.get("anomalies", [])]
+            latest[line["patient_id"]] = line
+    warnings = sorted(f"{pid}: {a}" for pid, line in latest.items()
+                      for a in line.get("anomalies", []))
     return lineage.write_manifest(
         out_dir, source=raw_dir,
         parameters={"pipeline": "mri_nnunet.pipeline.build", "spacing_mm": spacing_mm,
