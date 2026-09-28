@@ -54,8 +54,9 @@ données ont été retirés le 2026-09-20. Le dernier état qui les contient est
 Duke est une cohorte de cancers (prévalence 100 %) : une **spécificité n'y est pas mesurable**, et
 aucun résultat ne doit être présenté comme une comparaison au programme national de dépistage. La
 mesure adaptée est la sensibilité lésionnelle en fonction du nombre de faux positifs par examen
-(FROC), avec intervalle de confiance : elle n'est **pas encore mise en place** (`imaging/evaluate.py`
-donne la sensibilité et les faux positifs à un seul seuil, par coupe).
+(FROC), avec intervalle de confiance. Elle est en place depuis le 2026-09-28 (`imaging/froc.py`) et
+donne **92,6 % [81,5 – 100] à 2 faux positifs par examen** sur 27 patients tenus à l'écart (§4.23).
+`imaging/evaluate.py` reste la mesure de l'ancien modèle 2D : un seul seuil, par coupe.
 
 ---
 
@@ -812,6 +813,76 @@ prétraitement nnU-Net (`nnUNetv2_plan_and_preprocess`) n'ont pas été lancés,
 **Prochain test.** Relire les 5 boîtes signalées, planifier, puis entraîner un pli et mesurer le temps
 par époque sur 8 Go avant d'engager 5 plis.
 
+### 4.23 Le premier chiffre de détection du projet : nnU-Net 3D, pli 0 (2026-09-28)
+
+**Conclusion.** Sur les **27 patients tenus à l'écart**, jamais vus à l'entraînement, le modèle
+trouve la lésion dans **92,6 % des examens [IC95 81,5 – 100] à 2 faux positifs par examen**. C'est le
+premier chiffre du projet qui réponde à « on lui donne un examen, trouve-t-il la lésion ». Le seuil
+de décision — 70 % à 2 FP, borne basse au-dessus de 50 % — avait été **annoncé avant** de voir le
+résultat.
+
+| Faux positifs / examen | Sensibilité (centre dans la boîte) | IC95 | Critère de recouvrement |
+|---|---|---|---|
+| 0,5 | 81,5 % | 37,0 – 92,6 | 81,5 % |
+| 1 | 85,2 % | 70,4 – 96,3 | 88,9 % |
+| **2** | **92,6 %** | **81,5 – 100** | 96,3 % |
+| 4 | 92,6 % | 81,5 – 100 | 96,3 % |
+
+**Le critère n'est pas complaisant**, et c'est mesuré plutôt que supposé : un point tiré au hasard
+tombe dans la boîte **0,33 %** du temps sur le volume entier, **0,64 %** en se restreignant au tissu
+(2 000 tirages par cas). Le pseudo-masque occupe 0,062 % du volume en médiane.
+
+**Détail.** Médiane de 2 faux positifs par examen (53 au total, 5 au maximum) ; deux lésions manquées
+à tout seuil (`_021`, `_025`) ; score médian des lésions trouvées 1,0, minimum 0,705. Par taille :
+**14 sur 14** au-dessus de 10 000 mm³, **11 sur 13** entre 1 000 et 10 000 mm³. Validation interne de
+nnU-Net sur les 32 cas du pli : Dice 0,546, et **30 cas sur 32 avec un recouvrement non nul**.
+
+**Ce que cela change.** L'ancien chemin 2D ne trouvait la bonne coupe que dans 43 % des cas, et 0 %
+par la confiance du segmenteur (§4.2, §4.3) : le goulot était la **sélection**, pas la segmentation.
+Un modèle 3D sur le volume entier supprime ce goulot par construction, et la mesure le confirme.
+
+**Ce que cela ne dit pas.** Duke ne contient que des cancers : aucune spécificité n'est mesurable. Le
+taux de faux positifs est **pessimiste** — une seconde lésion non annotée, si elle est trouvée,
+compte comme une fausse alarme. Les cibles sont des ellipsoïdes : la détection est mesurée, pas la
+délimitation. Le jeu de test ne contient **aucune lésion sous 1 000 mm³**, donc rien ne peut être dit
+des petites. Et 27 patients donnent un intervalle large, ce qui est la limite dominante ici.
+
+**Ce qu'il a fallu corriger pour mesurer, et que seule la mesure a révélé.**
+- **Le plan de nnU-Net ne tient pas sur cette carte.** Son lot de 2 réserve 7,65 Gio sur 8,0 Gio et
+  s'effondre à 1,68 s par itération ; avec un lot de 1 et le même patch de 96 × 160 × 160, 0,30 s.
+  Le GPU à 100 % pendant le premier essai était trompeur : il tournait à 100 % **en pataugeant**.
+- **Les processus d'augmentation mouraient** (`OSError: WinError 6`, descripteur invalide) parce que
+  le processus était lancé en arrière-plan **sans entrée standard valide** : lancé avec `< /dev/null`,
+  ils démarrent. Le multiprocessing du Python du Microsoft Store, lui, fonctionne — vérifié à part.
+- Époques : 13 min (lot 2) → 230 s (lot 1, augmentation dans le processus principal) → **89 s**
+  (lot 1, 4 processus), soit 6 h 30 pour 250 époques. Un facteur 9 entre le premier essai et le bon.
+- **Deux entraînements ont tourné en parallèle pendant 20 minutes** sans que rien ne le signale :
+  arrêter la tâche tue le shell, pas le processus petit-fils. Les époques doublaient ; le chiffre de
+  508 s d'alors n'est pas une mesure.
+- **Dans le code d'évaluation** : les probabilités de nnU-Net arrivent en `(classe, z, y, x)` avec le
+  fond en premier — lire le canal 0 aurait mesuré le FROC sur le fond et fait conclure à un mauvais
+  modèle ; un dossier de prédictions contient deux fichiers par cas, ce qui notait chaque examen deux
+  fois ; et l'espacement, lu sur le `.npz` qui n'en porte pas, rendait toutes les tailles de lésion
+  indéfinies.
+
+**Reproduire.** `models/nnunet/` n'est pas versionné (le checkpoint pèse 246 Mo) ; les rapports le
+sont : `reports/froc_fold0.json` et `reports/froc_fold0_overlap.json`, avec le détail par cas.
+
+```bash
+# environnement dedie, voir « Prerequis et installation »
+C:\nnv\Scripts\nnUNetv2_train 501 3d_fullres 0 -tr nnUNetTrainer_250epochs < /dev/null
+C:\nnv\Scripts\nnUNetv2_predict -i .../imagesTs -o .../fold0_test -d 501 -c 3d_fullres -f 0 \
+    -tr nnUNetTrainer_250epochs --save_probabilities < /dev/null
+python -m imaging.froc --predictions .../fold0_test --labels .../labelsTs --output reports/froc_fold0.json
+```
+
+**Non vérifié.** Les 4 autres plis ne sont pas entraînés : le chiffre publié vient d'**un seul pli**,
+et l'intervalle ne reflète que les 27 patients de test. 250 époques au lieu des 1 000 par défaut. Le
+post-traitement que nnU-Net choisit d'habitude sur la validation croisée n'a pas été appliqué.
+
+**Prochain test.** Les 4 plis restants (environ 25 h) pour resserrer l'intervalle, et la relecture des
+5 boîtes signalées.
+
 ---
 
 ## Prochaines pistes
@@ -823,9 +894,8 @@ par époque sur 8 Go avant d'engager 5 plis.
 | 1 | Construire les 186 cas nnU-Net, lire le QC, exporter `nnUNet_raw` | **Fait** : 185 cas, 4 écartés, export et QC écrits (§4.19) |
 | 1 bis | Corriger le masque de l'organe et reconstruire | **Fait** : seuil de Li, garde sur le tissu effacé, 186 cas (§4.20) |
 | 1 ter | Remplacer l'indice de contraste par le rehaussement post − pré brut | **Fait** : AUC 0,989 contre un témoin reflété, seuil calibré à 0,5 σ (§4.21) ; corpus reconstruit, 186 cas, 5 boîtes signalées (§4.22) |
-| 2 | Métrique principale : composantes connexes 3D, FROC à 0,5 / 1 / 2 / 4 faux positifs par examen, sensibilité par taille de lésion | **Fait** (code) : `imaging/froc.py`, 28 tests, étiquetage 3D vérifié contre `scipy` ; aucune mesure tant qu'aucun modèle n'est entraîné |
-| 3 | Entraîner nnU-Net v2 en 5 plis, 3 graines, intervalles de confiance | À faire : environnement `C:
-nv` prêt (GPU vérifié), export validé par `verify_dataset_integrity` (§4.22) |
+| 2 | Métrique principale : composantes connexes 3D, FROC à 0,5 / 1 / 2 / 4 faux positifs par examen, sensibilité par taille de lésion | **Fait et mesuré** : 92,6 % [81,5–100] à 2 FP/examen sur 27 patients de test (§4.23) |
+| 3 | Entraîner nnU-Net v2 en 5 plis, 3 graines, intervalles de confiance | **Pli 0 fait** (250 époques, 6 h 30, §4.23) ; les 4 autres plis restent à entraîner (~25 h) pour resserrer l'intervalle |
 | 4 | Valider les canaux : pré + post2 est une hypothèse ; comparer à la soustraction seule et aux quatre phases | À faire |
 | 5 | Augmentations IRM (TorchIO), mirroring gauche-droite à valider comme anatomiquement licite | À faire |
 | 6 | Stratification du découpage : le fabricant du scanner est la seule variable disponible ; contrôle de biais scanner | **Fait** : `mri_nnunet/splits.py`, 27 patients en test, 5 plis stratifiés écrits et exportés (§4.22) |
@@ -854,6 +924,7 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 | 2026-09-26 | Indice de contraste remplacé : rehaussement brut contre un anneau de 10 mm, seuil calibré sur des boîtes reflétées (§4.21) |
 | 2026-09-26 | Masque de l'organe corrigé (seuil de Li, garde sur le tissu de lésion effacé), corpus nnU-Net reconstruit : 186 cas, `_118` récupéré (§4.20) |
 | 2026-09-26 | Audit de la démo : les trois cas, l'API et les erreurs vérifiés dans l'app ; deux chiffres faux et l'encadré DBT retirés des pages (« Écarts doc ↔ code ») |
+| 2026-09-28 | Découpage stratifié et FROC 3D écrits avant tout entraînement, export validé par nnU-Net (§4.22) ; pli 0 entraîné et mesuré : **92,6 % à 2 faux positifs par examen** sur 27 patients tenus à l'écart (§4.23) |
 | 2026-09-16 | **P0 portfolio** : README réorienté data engineering, licence MIT, citations TCIA, GIF de démo, documentation unique en français |
 
 ### Feuille de route
@@ -866,9 +937,9 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 | P1 | Médaillon et purge du bronze | **Fait**, exécuté (DBT puis IRM) |
 | P1 | Corpus nnU-Net : ingestion, traitement, export, QC | **Fait**, construit (186 cas) avec le masque corrigé (§4.20) |
 | P1 | Découpage : jeu de test à l'écart, 5 plis stratifiés par scanner | **Fait**, exécuté : 27 en test, 159 en entraînement (§4.22) |
-| P1 | FROC : composantes 3D, sensibilité par faux positifs, IC par patient | **Fait** (code, §4.22) ; aucune mesure avant un modèle entraîné |
+| P1 | FROC : composantes 3D, sensibilité par faux positifs, IC par patient | **Fait et mesuré** : 92,6 % à 2 FP/examen (§4.23) |
 | P2 | Structure `src/`, découpage de `TransformData.py`, build Docker en CI, registre de modèles | À faire |
-| — | Entraînement nnU-Net | À faire (« Prochaines pistes ») |
+| — | Entraînement nnU-Net | **Pli 0 fait** (§4.23) ; 4 plis restants |
 
 ### Points ouverts
 
@@ -878,7 +949,9 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 | Canaux nnU-Net | pré + post2 est une hypothèse, à comparer (piste 4) |
 | Cas 094 | Boîte publiée qui dépasse la peau : 19 % du pseudo-masque est dans l'air ; conservé et signalé (§4.20) |
 | Cas signalés par le contraste | 5 boîtes sur 186 à relire : `_056`, `_065`, `_096`, `_156`, `_169` (§4.22) |
-| Prétraitement nnU-Net | Seule l'empreinte est extraite ; `nnUNetv2_plan_and_preprocess` et l'entraînement restent à lancer (§4.22) |
+| Un seul pli entraîné | Le 92,6 % vient du pli 0 ; les 4 autres (~25 h) resserreraient l'intervalle, que les 27 patients de test dominent de toute façon (§4.23) |
+| Petites lésions | Aucune lésion sous 1 000 mm³ dans le jeu de test : la sensibilité sur les petites lésions reste inconnue (§4.23) |
+| Lot de 1 imposé par la carte | Le plan de nnU-Net vise 8 Go et ne tient pas ici : `batch_size` forcé à 1 dans `nnUNetPlans.json` (sauvegarde `.bak`), patch complet conservé (§4.23) |
 | Test bit à bit sur DICOM réel | Toujours ignoré depuis la purge IRM : aucun patient n'a encore ses deux phases en bronze. La garantie du §4.16 n'est plus exercée par la suite |
 | Site des acquisitions | Inconnu dans Duke : impossible de stratifier par site |
 | Trois patients sans phase pré ou post2 | `Breast_MRI_106`, `_120`, `_203` : sautés par les deux corpus ; leurs séries restent en bronze |
@@ -964,7 +1037,7 @@ cliniques.
 ```bash
 pip install -e ".[all]"   # la CI, elle, n'installe que .[dev,data]
 ruff check .
-pytest                    # 268 tests, sans GPU ni jeu de données
+pytest                    # 273 tests, sans GPU ni jeu de données
 ```
 
 La [CI](.github/workflows/ci.yml) a deux jobs à chaque push et pull request : `check` (ruff + pytest,
