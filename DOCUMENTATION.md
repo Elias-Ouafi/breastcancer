@@ -3,7 +3,32 @@
 > Outil de recherche, pas un dispositif
 > médical. Aucune décision clinique ne doit en dépendre.
 
+## En une page, sans jargon
+
+**Ce que fait le projet.** Une IRM mammaire est une pile de 150 à 200 coupes ; la tumeur n'apparaît
+que sur quelques-unes. Le projet construit la chaîne complète qui va de l'archive publique jusqu'à une
+application qui **montre la zone suspecte** sur l'examen.
+
+**Le résultat, sur 27 examens jamais vus** : la bonne zone est montrée dans **25 cas sur 27 (93 %)**,
+avec **2 zones signalées à tort par examen** en moyenne. Pour comparaison, désigner un point au hasard
+tombe sur la tumeur 3 fois sur 1 000. Le seuil de réussite (70 %) avait été fixé **avant** la mesure.
+
+**Ce que ce chiffre ne couvre pas.** Le programme ne dit **pas** s'il y a un cancer : toutes les
+patientes de la base en avaient un, et la question posée est « où », jamais « si ». Il ne dessine pas
+le contour de la tumeur, la base ne fournissant qu'un rectangle grossier. Et 27 examens donnent une
+marge d'erreur large (82 % à 100 %).
+
+**Une piste abandonnée, publiée quand même.** La détection de cancer sur mammographie 3D ne faisait
+pas mieux que le hasard : la piste a été arrêtée et les mesures négatives sont conservées (§4.4 à
+§4.15), parce qu'un projet qui n'affiche que ses réussites ne se vérifie pas.
+
+Le détail de chaque affirmation ci-dessus est dans le journal des mesures, §4.23 pour le résultat
+principal.
+
+---
+
 ## Sommaire
+0. [En une page, sans jargon](#en-une-page-sans-jargon)
 1. [Contexte et objectif](#contexte-et-objectif)
 2. [Données](#données)
 3. [Pipeline : fonctionnement et commandes](#pipeline--fonctionnement-et-commandes)
@@ -402,6 +427,12 @@ doivent pas.
 | `python run_demo.py --fast-check` | Inventaire des fichiers seulement, sans charger le modèle |
 | `python run_demo.py --port 5001` | Autre port |
 
+**Ouvrir `127.0.0.1`, pas `localhost`.** Le serveur n'écoute que sur l'IPv4, par choix : `localhost`
+se résout parfois d'abord en IPv6 (`::1`), et le navigateur affiche alors une erreur de connexion sur
+un serveur qui fonctionne. `run_demo.py --open` ouvre déjà la bonne adresse ; la remarque vaut pour
+une adresse tapée à la main. Vérifié le 2026-09-28 : sur cette machine, `localhost:5057` échoue quand
+`127.0.0.1:5057` répond.
+
 **Le port est vérifié avant de démarrer.** Sous Windows, une deuxième instance se liait
 sans erreur à un port que werkzeug tenait déjà (SO_REUSEADDR) : elle affichait
 « Running on http://127.0.0.1:5000 » pendant que le système continuait de router vers le
@@ -411,7 +442,8 @@ refuse de démarrer en nommant le port et l'alternative (§4.17).
 ### Déroulé conseillé
 
 1. Cliquer sur **Cas 1** (pas de sélecteur de fichier à manipuler en direct).
-2. Dérouler le résultat : verdict et temps de calcul (~70 ms à chaud, ~0,6 s au premier
+2. Dérouler le résultat : verdict et temps de calcul (**111 à 123 ms à chaud**, mesuré le
+   2026-09-28 sur trois appels ; ~0,6 s au premier
    appel), coupe annotée avec le cadre sur la zone de rehaussement, **curseur** entre les
    coupes (la lésion apparaît, culmine, disparaît), **Vue MIP** (projection d'intensité
    maximale), *Détail technique* dépliable.
@@ -987,6 +1019,8 @@ tests se recompte, il ne s'estime pas — et le badge se recompte avec le texte.
 | 2026-09-19 | Badge README « 254 tests » contre 267 dans le texte ; `crop=True` par défaut alors que le corpus servi est en pleine trame ; message d'erreur d'`imaging/dataset.py` renvoyant à une fonction cassée ; `SimpleITK`/`itk`/`itkwidgets` déclarés mais importés nulle part | Corrigés (§4.16), badge recompté à 287 |
 | 2026-09-20 | « Port déjà utilisé → `--port 5001` » laissait croire qu'une erreur s'affichait : sous Windows le second lanceur affichait son bandeau de succès ; zone de dépôt annonçant DICOM/NIfTI sous un backend qui ne lit que `.npz` ; préflight qui ne chargeait jamais le modèle ; badge « 288 tests » | Corrigés (§4.17), badge recompté à 300 |
 | 2026-09-20 | « 138 Go » (binaire) et « 82,6 Go de DBT » (décimal) additionnés dans le même paragraphe ; « 1 047 séries » (15 téléchargées depuis) ; « écart jamais expliqué » entre 186 volumes et 840 séries | Mesurés à nouveau, unité précisée, écart expliqué ; 840 dossiers IRM annoncés, 834 mesurés, cause non établie |
+| 2026-09-28 | « ~70 ms à chaud » pour le calcul d'un cas : 111, 111 et 123 ms mesurés sur trois appels à `/api/predict` | Corrigé, valeur et date de mesure écrites |
+| 2026-09-28 | La charte graphique décrivait une palette sombre à primaire cyan (`--bg`, `--primary: #2FB6C9`) que l'app n'a jamais implémentée : elle utilise des jetons `--color-*`, un document clair `#F3F2F2` et un accent rouge `#EC3013` | Section réécrite depuis `base.html` et `inference.py` |
 | — | `models/dce_mri_p2_negfix/` nomme une expérience | Ouvert (le renommer casserait la démo) ; son `eval_report.json` cite encore `data/preprocessed_data/dce_mri_p2` (le chemin d'avant le médaillon), mesure historique laissée telle quelle |
 | 2026-09-20 | Une fonction nommée `extract_dicom_mri_images` téléchargeait en réalité la collection BCS-DBT, et non de l'IRM | Supprimée avec le code DBT |
 | 2026-09-26 | Page « Comment ça marche » : « Entraînement : 186 patients » pour 130 (186 est le corpus, découpé 130 / 28 / 28) ; page de résultat : « 0/186 sur les patients de test » alors qu'il n'y en a que 28 (le 0/186 porte sur tout le corpus, §4.2) ; encadré « Et y a-t-il un cancer ? » présentant le classifieur DBT comme « servi par un autre modèle » six jours après son retrait ; README et doc annonçant le corpus nnU-Net « à construire » alors que 185 cas l'étaient ; « ~30 s par patient » pour 55 s mesurées ; ligne ci-dessus citant `data/silver/…` pour `data/preprocessed_data/…` | Corrigés ; encadré retiré et son absence épinglée par un test ; badge recompté à 209 |
@@ -997,38 +1031,37 @@ tests se recompte, il ne s'estime pas — et le badge se recompte avec le texte.
 
 ## Partie 3 — Charte graphique
 
-Appliquée à l'application (`app/templates/base.html`, cadre de lésion dans `inference.py`).
+**Relevée dans le code le 2026-09-28**, pas décidée sur le papier : les valeurs ci-dessous sont
+celles de `app/templates/base.html` et du cadre tracé dans `inference.py`. La charte décrite
+jusqu'ici (palette sombre, primaire cyan `#2FB6C9`, jetons `--bg` / `--primary`) n'a jamais été
+implémentée — voir « Écarts doc ↔ code ».
 
-**Positionnement** : *instrument de diagnostic* — rigueur, lisibilité radiologique. Inspiré
-du vocabulaire de la perfusion DCE (cinétique de rehaussement) : fonds sombres de station
-de lecture, une couleur froide « signal », un accent chaud « rehaussement ». **Interdit** :
-ruban rose, dégradés « féminins », cœurs, imagerie compassionnelle. Ton sobre, factuel,
-jamais alarmiste, toujours accompagné de *Research Use Only — Not for diagnostic use*.
+**Positionnement** : *instrument de lecture*, sobre et factuel. La page est un document clair posé
+sur un cadre sombre, avec un seul accent chaud réservé à la lésion et aux actions principales.
+**Interdit** : ruban rose, dégradés « féminins », cœurs, imagerie compassionnelle. Ton jamais
+alarmiste, toujours accompagné de *Research Use Only — Not for diagnostic use*.
 
-| Rôle | Token | Hex |
+| Rôle | Jeton | Hex |
 |---|---|---|
-| Fond principal | `--bg` | `#0B0F14` |
-| Surface | `--surface` | `#141A22` |
-| Surface haute | `--surface-2` | `#1E2733` |
-| Bordure | `--border` | `#2A3644` |
-| Texte / secondaire | `--text` / `--text-muted` | `#E8EDF2` / `#93A1B0` |
-| **Primaire (signal froid)** | `--primary` / `--primary-700` | `#2FB6C9` / `#1B7F8E` |
-| **Accent (rehaussement)** | `--accent` | `#FF7A59` |
-| Accent secondaire (perfusion haute) | `--accent-2` | `#F2C14E` |
-| Succès / alerte / danger | `--success` / `--warning` / `--danger` | `#3FB98A` / `#E4B34A` / `#E5544B` |
+| Fond du document | `--color-bg` | `#F3F2F2` |
+| Surface | `--color-surface` | `#EAE9E9` |
+| Cadre de page (autour du document) | — | `#0B0D10` |
+| Texte | `--color-text` | `#201E1D` |
+| **Accent (lésion, action principale)** | `--color-accent` | `#EC3013` |
+| Accent secondaire | `--color-accent-2` | `#E15B47` |
+| Succès / alerte | `--color-ok` / `--color-warn` | `#2F7D52` / `#8A6A10` |
 
-Superposition de lésion : rampe `#1B7F8E → #2FB6C9 → #F2C14E → #FF7A59`, opacité 45–60 %.
-Pendant clair (documents) : fond `#F7F9FB`, surface `#FFFFFF`, texte `#0B0F14`, bordure
-`#DCE3EA`.
+Deux rampes de neutres et d'accents (`--color-neutral-100` à `900`, `--color-accent-100` à `900`)
+couvrent les états intermédiaires. Le **cadre de lésion** dessiné sur la coupe est un rectangle
+`rgb(255, 122, 89)` de 2 px, jamais un aplat : il désigne sans masquer l'anatomie.
 
-Typographie (licences OFL) : **Space Grotesk** (titres), **Inter** (corps), **IBM Plex
-Mono** (mesures). Échelle 12 · 14 · 16 · 20 · 24 · 32 · 40 px ; interlignage 1,5 (corps),
-1,15 (titres).
+Typographie : **Archivo** (Google Fonts, licence OFL) pour les titres comme pour le corps, en 800
+pour les titres. Les chiffres de performance sont affichés dans des pastilles, jamais comme un
+verdict clinique.
 
-**À faire** : accent chaud réservé à la lésion et aux actions principales, police mono pour
-tout chiffre, contraste AA minimum. **À éviter** : plus d'un accent chaud par écran,
-superposition opaque qui masque l'anatomie, chiffres de performance présentés comme
-cliniques.
+**À faire** : contraste AA minimum, accent chaud réservé à la lésion et aux actions principales.
+**À éviter** : plus d'un accent chaud par écran, superposition opaque sur l'anatomie, chiffres de
+performance présentés comme cliniques.
 
 ---
 

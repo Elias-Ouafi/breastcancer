@@ -8,6 +8,46 @@
 > **Research Use Only — Not for diagnostic use.** Outil de recherche, pas un dispositif
 > médical, non validé cliniquement.
 
+## Les résultats en clair
+
+*Cette section se lit sans connaissance du domaine. Le détail technique commence à la section
+suivante.*
+
+**Le problème.** Une IRM mammaire, ce n'est pas une image : c'est une pile de 150 à 200 coupes,
+comme les tranches d'un pain. La tumeur n'apparaît que sur quelques-unes. Un radiologue les parcourt
+une à une. La question du projet : **un programme peut-il montrer directement la bonne zone ?**
+
+**Le résultat.** Sur 27 examens que le programme n'avait jamais vus, il a montré la bonne zone dans
+**25 cas sur 27 (93 %)**, en signalant au passage **2 zones à tort par examen** en moyenne.
+
+**Pourquoi ce chiffre est crédible**, et pas seulement flatteur :
+
+- Les 27 examens étaient **mis de côté avant l'entraînement**, dans un dossier séparé. Le programme
+  ne les a jamais vus, ni pour apprendre, ni pour se régler.
+- Le seuil de réussite (**70 %**) avait été **écrit avant** de lancer la mesure, pas après.
+- Le hasard a été mesuré : en désignant un point au hasard dans l'examen, on tombe sur la tumeur
+  **3 fois sur 1 000**. Le programme est à 930 sur 1 000.
+
+**Ce que le programme ne fait pas**, et qu'il serait malhonnête de laisser croire :
+
+- **Il ne dit pas s'il y a un cancer.** Toutes les patientes de la base en avaient un. Il répond à
+  « où est la lésion ? », jamais à « y a-t-il une lésion ? ». Ce n'est donc **pas un outil de
+  dépistage**.
+- **Il ne dessine pas le contour de la tumeur.** La base ne fournit qu'un rectangle grossier autour
+  de chaque lésion : on peut vérifier que le programme pointe au bon endroit, pas qu'il en épouse la
+  forme.
+- **27 examens, c'est peu.** La marge d'erreur statistique va de 82 % à 100 %. Le chiffre est solide
+  dans sa direction, imprécis dans sa valeur exacte.
+- Il n'a **jamais été testé en conditions cliniques**, et ne doit servir à aucune décision médicale.
+
+**Une piste a été abandonnée en route.** Le projet a d'abord essayé de répondre à « y a-t-il un
+cancer ? » sur un autre type d'examen (la mammographie 3D). Les mesures ont montré que le programme
+ne faisait **pas mieux que le hasard**. La piste a été arrêtée, et les résultats négatifs sont
+publiés tels quels plutôt qu'effacés — [DOCUMENTATION.md](DOCUMENTATION.md), §4.4 à §4.15.
+
+**Essayer en une minute** : `pip install -e .` puis `python run_demo.py --open`. Rien à télécharger,
+trois examens réels sont fournis avec le projet.
+
 ## Le projet en quelques lignes
 
 **La question** : sur une IRM mammaire dynamique (DCE-MRI), **où sont les lésions cancéreuses**,
