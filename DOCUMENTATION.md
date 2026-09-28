@@ -103,35 +103,50 @@ et le champ magnétique du scanner sont la seule variable d'acquisition disponib
 ### Stockage en médaillon : bronze → silver → gold
 
 ```
-data/                                    43,5 Gio  ignoré par git, sauf les trois cas de démo
-├── bronze/tcia/                          0,6 Gio  zone de transit : la source telle que publiée, jamais
-│   │                                              réécrite, supprimée une fois la série en silver
-│   ├── duke_mri/                                  12 dossiers restants : 7 séries de 3 patients sans
-│   │                                              copie en silver et 5 séries non dynamiques
-│   └── Annotation_Boxes.xlsx                      les boîtes de lésion (jamais purgées : minuscules)
+data/                                    31,1 Gio  ignoré par git, sauf les trois cas de démo
+├── bronze/tcia/                         52,0 Kio  zone de transit, vidée : la source telle que publiée,
+│   └── Annotation_Boxes.xlsx                      jamais réécrite. Il ne reste que les boîtes de lésion
 ├── silver/
 │   ├── dce_mri_p2/                       5,0 Gio  corpus de la démo : un .npz par patient, un canal
-│   └── dce_mri_nnunet/                  32,2 Gio  corpus nnU-Net (mri_nnunet/)
+│   └── dce_mri_nnunet/                  26,1 Gio  corpus nnU-Net (mri_nnunet/)
 │       ├── native/                      26,1 Gio  NIfTI sans perte, RAS, toutes les phases : 186
-│       │                                          patients, ~144 Mio chacun
-│       ├── cases/                        6,1 Gio  186 cas traités : canaux normalisés, pseudo-masque,
-│       │                                          masque de l'organe, case.json
-│       ├── qc/                                    rapport de QC : 10 cas tirés (graine 42) + agrégat
+│       │                                          patients, ~144 Mio chacun. **C'est la source**
+│       ├── splits.json · spacing.json             le découpage et l'espacement choisis
+│       ├── qc/                           2,6 Mio  rapport de QC : 10 cas tirés (graine 42) + agrégat
 │       ├── registry.csv · exclusions.csv          ce qu'il contient, ce qu'il a écarté et pourquoi
-│       └── log/cases.jsonl                        étapes, paramètres, durées et anomalies de chaque cas
-└── gold/                                 5,8 Gio  dérivé de silver et reconstructible
-    ├── slice_bank_p2/                    5,7 Gio  banque de coupes (memmap)
-    ├── nnunet_raw/                      (6,1 Gio) Dataset501_DukeDCEBreast : 186 cas, en liens physiques
-    │                                              vers cases/, donc sans espace disque en plus
+│       ├── manifest.json                          lignage : commit, paramètres, résumé par cas
+│       └── log/cases.jsonl               1,7 Mio  étapes, paramètres, durées et anomalies de chaque cas
+└── gold/                                13,7 Mio  dérivé de silver et reconstructible
     └── demo_cases/                      13,7 Mio  les trois cas de démo, seuls fichiers versionnés
-models/                                  70,9 Mio  checkpoints + les métriques qui les justifient
-reports/                                  6,2 Kio  rapports JSON
+models/                                 514,0 Mio  checkpoints de la démo (versionnés) + nnU-Net (non versionné)
+reports/                                 68,0 Kio  rapports JSON, dont le FROC du §4.23
 docs/img/                                 0,6 Mio  images de la documentation
 ```
 
-Tailles mesurées le 2026-09-26 avec `du -sb`, en unités binaires (1 Gio = 2³⁰ octets, comme `du -h`),
-**après les purges et la construction du corpus nnU-Net**. `du` compte une seule fois un fichier en
-liens physiques : le total ne compte pas l'export `nnunet_raw` en double.
+Tailles mesurées le 2026-09-28 avec `du -sb`, en unités binaires (1 Gio = 2³⁰ octets, comme `du -h`),
+**après le ménage de fin de projet** décrit ci-dessous.
+
+### Ce qui a été supprimé, et comment le reconstruire
+
+Le 2026-09-28, 18 Gio de données **dérivées** ont été supprimées, le projet ayant livré ses mesures.
+Rien de ce qui a été effacé n'est une source : chaque ligne se reconstruit par une commande, à partir
+de `native/` et de `Annotation_Boxes.xlsx`.
+
+| Supprimé | Taille | Reconstruire avec | Coût |
+|---|---|---|---|
+| `silver/dce_mri_nnunet/cases/` | 6,2 Gio | `python -m mri_nnunet build` | ~2 h |
+| `gold/nnunet_raw/` | (liens) | `python -m mri_nnunet splits` puis `export` | quelques secondes |
+| `gold/nnunet_preprocessed/` | 5,4 Gio | `nnUNetv2_plan_experiment` puis `nnUNetv2_preprocess` | ~3 min |
+| `gold/nnunet_predictions/` | 551 Mio | `nnUNetv2_predict` (le checkpoint est conservé) | ~10 min |
+| `gold/slice_bank_p2/` | 5,8 Gio | `imaging/slicebank.py` depuis `dce_mri_p2` | ~20 min |
+| `bronze/tcia/duke_mri/` | 623 Mio | retélécharger depuis TCIA | heures |
+| `models/dbt/`, `models/dce_mri/` | 60 Mio | restes de smoke tests, rien à reconstruire | — |
+
+**Ce qui est conservé parce qu'il ne se reconstruit pas** : `native/` (la source, le bronze étant
+purgé), `dce_mri_p2/` (le corpus sur lequel le modèle servi a été entraîné), le checkpoint nnU-Net
+(6 h 30 de GPU) et toute la traçabilité — `splits.json`, `registry.csv`, `exclusions.csv`,
+`manifest.json`, le journal par cas et le rapport de QC. Les rapports de mesure (`reports/`) et les
+trois cas de démo sont versionnés dans git.
 
 **Le bronze est une zone de transit, pas une archive.** Dès qu'une série est en silver
 **dans tous les corpus qui la lisent**, son dossier DICOM est supprimé : la donnée n'est plus
@@ -977,7 +992,7 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 
 | Point | Détail |
 |---|---|
-| Bronze IRM résiduel | 12 dossiers (0,6 Gio) sans copie en silver : 7 séries des patients 106, 120 et 203, et 5 séries non dynamiques ; à supprimer sur demande |
+| Bronze IRM résiduel | **Supprimé le 2026-09-28** : les 12 dossiers sans copie en silver sont partis avec le ménage de fin de projet ; seule la table des boîtes reste |
 | Canaux nnU-Net | pré + post2 est une hypothèse, à comparer (piste 4) |
 | Cas 094 | Boîte publiée qui dépasse la peau : 19 % du pseudo-masque est dans l'air ; conservé et signalé (§4.20) |
 | Cas signalés par le contraste | 5 boîtes sur 186 à relire : `_056`, `_065`, `_096`, `_156`, `_169` (§4.22) |
