@@ -174,6 +174,23 @@ que quatre paquets, et l'écart avec le reste est mesuré au §4.17 (68 paquets 
 n'y figure pas, si le socle grossit, ou si le code importe un paquet qu'aucun extra ne déclare. Le
 `Dockerfile` lit le socle avec `tomllib` plutôt que de le recopier. La CI installe `.[dev,data]`.
 
+**L'entraînement nnU-Net vit dans son propre environnement**, `C:\nnv` sur cette machine. Deux
+raisons : `nnunetv2` impose `torch` et `numpy` plus récents que ceux du projet, et son installation
+casserait la démo ; et un chemin court évite la limite de longueur de chemin de Windows.
+
+```bash
+python -m venv C:\nnv
+C:\nnv\Scripts\python -m pip install nnunetv2
+# puis, et seulement ensuite, remettre un torch CUDA :
+C:\nnv\Scripts\python -m pip uninstall -y torch torchvision
+C:\nnv\Scripts\python -m pip install --index-url https://download.pytorch.org/whl/cu128 torch torchvision
+```
+
+**L'ordre et la désinstallation ne sont pas décoratifs** (§4.22) : `pip install nnunetv2` remplace un
+torch CUDA par celui de PyPI, qui est **CPU sous Windows** ; et réinstaller la même version depuis
+l'index CUDA ne fait rien, pip jugeant que `2.14.0+cpu` satisfait `==2.14.0`. La preuve que le GPU
+sert est un calcul réellement exécuté dessus, pas `torch.cuda.is_available()`.
+
 ### Pipeline DCE-MRI orchestré (Prefect)
 
 Les cinq étapes — téléchargement, prétraitement, purge du bronze, entraînement,
@@ -772,10 +789,28 @@ l'ancien indice.
 `imagesTr`, 27 dans `imagesTs` et le `splits_final.json` ; vérifié : aucun patient des deux côtés, et
 aucun cas des plis absent de `imagesTr`.
 
-**Non vérifié.** Aucun FROC n'a été calculé : il n'y a pas encore de modèle. L'export n'a pas été
-relu par `nnUNetv2_plan_and_preprocess`, faute d'environnement nnU-Net (point ouvert).
+**L'export validé par nnU-Net lui-même, et le piège qui rendait le GPU invisible.** Un environnement
+dédié (`C:\nnv`) porte `nnunetv2` 2.8.1 sans toucher à l'environnement du projet.
+`nnUNetv2_extract_fingerprint -d 501 --verify_dataset_integrity` passe **sans erreur** sur les 159 cas
+d'entraînement : le nommage, le `dataset.json`, les géométries et les labels sont ceux qu'attend la
+bibliothèque, ce que nos propres tests ne pouvaient qu'imiter. L'empreinte donne trois espacements
+distincts (la règle d'anisotropie laisse son z natif à certains cas), des formes médianes de
+141 × 230 × 272, et surtout — nnU-Net mesurant l'intensité **dans le label** — des moyennes de
+**1,49 σ** (pré) et **2,04 σ** (post2) au-dessus du masque de l'organe : une confirmation
+indépendante de l'indice de contraste du §4.21 (médiane 2,21 σ).
 
-**Prochain test.** Relire les 5 boîtes signalées, puis entraîner nnU-Net sur ces plis.
+Le piège : `pip install nnunetv2` **remplace** un torch CUDA par le torch de PyPI, qui est en version
+CPU sous Windows (`2.14.0+cpu`, `cuda None`). Pire, réinstaller avec `torch==2.14.0` depuis l'index
+CUDA ne change rien — pip considère `2.14.0+cpu` comme satisfaisant la contrainte. Il faut
+désinstaller puis réinstaller depuis l'index. Le contrôle qui l'a montré n'est pas
+`torch.cuda.is_available()` mais un **produit matriciel réellement exécuté** sur le GPU, avec
+`sm_120` (Blackwell) présent dans `torch.cuda.get_arch_list()`.
+
+**Non vérifié.** Aucun FROC n'a été calculé : il n'y a pas encore de modèle. La planification et le
+prétraitement nnU-Net (`nnUNetv2_plan_and_preprocess`) n'ont pas été lancés, seule l'empreinte l'a été.
+
+**Prochain test.** Relire les 5 boîtes signalées, planifier, puis entraîner un pli et mesurer le temps
+par époque sur 8 Go avant d'engager 5 plis.
 
 ---
 
@@ -789,7 +824,8 @@ relu par `nnUNetv2_plan_and_preprocess`, faute d'environnement nnU-Net (point ou
 | 1 bis | Corriger le masque de l'organe et reconstruire | **Fait** : seuil de Li, garde sur le tissu effacé, 186 cas (§4.20) |
 | 1 ter | Remplacer l'indice de contraste par le rehaussement post − pré brut | **Fait** : AUC 0,989 contre un témoin reflété, seuil calibré à 0,5 σ (§4.21) ; corpus reconstruit, 186 cas, 5 boîtes signalées (§4.22) |
 | 2 | Métrique principale : composantes connexes 3D, FROC à 0,5 / 1 / 2 / 4 faux positifs par examen, sensibilité par taille de lésion | **Fait** (code) : `imaging/froc.py`, 28 tests, étiquetage 3D vérifié contre `scipy` ; aucune mesure tant qu'aucun modèle n'est entraîné |
-| 3 | Entraîner nnU-Net v2 en 5 plis, 3 graines, intervalles de confiance | À faire (`nnunetv2` est dans l'extra, non installé ici) |
+| 3 | Entraîner nnU-Net v2 en 5 plis, 3 graines, intervalles de confiance | À faire : environnement `C:
+nv` prêt (GPU vérifié), export validé par `verify_dataset_integrity` (§4.22) |
 | 4 | Valider les canaux : pré + post2 est une hypothèse ; comparer à la soustraction seule et aux quatre phases | À faire |
 | 5 | Augmentations IRM (TorchIO), mirroring gauche-droite à valider comme anatomiquement licite | À faire |
 | 6 | Stratification du découpage : le fabricant du scanner est la seule variable disponible ; contrôle de biais scanner | **Fait** : `mri_nnunet/splits.py`, 27 patients en test, 5 plis stratifiés écrits et exportés (§4.22) |
@@ -842,7 +878,7 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 | Canaux nnU-Net | pré + post2 est une hypothèse, à comparer (piste 4) |
 | Cas 094 | Boîte publiée qui dépasse la peau : 19 % du pseudo-masque est dans l'air ; conservé et signalé (§4.20) |
 | Cas signalés par le contraste | 5 boîtes sur 186 à relire : `_056`, `_065`, `_096`, `_156`, `_169` (§4.22) |
-| Environnement nnU-Net | `nnunetv2` non installé ; l'installer dans l'environnement principal changerait `torch` et `numpy` : environnement séparé à décider |
+| Prétraitement nnU-Net | Seule l'empreinte est extraite ; `nnUNetv2_plan_and_preprocess` et l'entraînement restent à lancer (§4.22) |
 | Test bit à bit sur DICOM réel | Toujours ignoré depuis la purge IRM : aucun patient n'a encore ses deux phases en bronze. La garantie du §4.16 n'est plus exercée par la suite |
 | Site des acquisitions | Inconnu dans Duke : impossible de stratifier par site |
 | Trois patients sans phase pré ou post2 | `Breast_MRI_106`, `_120`, `_203` : sautés par les deux corpus ; leurs séries restent en bronze |
