@@ -321,29 +321,75 @@ def sensitivity_by_lesion_size(records, sizes_mm3, fp_rate=2.0, edges=(1000.0, 1
 
 # --------------------------------------------------------------------------- command line
 
+def foreground_probability(array, lesion_class=1):
+    """The lesion probability map from an array that may still carry its class axis.
+
+    ``nnUNetv2_predict --save_probabilities`` writes ``(n_classes, Z, Y, X)``: background first,
+    lesion second. Taking ``array[0]`` there would score the FROC on the background channel and
+    report a model that finds nothing -- so the class axis is removed explicitly, and a volume
+    that already has three dimensions is passed through untouched.
+    """
+    array = np.asarray(array)
+    if array.ndim == 4:
+        if array.shape[0] <= lesion_class:
+            raise ValueError(f"no class {lesion_class} in a probability array of shape {array.shape}")
+        return array[lesion_class]
+    if array.ndim != 3:
+        raise ValueError(f"expected a 3D volume or a 4D (class, z, y, x) array, got {array.shape}")
+    return array
+
+
 def _read_volume(path):
     """A prediction or label volume from ``.npy``/``.npz`` (numpy) or ``.nii.gz`` (SimpleITK)."""
     if path.endswith(".npy"):
-        return np.load(path), None
+        return foreground_probability(np.load(path)), None
     if path.endswith(".npz"):
         with np.load(path) as data:
-            key = "probability" if "probability" in data.files else data.files[0]
-            return data[key], None
+            # "probabilities" is nnU-Net's own key; "probability" and the first array are the
+            # shapes this repo's own exports take.
+            key = next((k for k in ("probabilities", "probability") if k in data.files),
+                       data.files[0])
+            return foreground_probability(data[key]), None
     from mri_nnunet import sitk_io  # lazy: SimpleITK is the `nnunet` extra, not a base dependency
 
     image = sitk_io.read_nifti(path)
     return sitk_io.to_array(image), tuple(image.GetSpacing())[::-1]
 
 
+def _case_id(name):
+    """``Breast_MRI_037.nii.gz`` -> ``Breast_MRI_037`` (both extensions of a .nii.gz)."""
+    return name.split(".")[0]
+
+
+def _by_case(directory, preferred=(".npz", ".npy", ".nii.gz")):
+    """``{case id: path}``, one file per case, the first extension of ``preferred`` that exists.
+
+    A folder of nnU-Net predictions holds **two** files per case -- ``<case>.nii.gz`` (the
+    labels it decided on) and ``<case>.npz`` (the probabilities ``--save_probabilities``
+    wrote) -- plus a ``.pkl``. Pairing on file names would score every exam twice, once on a
+    map whose only values are 0 and 1, and the thresholds swept over that are meaningless.
+    The probabilities win because the FROC needs a score per candidate.
+    """
+    found = {}
+    for name in sorted(os.listdir(directory)):
+        extension = next((e for e in preferred if name.endswith(e)), None)
+        if extension is None:
+            continue
+        case = _case_id(name)
+        rank = preferred.index(extension)
+        if case not in found or rank < found[case][0]:
+            found[case] = (rank, os.path.join(directory, name))
+    return {case: path for case, (_, path) in found.items()}
+
+
 def _pairs(prediction_dir, label_dir):
-    for name in sorted(os.listdir(prediction_dir)):
-        if not name.endswith((".nii.gz", ".npy", ".npz")):
+    predictions = _by_case(prediction_dir)
+    labels = _by_case(label_dir, preferred=(".nii.gz", ".npy", ".npz"))
+    for case, path in sorted(predictions.items()):
+        if case not in labels:
+            log.warning("no label for %s, skipped", case)
             continue
-        label = os.path.join(label_dir, name)
-        if not os.path.exists(label):
-            log.warning("no label for %s, skipped", name)
-            continue
-        yield name.split(".")[0], os.path.join(prediction_dir, name), label
+        yield case, path, labels[case]
 
 
 def run(args):

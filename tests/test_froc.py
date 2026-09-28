@@ -273,3 +273,59 @@ def test_a_whole_exam_goes_from_volumes_to_an_interval():
     got = froc.bootstrap_sensitivity(records, (1.0,), n_resamples=200, seed=0)["1.0"]
     assert got["sensitivity"] == pytest.approx(0.5)
     assert got["lo"] < 0.5 < got["hi"]
+
+
+# --------------------------------------------------------------- reading predictions
+
+def test_the_lesion_channel_is_taken_from_a_saved_probability_array():
+    """nnU-Net writes (class, z, y, x), background first.
+
+    Reading channel 0 would score the FROC on the background and report a model that finds
+    nothing -- the failure would look like a bad model, not like a bad reader.
+    """
+    background = np.zeros((4, 4, 4))
+    lesion = np.ones((4, 4, 4)) * 0.9
+    stacked = np.stack([background, lesion])
+    assert froc.foreground_probability(stacked).max() == pytest.approx(0.9)
+    assert froc.foreground_probability(lesion).max() == pytest.approx(0.9)   # already 3D
+
+
+def test_a_probability_array_without_the_lesion_class_is_refused():
+    with pytest.raises(ValueError, match="no class 1"):
+        froc.foreground_probability(np.zeros((1, 4, 4, 4)))
+    with pytest.raises(ValueError, match="expected a 3D volume"):
+        froc.foreground_probability(np.zeros((4, 4)))
+
+
+def test_nnunet_npz_predictions_are_read_with_their_own_key(tmp_path):
+    path = os.path.join(tmp_path, "case.npz")
+    lesion = np.zeros((4, 4, 4))
+    lesion[1, 1, 1] = 0.77
+    np.savez(path, probabilities=np.stack([1 - lesion, lesion]))
+    volume, _ = froc._read_volume(path)
+    assert volume.shape == (4, 4, 4)
+    assert volume.max() == pytest.approx(0.77)
+
+
+def test_an_nnunet_prediction_folder_gives_one_pair_per_case(tmp_path):
+    """Two files per case (.nii.gz labels and .npz probabilities), plus a .pkl: one exam each.
+
+    Counting both would score every exam twice, the second time on a map of 0s and 1s whose
+    threshold sweep says nothing.
+    """
+    predictions = tmp_path / "pred"
+    labels = tmp_path / "labelsTs"
+    predictions.mkdir()
+    labels.mkdir()
+    for case in ("Breast_MRI_007", "Breast_MRI_042"):
+        (predictions / f"{case}.nii.gz").write_bytes(b"x")
+        (predictions / f"{case}.npz").write_bytes(b"x")
+        (predictions / f"{case}.pkl").write_bytes(b"x")
+        (labels / f"{case}.nii.gz").write_bytes(b"x")
+    (predictions / "Breast_MRI_099.npz").write_bytes(b"x")      # prediction without a label
+
+    pairs = list(froc._pairs(str(predictions), str(labels)))
+
+    assert [case for case, _, _ in pairs] == ["Breast_MRI_007", "Breast_MRI_042"]
+    assert all(prediction.endswith(".npz") for _, prediction, _ in pairs)   # scores, not labels
+    assert all(label.endswith(".nii.gz") for _, _, label in pairs)
