@@ -143,6 +143,8 @@ rapports de mesure, le lignage, le registre, les exclusions et le rapport de QC.
 | `silver/dce_mri_nnunet/native/` | 26,1 Gio | **retélécharger TCIA**, puis `mri_nnunet build --ingest-only` | heures |
 | `silver/dce_mri_p2/` | 5,0 Gio | **retélécharger TCIA**, puis `preprocess_dce_mri_with_boxes` | heures |
 | `.venv/` du projet | — | `pip install -e ".[all]"` | minutes |
+| `C:
+nv` (environnement nnU-Net) | ~5 Gio | les quatre commandes de « Prérequis et installation » | ~10 min |
 
 **Ce qui est conservé** : le checkpoint nnU-Net (6 h 30 de GPU, non versionné vu son poids), les
 checkpoints de la démo, et toute la traçabilité — `splits.json`, `registry.csv`, `exclusions.csv`,
@@ -219,9 +221,10 @@ que quatre paquets, et l'écart avec le reste est mesuré au §4.17 (68 paquets 
 n'y figure pas, si le socle grossit, ou si le code importe un paquet qu'aucun extra ne déclare. Le
 `Dockerfile` lit le socle avec `tomllib` plutôt que de le recopier. La CI installe `.[dev,data]`.
 
-**L'entraînement nnU-Net vit dans son propre environnement**, `C:\nnv` sur cette machine. Deux
+**L'entraînement nnU-Net demande son propre environnement**, `C:\nnv` sur cette machine. Deux
 raisons : `nnunetv2` impose `torch` et `numpy` plus récents que ceux du projet, et son installation
-casserait la démo ; et un chemin court évite la limite de longueur de chemin de Windows.
+casserait la démo ; et un chemin court évite la limite de longueur de chemin de Windows. Il a été
+supprimé le 2026-09-29 avec les corpus ; les commandes ci-dessous le recréent à l'identique.
 
 ```bash
 python -m venv C:\nnv
