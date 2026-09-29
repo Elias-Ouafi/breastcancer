@@ -143,8 +143,7 @@ rapports de mesure, le lignage, le registre, les exclusions et le rapport de QC.
 | `silver/dce_mri_nnunet/native/` | 26,1 Gio | **retélécharger TCIA**, puis `mri_nnunet build --ingest-only` | heures |
 | `silver/dce_mri_p2/` | 5,0 Gio | **retélécharger TCIA**, puis `preprocess_dce_mri_with_boxes` | heures |
 | `.venv/` du projet | — | `pip install -e ".[all]"` | minutes |
-| `C:
-nv` (environnement nnU-Net) | ~5 Gio | les quatre commandes de « Prérequis et installation » | ~10 min |
+| `C:\nnv` (environnement nnU-Net) | ~5 Gio | les quatre commandes de « Prérequis et installation » | ~10 min |
 
 **Ce qui est conservé** : le checkpoint nnU-Net (6 h 30 de GPU, non versionné vu son poids), les
 checkpoints de la démo, et toute la traçabilité — `splits.json`, `registry.csv`, `exclusions.csv`,
