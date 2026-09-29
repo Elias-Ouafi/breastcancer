@@ -103,34 +103,33 @@ et le champ magnétique du scanner sont la seule variable d'acquisition disponib
 ### Stockage en médaillon : bronze → silver → gold
 
 ```
-data/                                    31,1 Gio  ignoré par git, sauf les trois cas de démo
-├── bronze/tcia/                         52,0 Kio  zone de transit, vidée : la source telle que publiée,
-│   └── Annotation_Boxes.xlsx                      jamais réécrite. Il ne reste que les boîtes de lésion
-├── silver/
-│   ├── dce_mri_p2/                       5,0 Gio  corpus de la démo : un .npz par patient, un canal
-│   └── dce_mri_nnunet/                  26,1 Gio  corpus nnU-Net (mri_nnunet/)
-│       ├── native/                      26,1 Gio  NIfTI sans perte, RAS, toutes les phases : 186
-│       │                                          patients, ~144 Mio chacun. **C'est la source**
-│       ├── splits.json · spacing.json             le découpage et l'espacement choisis
-│       ├── qc/                           2,6 Mio  rapport de QC : 10 cas tirés (graine 42) + agrégat
-│       ├── registry.csv · exclusions.csv          ce qu'il contient, ce qu'il a écarté et pourquoi
-│       ├── manifest.json                          lignage : commit, paramètres, résumé par cas
-│       └── log/cases.jsonl               1,7 Mio  étapes, paramètres, durées et anomalies de chaque cas
-└── gold/                                13,7 Mio  dérivé de silver et reconstructible
-    └── demo_cases/                      13,7 Mio  les trois cas de démo, seuls fichiers versionnés
+data/                                    19,0 Mio  ignoré par git, sauf les trois cas de démo
+├── bronze/tcia/                         52,0 Kio
+│   └── Annotation_Boxes.xlsx                      les boîtes de lésion, seule donnée brute conservée
+├── silver/dce_mri_nnunet/                4,5 Mio  la traçabilité du corpus, sans le corpus
+│   ├── splits.json · spacing.json                 le découpage et l'espacement choisis
+│   ├── registry.csv · exclusions.csv              ce qu'il contenait, ce qu'il a écarté et pourquoi
+│   ├── manifest.json                              lignage : commit, paramètres, résumé par cas
+│   ├── log/cases.jsonl                            étapes, paramètres, durées et anomalies de chaque cas
+│   └── qc/                               2,6 Mio  rapport de QC : 10 cas tirés (graine 42) + agrégat
+└── gold/demo_cases/                     13,7 Mio  les trois cas de démo, seuls fichiers versionnés
 models/                                 514,0 Mio  checkpoints de la démo (versionnés) + nnU-Net (non versionné)
 reports/                                 68,0 Kio  rapports JSON, dont le FROC du §4.23
 docs/img/                                 0,6 Mio  images de la documentation
 ```
 
-Tailles mesurées le 2026-09-28 avec `du -sb`, en unités binaires (1 Gio = 2³⁰ octets, comme `du -h`),
+Tailles mesurées le 2026-09-29 avec `du -sb`, en unités binaires (1 Gio = 2³⁰ octets, comme `du -h`),
 **après le ménage de fin de projet** décrit ci-dessous.
 
 ### Ce qui a été supprimé, et comment le reconstruire
 
-Le 2026-09-28, 18 Gio de données **dérivées** ont été supprimées, le projet ayant livré ses mesures.
-Rien de ce qui a été effacé n'est une source : chaque ligne se reconstruit par une commande, à partir
-de `native/` et de `Annotation_Boxes.xlsx`.
+Le projet ayant livré ses mesures, les données ont été supprimées en deux temps : **18 Gio de
+dérivés** le 2026-09-28, puis **les deux corpus eux-mêmes** le 2026-09-29, sur demande.
+
+**Il ne reste aucune donnée d'imagerie sur cette machine**, hors les trois cas de démo versionnés.
+Reproduire une mesure suppose de retélécharger la collection depuis TCIA (~60 Gio, plusieurs heures)
+avant de rejouer les commandes ci-dessous. Ce que le dépôt conserve, ce sont les **preuves** : les
+rapports de mesure, le lignage, le registre, les exclusions et le rapport de QC.
 
 | Supprimé | Taille | Reconstruire avec | Coût |
 |---|---|---|---|
@@ -141,12 +140,15 @@ de `native/` et de `Annotation_Boxes.xlsx`.
 | `gold/slice_bank_p2/` | 5,8 Gio | `imaging/slicebank.py` depuis `dce_mri_p2` | ~20 min |
 | `bronze/tcia/duke_mri/` | 623 Mio | retélécharger depuis TCIA | heures |
 | `models/dbt/`, `models/dce_mri/` | 60 Mio | restes de smoke tests, rien à reconstruire | — |
+| `silver/dce_mri_nnunet/native/` | 26,1 Gio | **retélécharger TCIA**, puis `mri_nnunet build --ingest-only` | heures |
+| `silver/dce_mri_p2/` | 5,0 Gio | **retélécharger TCIA**, puis `preprocess_dce_mri_with_boxes` | heures |
+| `.venv/` du projet | — | `pip install -e ".[all]"` | minutes |
 
-**Ce qui est conservé parce qu'il ne se reconstruit pas** : `native/` (la source, le bronze étant
-purgé), `dce_mri_p2/` (le corpus sur lequel le modèle servi a été entraîné), le checkpoint nnU-Net
-(6 h 30 de GPU) et toute la traçabilité — `splits.json`, `registry.csv`, `exclusions.csv`,
+**Ce qui est conservé** : le checkpoint nnU-Net (6 h 30 de GPU, non versionné vu son poids), les
+checkpoints de la démo, et toute la traçabilité — `splits.json`, `registry.csv`, `exclusions.csv`,
 `manifest.json`, le journal par cas et le rapport de QC. Les rapports de mesure (`reports/`) et les
-trois cas de démo sont versionnés dans git.
+trois cas de démo sont versionnés dans git. **La démo ne dépend d'aucune donnée supprimée** : elle
+tourne depuis un clone, et son préflight a été rejoué après le ménage.
 
 **Le bronze est une zone de transit, pas une archive.** Dès qu'une série est en silver
 **dans tous les corpus qui la lisent**, son dossier DICOM est supprimé : la donnée n'est plus
@@ -168,8 +170,10 @@ retirées avec leur code (§4.18). Les deux corpus IRM ont été reconstruits de
 et comparés à l'ancien silver : les 186 volumes du corpus de la démo sont **identiques valeur par
 valeur**, et son manifeste (absent jusque-là, le corpus étant antérieur à `lineage.py`) est écrit.
 
-**Le coût est assumé** : silver n'est plus « reconstructible » à volonté, c'est la source. C'est
-pourquoi la copie native du corpus nnU-Net garde toutes les phases.
+**Le coût était assumé** : une fois le bronze purgé, silver n'était plus « reconstructible » à
+volonté, il **était** la source — d'où la copie native gardant toutes les phases. Le 2026-09-29, le
+projet ayant livré ses mesures, cette source a été supprimée à son tour (voir ci-dessus) : la chaîne
+décrite ici reste exacte, mais elle se rejoue depuis TCIA, pas depuis le disque.
 
 Chaque chemin est défini **une seule fois** dans `config.py`. `data/` est ignoré par git, sauf les
 trois cas de démo ; `models/` l'est aussi, sauf les checkpoints de la démo et les artefacts de
@@ -996,6 +1000,7 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 | Canaux nnU-Net | pré + post2 est une hypothèse, à comparer (piste 4) |
 | Cas 094 | Boîte publiée qui dépasse la peau : 19 % du pseudo-masque est dans l'air ; conservé et signalé (§4.20) |
 | Cas signalés par le contraste | 5 boîtes sur 186 à relire : `_056`, `_065`, `_096`, `_156`, `_169` (§4.22) |
+| Plus de données sur la machine | Les deux corpus ont été supprimés le 2026-09-29 : toute nouvelle mesure suppose de retélécharger TCIA (~60 Gio). Les preuves — rapports, lignage, registre, QC — sont conservées |
 | Un seul pli entraîné | Le 92,6 % vient du pli 0 ; les 4 autres (~25 h) resserreraient l'intervalle, que les 27 patients de test dominent de toute façon (§4.23) |
 | Petites lésions | Aucune lésion sous 1 000 mm³ dans le jeu de test : la sensibilité sur les petites lésions reste inconnue (§4.23) |
 | Lot de 1 imposé par la carte | Le plan de nnU-Net vise 8 Go et ne tient pas ici : `batch_size` forcé à 1 dans `nnUNetPlans.json` (sauvegarde `.bak`), patch complet conservé (§4.23) |

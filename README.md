@@ -85,7 +85,7 @@ python -m pipelines.dce_mri --dry-run # le flow Prefect du corpus de la démo, s
 | **Détection 3D** (nnU-Net, pli 0) | **92,6 % des lésions trouvées [IC 81,5–100] à 2 faux positifs par examen**, sur 27 patients tenus à l'écart ; le hasard vaut 0,33 % (§4.23) |
 | **Découpage** | 27 patients dans `imagesTs`, hors de portée de nnU-Net qui ajuste son post-traitement sur la validation croisée ; 5 plis stratifiés par scanner, seule variable d'acquisition que Duke publie |
 | **Corpus nnU-Net** (`mri_nnunet/`) | **186 cas** exportés, validés par `verify_dataset_integrity`, 3 écartés avec leur raison ; QC écrit, 5 boîtes douteuses signalées |
-| **Pipeline de données** | 189 patients collectés, 186 volumes ; médaillon bronze → silver → gold, brut purgé une fois la copie relue identique (822 séries, 63,8 Go) |
+| **Pipeline de données** | 189 patients collectés, 186 volumes ; médaillon bronze → silver → gold, brut purgé une fois la copie relue identique (822 séries, 63,8 Go). Les corpus ont été supprimés après les mesures : le dépôt garde les preuves, pas les 32 Go |
 | **Orchestration** (Prefect) | Flow `download → preprocess → purge → train → evaluate`, chaque étape saute ce qui est fait |
 | **Modèle 2D de la démo** | 88 % [82–93] **quand on lui montre la bonne coupe**, 43 % de top-1 pour la choisir seul — c'est ce goulot que le modèle 3D supprime |
 | **Nouvelle IRM** | Un examen jamais annoté est préparé et servi en 3,9 s ; sur DICOM brut réel, le volume obtenu est identique **bit à bit** au corpus d'entraînement |
