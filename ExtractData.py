@@ -1,28 +1,17 @@
 import logging
 import os
-
 import pandas as pd
 import pydicom
 from tcia_utils import nbia
-
 import config
 import http_timeouts
 
 log = logging.getLogger(__name__)
-
-# tcia_utils sends every request without a timeout, so one stalled response hangs a
-# download forever (2 h 30 on 2026-09-14). Installed at import so every download path
-# of this module inherits it; see http_timeouts for why a socket default does not work.
 http_timeouts.install(nbia)
-
-
-# Optional dependency used only by the series viewer. Imported lazily so the download path
-# works without the plotting stack installed.
 try:
     import matplotlib.pyplot as plt
 except ImportError:
     plt = None
-
 
 def dir_size_bytes(path):
     """Return total size in bytes under `path`. If the path does not exist return 0."""
@@ -39,8 +28,6 @@ def dir_size_bytes(path):
                 continue
     return total
 
-
-# Downloaded DICOM series land in bronze, untouched (see config.py).
 DOWNLOAD_DIR = config.TCIA_DIR
 
 def view_dicom_series(series_path):
@@ -122,21 +109,6 @@ def download_dce_mri_series(patient_ids=None, max_patients=10,
                             download_dir=os.path.join(config.TCIA_DIR, "duke_mri"),
                             collection="Duke-Breast-Cancer-MRI", series_filter="dyn",
                             max_gb=None):
-    """Download the DCE-MRI dynamic series (pre + post-contrast passes) for patients
-    in the Duke-Breast-Cancer-MRI collection.
-
-    Each patient carries several series (a T1 pre-contrast pass and multiple
-    post-contrast passes, e.g. ``ax dyn pre``, ``ax dyn 1st pass`` .. ``ax dyn 4th
-    pass``) plus unrelated series (T1 TSE, SEG). ``series_filter`` keeps only series
-    whose ``SeriesDescription`` contains this substring (case-insensitive), so only
-    the multiphase DCE stack is pulled.
-
-    ``patient_ids`` lets you target specific patients; when omitted the first
-    ``max_patients`` patients in the collection (by ``PatientID`` sort order) are
-    used. Downloading stops early once `download_dir` reaches `max_gb` gigabytes (if
-    set). Each series lands in its own ``SeriesInstanceUID`` subfolder, which is the
-    layout ``TransformData.group_dce_series_by_patient`` and ``mri_nnunet`` read.
-    """
     os.makedirs(download_dir, exist_ok=True)
 
     if patient_ids is None:

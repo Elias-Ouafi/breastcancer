@@ -22,9 +22,6 @@ marge d'erreur large (82 % à 100 %).
 pas mieux que le hasard : la piste a été arrêtée et les mesures négatives sont conservées (§4.4 à
 §4.15), parce qu'un projet qui n'affiche que ses réussites ne se vérifie pas.
 
-Le détail de chaque affirmation ci-dessus est dans le journal des mesures, §4.23 pour le résultat
-principal.
-
 ---
 
 ## Sommaire
@@ -48,7 +45,7 @@ principal.
 ### La question
 
 Localiser les lésions cancéreuses sur une IRM mammaire dynamique (DCE-MRI) : où elles sont,
-avec quelle sensibilité, et au prix de combien de fausses détections. Le projet utilise
+avec quelle, et au prix de combien de fausses détections. Le projet utilise
 uniquement des données publiques de [The Cancer Imaging Archive](https://www.cancerimagingarchive.net/) (TCIA).
 
 ### Deux objectifs
@@ -68,20 +65,6 @@ avec cancer, et une boîte de lésion par patient. Elle sert deux corpus, sépar
   le checkpoint servi a été entraîné dessus et un test le compare bit à bit aux DICOM.
 - `dce_mri_nnunet` : le corpus préparé pour nnU-Net v2 (canaux pré et post-contraste,
   pseudo-masques issus des boîtes), avec son propre module de prétraitement (`mri_nnunet/`).
-
-### Ce que le projet ne vise plus
-
-Il a d'abord visé un point de fonctionnement de dépistage (sensibilité 82,8 %, spécificité 91,4 %,
-au niveau patient) sur la tomosynthèse BCS-DBT. **Cette piste est abandonnée** : les mesures
-sont négatives (ROC-AUC patient 0,457 ; l'archive du §4.4 à §4.15 les résume) et son code et ses
-données ont été retirés le 2026-09-20. Le dernier état qui les contient est le commit `1a364d4`.
-
-Duke est une cohorte de cancers (prévalence 100 %) : une **spécificité n'y est pas mesurable**, et
-aucun résultat ne doit être présenté comme une comparaison au programme national de dépistage. La
-mesure adaptée est la sensibilité lésionnelle en fonction du nombre de faux positifs par examen
-(FROC), avec intervalle de confiance. Elle est en place depuis le 2026-09-28 (`imaging/froc.py`) et
-donne **92,6 % [81,5 – 100] à 2 faux positifs par examen** sur 27 patients tenus à l'écart (§4.23).
-`imaging/evaluate.py` reste la mesure de l'ancien modèle 2D : un seul seuil, par coupe.
 
 ---
 
@@ -120,67 +103,6 @@ docs/img/                                 0,6 Mio  images de la documentation
 
 Tailles mesurées le 2026-09-29 avec `du -sb`, en unités binaires (1 Gio = 2³⁰ octets, comme `du -h`),
 **après le ménage de fin de projet** décrit ci-dessous.
-
-### Ce qui a été supprimé, et comment le reconstruire
-
-Le projet ayant livré ses mesures, les données ont été supprimées en deux temps : **18 Gio de
-dérivés** le 2026-09-28, puis **les deux corpus eux-mêmes** le 2026-09-29, sur demande.
-
-**Il ne reste aucune donnée d'imagerie sur cette machine**, hors les trois cas de démo versionnés.
-Reproduire une mesure suppose de retélécharger la collection depuis TCIA (~60 Gio, plusieurs heures)
-avant de rejouer les commandes ci-dessous. Ce que le dépôt conserve, ce sont les **preuves** : les
-rapports de mesure, le lignage, le registre, les exclusions et le rapport de QC.
-
-| Supprimé | Taille | Reconstruire avec | Coût |
-|---|---|---|---|
-| `silver/dce_mri_nnunet/cases/` | 6,2 Gio | `python -m mri_nnunet build` | ~2 h |
-| `gold/nnunet_raw/` | (liens) | `python -m mri_nnunet splits` puis `export` | quelques secondes |
-| `gold/nnunet_preprocessed/` | 5,4 Gio | `nnUNetv2_plan_experiment` puis `nnUNetv2_preprocess` | ~3 min |
-| `gold/nnunet_predictions/` | 551 Mio | `nnUNetv2_predict` (le checkpoint est conservé) | ~10 min |
-| `gold/slice_bank_p2/` | 5,8 Gio | `imaging/slicebank.py` depuis `dce_mri_p2` | ~20 min |
-| `bronze/tcia/duke_mri/` | 623 Mio | retélécharger depuis TCIA | heures |
-| `models/dbt/`, `models/dce_mri/` | 60 Mio | restes de smoke tests, rien à reconstruire | — |
-| `silver/dce_mri_nnunet/native/` | 26,1 Gio | **retélécharger TCIA**, puis `mri_nnunet build --ingest-only` | heures |
-| `silver/dce_mri_p2/` | 5,0 Gio | **retélécharger TCIA**, puis `preprocess_dce_mri_with_boxes` | heures |
-| `.venv/` du projet | — | `pip install -e ".[all]"` | minutes |
-| `C:\nnv` (environnement nnU-Net) | ~5 Gio | les quatre commandes de « Prérequis et installation » | ~10 min |
-
-**Ce qui est conservé** : le checkpoint nnU-Net (6 h 30 de GPU, non versionné vu son poids), les
-checkpoints de la démo, et toute la traçabilité — `splits.json`, `registry.csv`, `exclusions.csv`,
-`manifest.json`, le journal par cas et le rapport de QC. Les rapports de mesure (`reports/`) et les
-trois cas de démo sont versionnés dans git. **La démo ne dépend d'aucune donnée supprimée** : elle
-tourne depuis un clone, et son préflight a été rejoué après le ménage.
-
-**Le bronze est une zone de transit, pas une archive.** Dès qu'une série est en silver
-**dans tous les corpus qui la lisent**, son dossier DICOM est supprimé : la donnée n'est plus
-conservée qu'une fois. C'est l'étape `purge` du flow (`download → preprocess → purge`) ;
-`--keep-bronze` la désactive. Une seule fonction supprime du brut,
-`TransformData.purge_bronze_series`, et elle **refuse plutôt que de parier** : le dossier doit
-être un enfant direct du bronze, chaque fichier silver doit s'ouvrir comme un volume (un fichier non
-vide mais tronqué ne suffit pas), et il faut au moins un fichier silver.
-
-Le corpus nnU-Net est un second lecteur des mêmes DICOM, avec une exigence plus stricte : une série
-n'est supprimée que si sa copie native a été **écrite puis relue identique** au DICOM (même type de
-pixel, mêmes valeurs, même géométrie physique). Cette copie est sans perte : l'espacement, la
-normalisation et les canaux restent réglables après la purge, sans télécharger à nouveau. Une phase
-non ingérée (patient sans boîte, série aux coupes manquantes) reste en bronze.
-
-**Ce qui a été fait le 2026-09-20.** La purge a été exécutée sur le DBT, puis sur l'IRM (822 séries,
-63,8 Go) une fois la copie native de chaque phase relue identique, et les données DBT ont été
-retirées avec leur code (§4.18). Les deux corpus IRM ont été reconstruits depuis le bronze
-et comparés à l'ancien silver : les 186 volumes du corpus de la démo sont **identiques valeur par
-valeur**, et son manifeste (absent jusque-là, le corpus étant antérieur à `lineage.py`) est écrit.
-
-**Le coût était assumé** : une fois le bronze purgé, silver n'était plus « reconstructible » à
-volonté, il **était** la source — d'où la copie native gardant toutes les phases. Le 2026-09-29, le
-projet ayant livré ses mesures, cette source a été supprimée à son tour (voir ci-dessus) : la chaîne
-décrite ici reste exacte, mais elle se rejoue depuis TCIA, pas depuis le disque.
-
-Chaque chemin est défini **une seule fois** dans `config.py`. `data/` est ignoré par git, sauf les
-trois cas de démo ; `models/` l'est aussi, sauf les checkpoints de la démo et les artefacts de
-mesure (§4.4 à §4.15).
-
----
 
 ## Pipeline : fonctionnement et commandes
 
@@ -433,32 +355,6 @@ docker compose up --build       # alternative avec Docker seul (image jamais con
 
 Rien d'autre à télécharger : le modèle (`models/dce_mri_p2_negfix/unet_best.pt`) et les
 trois cas de démo sont versionnés. Le serveur écoute uniquement sur `127.0.0.1`.
-
-**Le préflight analyse un vrai cas** (~0,5 s ici, GPU chaud) avant d'ouvrir le port. Il
-ne se contente pas de vérifier que les fichiers existent : un checkpoint tronqué par un
-clone partiel, un PyTorch qui ne démarre pas, un `.npz` dont les clés ont bougé passent
-tous un contrôle d'existence et meurent au premier clic — le seul moment où ils ne
-doivent pas.
-
-| Commande | Ce qu'elle fait |
-|---|---|
-| `python run_demo.py` | Préflight complet (fichiers + une analyse réelle + port libre), puis sert |
-| `python run_demo.py --open` | Idem, et ouvre le navigateur une seconde après |
-| `python run_demo.py --check` | Même contrôle, sans occuper de port — **à faire la veille** |
-| `python run_demo.py --fast-check` | Inventaire des fichiers seulement, sans charger le modèle |
-| `python run_demo.py --port 5001` | Autre port |
-
-**Ouvrir `127.0.0.1`, pas `localhost`.** Le serveur n'écoute que sur l'IPv4, par choix : `localhost`
-se résout parfois d'abord en IPv6 (`::1`), et le navigateur affiche alors une erreur de connexion sur
-un serveur qui fonctionne. `run_demo.py --open` ouvre déjà la bonne adresse ; la remarque vaut pour
-une adresse tapée à la main. Vérifié le 2026-09-28 : sur cette machine, `localhost:5057` échoue quand
-`127.0.0.1:5057` répond.
-
-**Le port est vérifié avant de démarrer.** Sous Windows, une deuxième instance se liait
-sans erreur à un port que werkzeug tenait déjà (SO_REUSEADDR) : elle affichait
-« Running on http://127.0.0.1:5000 » pendant que le système continuait de router vers le
-premier processus. Le lanceur interroge maintenant le port en s'y **connectant**, et
-refuse de démarrer en nommant le port et l'alternative (§4.17).
 
 ### Déroulé conseillé
 
@@ -963,34 +859,10 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 
 ## État d'avancement et feuille de route
 
-### Fait
-
-| Date | Livré |
-|---|---|
-| 2026-07-26 → 08-02 | U-Net DCE-MRI, banque memmap (×7,1), évaluation avec IC par patient, classifieur de coupe (0 % → 43 %) |
-| 2026-08-18 | Docker, validation de schéma, manifestes de lignage, flow Prefect DCE-MRI |
-| 2026-09-12 → 09-17 | Piste DBT : appariement, corpus, classifieur d'examen, catalogue, dbt, stockage S3 — **mesures négatives, retirée le 2026-09-20** (§4.4 à §4.15) |
-| 2026-09-19 | Chemin « nouvelle IRM » : `preprocess_dce_mri_exams`, `dce_subtraction` en définition unique, défaut `crop` aligné sur le corpus, code hérité IRM retiré (§4.16) |
-| 2026-09-20 | Parcours de démo mesuré de bout en bout : installation dédiée (68 paquets → 17), préflight qui analyse un vrai cas, port occupé détecté, formats de l'interface alignés (§4.17) |
-| 2026-09-20 | Médaillon bronze → silver → gold, bronze purgé une fois en silver, `pyproject.toml` seul fichier de dépendances, corpus nnU-Net avec son module, code et données DBT retirés (§4.18) |
-| 2026-09-21 → 09-22 | Corpus nnU-Net construit : 185 cas, export `Dataset501_DukeDCEBreast`, rapport de QC ; deux défauts du masque de l'organe relevés (§4.19) |
-| 2026-09-26 | Indice de contraste remplacé : rehaussement brut contre un anneau de 10 mm, seuil calibré sur des boîtes reflétées (§4.21) |
-| 2026-09-26 | Masque de l'organe corrigé (seuil de Li, garde sur le tissu de lésion effacé), corpus nnU-Net reconstruit : 186 cas, `_118` récupéré (§4.20) |
-| 2026-09-26 | Audit de la démo : les trois cas, l'API et les erreurs vérifiés dans l'app ; deux chiffres faux et l'encadré DBT retirés des pages (« Écarts doc ↔ code ») |
-| 2026-09-28 | Découpage stratifié et FROC 3D écrits avant tout entraînement, export validé par nnU-Net (§4.22) ; pli 0 entraîné et mesuré : **92,6 % à 2 faux positifs par examen** sur 27 patients tenus à l'écart (§4.23) |
-| 2026-09-16 | **P0 portfolio** : README réorienté data engineering, licence MIT, citations TCIA, GIF de démo, documentation unique en français |
-
 ### Feuille de route
 
 | Priorité | Tâche | État |
 |---|---|---|
-| P0 | Présentation : README, schéma, licence, GIF | **Fait** |
-| P1 | Délai maximal sur les requêtes TCIA, échecs de téléchargement détectés | **Fait** |
-| P1 | Tests d'orchestration exécutés en CI | **Fait** (job `orchestration`) |
-| P1 | Médaillon et purge du bronze | **Fait**, exécuté (DBT puis IRM) |
-| P1 | Corpus nnU-Net : ingestion, traitement, export, QC | **Fait**, construit (186 cas) avec le masque corrigé (§4.20) |
-| P1 | Découpage : jeu de test à l'écart, 5 plis stratifiés par scanner | **Fait**, exécuté : 27 en test, 159 en entraînement (§4.22) |
-| P1 | FROC : composantes 3D, sensibilité par faux positifs, IC par patient | **Fait et mesuré** : 92,6 % à 2 FP/examen (§4.23) |
 | P2 | Structure `src/`, découpage de `TransformData.py`, build Docker en CI, registre de modèles | À faire |
 | — | Entraînement nnU-Net | **Pli 0 fait** (§4.23) ; 4 plis restants |
 
@@ -1016,74 +888,6 @@ non ajustés ensuite, un résultat négatif publié comme tel.
 | Registre de traitement RGPD | Une page à écrire : base légale, nature des données, finalité, conservation, sécurité |
 | Coupe choisie sur une IRM neuve | 43 % de top-1 (§4.3) : l'examen est préparé et servi correctement, la coupe reste le maillon faible |
 | Nom de produit et logo | À choisir |
-
----
-
-## Écarts doc ↔ code
-
-**Principe** : la documentation est relue **contre le dépôt qui tourne**, pas contre
-elle-même, et chaque écart corrigé reste noté ici — ce sont les chiffres qu'un relecteur
-vérifie en premier.
-
-**Le nombre de tests a dérivé quatre fois** : « 202 » et « 209 » ont été écrits sans
-mesure, puis « 176 », mesuré le 2026-09-15, est devenu faux dès les tests suivants ;
-le badge du README est resté à « 254 » quand le texte disait déjà 267. Un nombre de
-tests se recompte, il ne s'estime pas — et le badge se recompte avec le texte.
-
-| Date | Écart | Correction |
-|---|---|---|
-| 2026-08-18 | 68 tests annoncés, 87 réels ; chemin d'un rapport tabulaire faux | Corrigés |
-| 2026-09-12 | Pastille « Confiance 100 % » (maximum par pixel constant) ; mesure « hors échantillon » annoncée sur un modèle ajusté sur 569/569 ; chiffres d'imagerie affichés sur `/biopsie` | Retirés de l'écran (P0), 9 tests de rendu |
-| 2026-09-15 | 202 tests annoncés, 176 réels ; backend `unet` documenté mais impossible ; checkpoint mal documenté ; « aucun manifeste » alors que deux existaient ; « ~80 Go » pour 138 Go | Corrigés |
-| 2026-09-16 | 176 tests annoncés, 198 réels ; « 0,76 s par volume » pour 0,825 s ; « ~110 ms » pour ~70 ms mesurés ; « ~200 Mo par patient » pour ~310 Mo ; taille d'image Docker jamais mesurée | Corrigés |
-| 2026-09-16 | « 222 tests » en local contre 211 en CI, noté « non expliqué » ; « 152 normaux, non investigué » | Expliqués (§4.14) : 12 tests d'orchestration sans Prefect + 1 test Windows ; 2 normaux hors tirage |
-| 2026-09-19 | « La couche brute DCE-MRI n'est pas sur cette machine », écrit dans §4.16, l'ADR 0013 et la PR #31 | **Faux** : 60 Go et 840 séries étaient dans `tcia/duke_mri/`, que le balayage sautait faute de `.dcm` à sa racine. Corrigé, et le chemin DICOM → `.npz` est désormais vérifié bit à bit sur données réelles (§4.16) |
-| 2026-09-19 | Badge README « 254 tests » contre 267 dans le texte ; `crop=True` par défaut alors que le corpus servi est en pleine trame ; message d'erreur d'`imaging/dataset.py` renvoyant à une fonction cassée ; `SimpleITK`/`itk`/`itkwidgets` déclarés mais importés nulle part | Corrigés (§4.16), badge recompté à 287 |
-| 2026-09-20 | « Port déjà utilisé → `--port 5001` » laissait croire qu'une erreur s'affichait : sous Windows le second lanceur affichait son bandeau de succès ; zone de dépôt annonçant DICOM/NIfTI sous un backend qui ne lit que `.npz` ; préflight qui ne chargeait jamais le modèle ; badge « 288 tests » | Corrigés (§4.17), badge recompté à 300 |
-| 2026-09-20 | « 138 Go » (binaire) et « 82,6 Go de DBT » (décimal) additionnés dans le même paragraphe ; « 1 047 séries » (15 téléchargées depuis) ; « écart jamais expliqué » entre 186 volumes et 840 séries | Mesurés à nouveau, unité précisée, écart expliqué ; 840 dossiers IRM annoncés, 834 mesurés, cause non établie |
-| 2026-09-28 | « ~70 ms à chaud » pour le calcul d'un cas : 111, 111 et 123 ms mesurés sur trois appels à `/api/predict` | Corrigé, valeur et date de mesure écrites |
-| 2026-09-28 | La charte graphique décrivait une palette sombre à primaire cyan (`--bg`, `--primary: #2FB6C9`) que l'app n'a jamais implémentée : elle utilise des jetons `--color-*`, un document clair `#F3F2F2` et un accent rouge `#EC3013` | Section réécrite depuis `base.html` et `inference.py` |
-| — | `models/dce_mri_p2_negfix/` nomme une expérience | Ouvert (le renommer casserait la démo) ; son `eval_report.json` cite encore `data/preprocessed_data/dce_mri_p2` (le chemin d'avant le médaillon), mesure historique laissée telle quelle |
-| 2026-09-20 | Une fonction nommée `extract_dicom_mri_images` téléchargeait en réalité la collection BCS-DBT, et non de l'IRM | Supprimée avec le code DBT |
-| 2026-09-26 | Page « Comment ça marche » : « Entraînement : 186 patients » pour 130 (186 est le corpus, découpé 130 / 28 / 28) ; page de résultat : « 0/186 sur les patients de test » alors qu'il n'y en a que 28 (le 0/186 porte sur tout le corpus, §4.2) ; encadré « Et y a-t-il un cancer ? » présentant le classifieur DBT comme « servi par un autre modèle » six jours après son retrait ; README et doc annonçant le corpus nnU-Net « à construire » alors que 185 cas l'étaient ; « ~30 s par patient » pour 55 s mesurées ; ligne ci-dessus citant `data/silver/…` pour `data/preprocessed_data/…` | Corrigés ; encadré retiré et son absence épinglée par un test ; badge recompté à 209 |
-| 2026-09-26 | §4.19 annonçait deux défauts du masque de l'organe (`_017`, `_118`) : `_042` et `_170` perdaient aussi 14 % et 4,9 % de leur lésion, en tissu mis à 0, sans alerte | Mesuré sur tout le corpus et corrigé (§4.20) ; badge recompté à 215 |
-| 2026-09-26 | §4.19 : « l'indice de contraste ne discrimine pas » ; il sépare en fait la vraie boîte de son reflet (AUC 0,922), c'est son échelle qui était tassée. Et la corrélation « 0,60 » avec le rehaussement brut, non reproductible | Mesuré sur 186 cas contre un témoin négatif et remplacé (§4.21) ; badge recompté à 217 |
-
----
-
-## Partie 3 — Charte graphique
-
-**Relevée dans le code le 2026-09-28**, pas décidée sur le papier : les valeurs ci-dessous sont
-celles de `app/templates/base.html` et du cadre tracé dans `inference.py`. La charte décrite
-jusqu'ici (palette sombre, primaire cyan `#2FB6C9`, jetons `--bg` / `--primary`) n'a jamais été
-implémentée — voir « Écarts doc ↔ code ».
-
-**Positionnement** : *instrument de lecture*, sobre et factuel. La page est un document clair posé
-sur un cadre sombre, avec un seul accent chaud réservé à la lésion et aux actions principales.
-**Interdit** : ruban rose, dégradés « féminins », cœurs, imagerie compassionnelle. Ton jamais
-alarmiste, toujours accompagné de *Research Use Only — Not for diagnostic use*.
-
-| Rôle | Jeton | Hex |
-|---|---|---|
-| Fond du document | `--color-bg` | `#F3F2F2` |
-| Surface | `--color-surface` | `#EAE9E9` |
-| Cadre de page (autour du document) | — | `#0B0D10` |
-| Texte | `--color-text` | `#201E1D` |
-| **Accent (lésion, action principale)** | `--color-accent` | `#EC3013` |
-| Accent secondaire | `--color-accent-2` | `#E15B47` |
-| Succès / alerte | `--color-ok` / `--color-warn` | `#2F7D52` / `#8A6A10` |
-
-Deux rampes de neutres et d'accents (`--color-neutral-100` à `900`, `--color-accent-100` à `900`)
-couvrent les états intermédiaires. Le **cadre de lésion** dessiné sur la coupe est un rectangle
-`rgb(255, 122, 89)` de 2 px, jamais un aplat : il désigne sans masquer l'anatomie.
-
-Typographie : **Archivo** (Google Fonts, licence OFL) pour les titres comme pour le corps, en 800
-pour les titres. Les chiffres de performance sont affichés dans des pastilles, jamais comme un
-verdict clinique.
-
-**À faire** : contraste AA minimum, accent chaud réservé à la lésion et aux actions principales.
-**À éviter** : plus d'un accent chaud par écran, superposition opaque sur l'anatomie, chiffres de
-performance présentés comme cliniques.
 
 ---
 

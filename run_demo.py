@@ -1,31 +1,9 @@
-"""One command to run the investor demo: ``python run_demo.py``.
-
-Checks that everything the demo needs is present *and works*, wires the real DCE-MRI
-model in, and starts the local Flask app. It replaces the "set MRI_APP_BACKEND,
-remember the right module, hope the checkpoint is there" dance -- and, more
-importantly, it fails with a sentence you can act on instead of a stack trace
-mid-pitch.
-
-Everything it needs is committed (checkpoint + the three curated cases), so a fresh
-``git clone`` + ``pip install -e .`` is enough. ``--check`` runs
-the preflight and exits, which is the fast way to confirm a machine is demo-ready
-without occupying a port.
-
-**The preflight scores a real case** (~2 s), it does not merely stat the files. A
-truncated checkpoint, a torch build that cannot start, a case whose keys moved: all
-of those pass an existence check and die on the first click, which is the one moment
-they must not. Skip it with ``--fast-check`` when you only want the file inventory.
-
-Local-only, like ``app.server``: binds to 127.0.0.1 and nothing else.
-"""
 from __future__ import annotations
-
 import argparse
 import os
 import socket
 import sys
 import time
-
 import config
 
 ROOT = config.ROOT

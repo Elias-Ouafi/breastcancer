@@ -3,11 +3,9 @@ import os
 import re
 import shutil
 import zipfile
-
 import numpy as np
 import pandas as pd
 import pydicom
-
 import config
 import lineage
 import validation
@@ -29,24 +27,12 @@ def load_dicom_volume(dicom_dir):
     return volume
 
 def normalize_intensity(volume, low_pct=1.0, high_pct=99.0):
-    """Clip to the [low_pct, high_pct] intensity percentiles, then z-normalise.
-
-    Plain global z-normalisation (subtract mean, divide by std over the whole
-    volume) is skewed in mammography/MRI by the large air/background region:
-    the mean and std mostly describe background, not tissue, so the useful
-    intensity range gets compressed. Clipping outliers (background floor, any
-    saturated pixels) first anchors the standardisation to the tissue range.
-    """
     lo, hi = np.percentile(volume, [low_pct, high_pct])
     clipped = np.clip(volume, lo, hi)
     return (clipped - clipped.mean()) / (clipped.std() + 1e-8)
 
 
 def create_mask(volume_shape, bbox):
-    """
-    Create a binary mask from bounding box coordinates.
-    bbox keys: Start Slice, End Slice, Start Row, End Row, Start Column, End Column
-    """
     mask = np.zeros(volume_shape, dtype=np.uint8)
     z0, z1 = bbox['Start Slice'], bbox['End Slice']
     y0, y1 = bbox['Start Row'], bbox['End Row']
@@ -56,15 +42,6 @@ def create_mask(volume_shape, bbox):
 
 
 def crop_to_roi(volume, mask, margin=16):
-    """Crop `volume` and `mask` to the mask's bounding box plus a voxel `margin`.
-
-    Segmentation masks are almost entirely background, so storing the full volume
-    wastes space. When the mask is empty we cannot infer a region of interest, so
-    the arrays are returned unchanged.
-    Returns (cropped_volume, cropped_mask, offset) where `offset` is the (z, y, x)
-    index of the crop origin in the original volume, so the crop can be located
-    back in the full image later.
-    """
     if not mask.any():
         return volume, mask, (0, 0, 0)
 
@@ -78,29 +55,6 @@ def crop_to_roi(volume, mask, margin=16):
 
 def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, crop=True,
                       case_id=None, summary=None, expect_lesion=True):
-    """Save a preprocessed volume + mask as a single compressed .npz file.
-
-    Three levers keep the files small:
-      - `crop`: keep only the region of interest around the segmentation.
-      - `dtype`: store intensities as float16 (half the size of float32); the
-        precision loss is negligible for z-normalised MRI data.
-      - `np.savez_compressed`: zlib-compresses the arrays; the mostly-empty mask
-        shrinks by orders of magnitude.
-
-    `case_id` is the real patient identifier used to group files for a leakage-free
-    train/val/test split (several series/views can belong to one patient). It is
-    stored inside the .npz; when omitted the filename (`patient_id`) is used.
-
-    Every write goes through `validation.validate_volume_and_mask` first: this is the
-    one place all four preprocessing paths funnel through, so it is the only place a
-    check has to be written to cover them all. A broken volume raises here rather than
-    surfacing hours later as a NaN loss. Pass `summary` a dict to collect the
-    per-case stats for the lineage manifest.
-
-    `expect_lesion=False` is for a volume with no annotation (an exam nobody has read yet): its
-    mask is empty by construction, and each one reporting an empty mask as a smell would bury
-    the warnings that mean something.
-    """
     os.makedirs(output_dir, exist_ok=True)
 
     offset = (0, 0, 0)
@@ -139,12 +93,6 @@ def save_preprocessed(patient_id, volume, mask, output_dir, dtype=np.float16, cr
 
 
 def _is_silver_volume(npz_path):
-    """True when ``npz_path`` is a readable volume: the check that lets bronze be deleted.
-
-    Opening the archive reads its central directory, not the arrays, so a truncated or
-    corrupt file fails here at the cost of a stat and not of a decode. "Exists and is not
-    empty" was not enough: a write interrupted halfway leaves a non-empty file.
-    """
     try:
         if not os.path.isfile(npz_path) or os.path.getsize(npz_path) == 0:
             return False
@@ -155,24 +103,6 @@ def _is_silver_volume(npz_path):
 
 
 def purge_bronze_series(folder, silver_files, bronze_root=config.TCIA_DIR):
-    """Delete the bronze series ``folder`` once it is safely held in silver.
-
-    The medallion rule: raw bytes are kept only until they are in silver, so the data
-    ends up held once. This is the one place that deletes them, and it is destructive --
-    the DICOM series is not recoverable except by downloading it again -- so it refuses
-    rather than guesses:
-
-    * ``folder`` must be a direct child of ``bronze_root``; anything else raises
-      ``ValueError`` (a wrong path here must never reach ``rmtree``);
-    * every path of ``silver_files`` must be a readable ``.npz`` holding a volume and a
-      mask (:func:`_is_silver_volume`), and there must be at least one. Pass one file per
-      corpus that reads the series: purging on the first corpus alone would strand the
-      others.
-
-    Returns the number of bytes freed, or 0 when nothing was deleted (silver not ready,
-    folder already gone, or the deletion failed part-way -- the next run retries, the
-    silver file being already safe).
-    """
     root = os.path.normcase(os.path.realpath(bronze_root))
     target = os.path.normcase(os.path.realpath(folder))
     if os.path.dirname(target) != root:
@@ -214,20 +144,8 @@ def extract_patient_ids(root_dir=config.TCIA_DIR):
     return patient_ids
 
 
-# --------------------------------------------------------------------------- #
-# DCE-MRI (Duke-Breast-Cancer-MRI): multiphase subtraction + box annotations
-# --------------------------------------------------------------------------- #
-
-# Duke-Breast-Cancer-MRI mixes two SeriesDescription conventions across its cohort
-# (protocol/scanner varied over the years the collection was acquired):
-#   A) "ax dyn pre", "ax dyn 1st pass" .. "ax dyn 4th pass"       (spelled-out pass)
-#   B) "ax 3d dyn" (bare = pre-contrast), "Ph1/ax 3d dyn" .. "Ph4/..." (Ph-prefixed)
-# Verified on a 10-patient sample: exactly 5/10 use each convention, so both must be
-# handled or half the cohort silently loses its DCE series.
 _DCE_PASS_WORDS = [("1st", 1), ("2nd", 2), ("3rd", 3), ("4th", 4)]
 _DCE_PH_PREFIX_RE = re.compile(r"\bph\s*(\d)\b")
-
-
 def _dce_phase_rank(series_description):
     """Return the phase rank (0=pre-contrast, 1..4=post-contrast passes) for a
     Duke-Breast-Cancer-MRI ``SeriesDescription``, or None if it doesn't match the
